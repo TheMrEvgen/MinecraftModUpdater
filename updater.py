@@ -43,6 +43,21 @@ SNAPSHOT_REASONS = {
 }
 
 
+def make_unique_dir(path: str) -> str:
+    """
+    Создаёт новую папку path (или path_2, path_3…, если имя занято) и возвращает её путь.
+    Часы Windows идут шагами ~15 мс, поэтому две операции подряд могут получить одинаковую метку времени.
+    """
+    candidate, counter = path, 2
+    while True:
+        try:
+            os.makedirs(candidate)
+            return candidate
+        except FileExistsError:
+            candidate = f"{path}_{counter}"
+            counter += 1
+
+
 def backup_root(mods_path: str) -> str:
     return os.path.join(mods_path, BACKUP_DIR_NAME)
 
@@ -70,7 +85,7 @@ class UpdateTransaction:
 
     def _ensure_dir(self):
         if not self._dir_created:
-            os.makedirs(self.dir, exist_ok=True)
+            self.dir = make_unique_dir(self.dir)
             self._dir_created = True
 
     def backup_file(self, path: str) -> str:
@@ -388,8 +403,8 @@ def create_snapshot(folder: str, reason: str = "manual", content: ContentType = 
     if not files:
         return None
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
-    snap_dir = os.path.join(snapshots_root(folder), timestamp)
-    os.makedirs(snap_dir, exist_ok=True)
+    os.makedirs(snapshots_root(folder), exist_ok=True)
+    snap_dir = make_unique_dir(os.path.join(snapshots_root(folder), timestamp))
     entries, total = [], 0
     for name in files:
         source = os.path.join(folder, name)

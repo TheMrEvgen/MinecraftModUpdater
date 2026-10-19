@@ -263,7 +263,7 @@ def _subtitle(entry: Dict) -> tuple[str, Optional[str]]:
 def search_text(entry: Dict, custom_tags: Optional[Dict[str, List[str]]] = None) -> str:
     path = entry.get("filepath") or entry.get("new_filename") or ""
     tags = [title for _, title in entry_tags(entry, custom_tags)]
-    return " ".join(str(x) for x in (entry.get("name"), entry.get("description"), path,
+    return " ".join(str(x) for x in (entry.get("name"), entry.get("description"), path, entry.get("_note"),
                                       entry.get("project_id"), entry.get("slug"), *tags) if x).lower()
 
 

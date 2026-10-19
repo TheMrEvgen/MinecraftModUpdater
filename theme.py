@@ -259,3 +259,47 @@ def apply_window_frame_theme(widget, tokens: dict) -> None:
         user32.RedrawWindow(hwnd, None, None, 0x0400 | 0x0001 | 0x0100)  # RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW
     except (OSError, AttributeError) as e:
         logging.debug(f"Не удалось настроить заголовок окна: {e}")
+
+
+# --- Акцентный цвет ---
+# Готовые акценты: (тёмная тема, светлая тема). «success» остаётся зелёным — это смысловой цвет статуса.
+ACCENTS = {
+    "green": ("Изумруд", "#1bd96a", "#0ea65a"),
+    "blue": ("Синий", "#4c8dff", "#2563eb"),
+    "violet": ("Фиолетовый", "#9b7bff", "#7c3aed"),
+    "pink": ("Розовый", "#ff5fa2", "#db2777"),
+    "orange": ("Оранжевый", "#ff8a3d", "#ea580c"),
+    "amber": ("Янтарь", "#f5c84c", "#b7791f"),
+    "teal": ("Бирюза", "#2dd4bf", "#0d9488"),
+    "red": ("Красный", "#ff5c5c", "#dc2626"),
+}
+DEFAULT_ACCENT = "green"
+
+
+def _accent_text_for(color: QColor) -> str:
+    """Тёмный или белый текст на акцентной кнопке — что контрастнее."""
+    luminance = 0.2126 * color.redF() + 0.7152 * color.greenF() + 0.0722 * color.blueF()
+    return "#0b0d11" if luminance > 0.55 else "#ffffff"
+
+
+def make_tokens(theme_name: str, accent: str = DEFAULT_ACCENT) -> dict:
+    """Токены темы с выбранным акцентом: ключ из ACCENTS или любой цвет вида #rrggbb."""
+    tokens = dict(THEMES.get(theme_name, DARK))
+    if accent == DEFAULT_ACCENT or not accent:
+        return tokens
+    if accent in ACCENTS:
+        base = QColor(ACCENTS[accent][1 if tokens["name"] == "dark" else 2])
+    else:
+        base = QColor(accent)
+        if not base.isValid():
+            return tokens
+    tokens["accent"] = base.name()
+    tokens["accent_hover"] = base.lighter(112).name()
+    tokens["accent_pressed"] = base.darker(118).name()
+    tokens["accent_text"] = _accent_text_for(base)
+    selection = QColor(tokens["surface"])
+    mix = 0.14 if tokens["name"] == "dark" else 0.12
+    tokens["selection"] = QColor.fromRgbF(
+        selection.redF() * (1 - mix) + base.redF() * mix, selection.greenF() * (1 - mix) + base.greenF() * mix,
+        selection.blueF() * (1 - mix) + base.blueF() * mix).name()
+    return tokens

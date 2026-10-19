@@ -173,10 +173,19 @@ class ModCache:
     def put_project_infos(self, infos: Dict[str, Dict]):
         # Храним только поля, нужные интерфейсу: ответ /projects довольно объёмный
         keys = ('id', 'slug', 'title', 'description', 'icon_url', 'client_side', 'server_side', 'project_type',
-                'categories')
+                'categories', 'updated', 'downloads', 'followers', 'source_url', 'issues_url', 'wiki_url',
+                'discord_url', 'donation_urls')
+
+        def compact(info: Dict) -> Dict:
+            data = {k: info.get(k) for k in keys}
+            # Галерея: только адреса и подписи — полное описание проекта (body) в кэш не кладём
+            data['gallery'] = [{'url': g.get('url'), 'raw_url': g.get('raw_url'), 'title': g.get('title'),
+                                'featured': g.get('featured')} for g in (info.get('gallery') or [])][:12]
+            return data
+
         with self.conn:
             self.conn.executemany("INSERT OR REPLACE INTO project_info (project_id, data) VALUES (?, ?)",
-                                  [(pid, json.dumps({k: info.get(k) for k in keys})) for pid, info in infos.items()])
+                                  [(pid, json.dumps(compact(info))) for pid, info in infos.items()])
 
     def put_mod_infos(self, infos: Dict[str, Dict]):
         with self.conn:
@@ -273,6 +282,20 @@ def apply_install_info(entry: Dict, version_info: Optional[Dict]) -> bool:
     return True
 
 
+def project_links(project: Dict) -> List[tuple]:
+    """Ссылки проекта для панели мода: (подпись, иконка, адрес)."""
+    links = []
+    for key, title, icon in (("source_url", "Исходный код", "code"), ("issues_url", "Сообщить об ошибке", "bug"),
+                             ("wiki_url", "Вики", "book"), ("discord_url", "Discord", "chat")):
+        if project.get(key):
+            links.append((title, icon, project[key]))
+    for donation in project.get('donation_urls') or []:
+        if donation.get('url'):
+            links.append(("Поддержать автора", "heart", donation['url']))
+            break
+    return links
+
+
 def _apply_project_info(entry: Dict, project: Optional[Dict]):
     if not project:
         return
@@ -285,6 +308,10 @@ def _apply_project_info(entry: Dict, project: Optional[Dict]):
     entry["slug"] = project.get('slug')
     entry["categories"] = list(project.get('categories') or [])
     entry["project_type"] = project.get('project_type')
+    entry["project_updated"] = project.get('updated')
+    entry["downloads"] = project.get('downloads')
+    entry["links"] = project_links(project)
+    entry["gallery"] = list(project.get('gallery') or [])
 
 
 def scan_local(mods_path: str, cache_file: Optional[str], content: ContentType = MODS) -> List[Dict]:

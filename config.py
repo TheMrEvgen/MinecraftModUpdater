@@ -63,12 +63,24 @@ def default_settings() -> dict:
         "auto_snapshot": True,         # Снимок сборки перед массовыми изменениями
         "snapshots_keep": 10,          # Сколько автоматических снимков хранить
         "animations": True,
+        # Оформление
+        "accent": "green",             # Ключ из theme.ACCENTS или цвет #rrggbb
+        "ui_scale": 100,               # Масштаб интерфейса, % (применяется после перезапуска)
+        "columns": ["description", "versions"],  # Что показывать в строке мода (см. ui.mod_list.COLUMNS)
+        "minimal_mode": False,         # Режим «Минимум»: только список и кнопка «Обновить»
+        "per_profile_view": True,      # Запоминать вид списка и сортировку для каждой сборки
+        "shortcuts": {},               # Переназначенные горячие клавиши: действие -> сочетание
+        # Бэкапы
+        "backup_max_days": 30,         # Удалять бэкапы операций старше (0 — не удалять)
+        "backup_max_mb": 1024,         # Ограничение места под бэкапы одной папки (0 — без ограничения)
+        "abandoned_warning": True,     # Предупреждать о модах, которые давно не обновлялись
     }
 
 
 def default_config() -> dict:
     return {"theme": "system", "current_profile": "Default", "profiles": {"Default": default_profile()},
-            "settings": default_settings(), "hidden_instances": [], "window": {}, "mod_tags": {}}
+            "settings": default_settings(), "hidden_instances": [], "window": {}, "mod_tags": {},
+            "mod_notes": {}, "favorites": [], "last_seen": {}}
 
 
 def _normalize(config: dict) -> dict:
@@ -97,6 +109,12 @@ def _normalize(config: dict) -> dict:
         config["window"] = {}
     if not isinstance(config.get("mod_tags"), dict):  # Метки пользователя: ключ мода -> [метки]
         config["mod_tags"] = {}
+    if not isinstance(config.get("mod_notes"), dict):  # Заметки: ключ мода -> текст
+        config["mod_notes"] = {}
+    if not isinstance(config.get("favorites"), list):  # Избранные моды: ключи
+        config["favorites"] = []
+    if not isinstance(config.get("last_seen"), dict):  # Сборка -> {проект: версия} на момент прошлой проверки
+        config["last_seen"] = {}
     return config
 
 
@@ -166,3 +184,28 @@ def setup_file_logging(log_name: str, level=logging.DEBUG) -> str:
     # urllib3 слишком подробно пишет в DEBUG
     logging.getLogger("urllib3").setLevel(logging.INFO)
     return log_path
+
+
+# --- Перенос настроек на другой компьютер ---
+
+EXPORT_FORMAT = "minecraft-mod-updater-settings"
+
+
+def export_config(config: dict, path: str) -> None:
+    """Сохраняет сборки, настройки, метки, заметки, избранное и закрепления в один JSON-файл."""
+    data = {"format": EXPORT_FORMAT, "app_version": APP_VERSION, **{k: v for k, v in config.items() if k != "window"}}
+    save_config(data, path)
+
+
+def import_config(path: str) -> dict:
+    """Читает файл экспорта. ValueError — если это не файл настроек программы."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise ValueError(f"Не удалось прочитать файл: {e}") from e
+    if not isinstance(data, dict) or data.get("format") != EXPORT_FORMAT:
+        raise ValueError("Это не файл настроек Minecraft Mod Updater.")
+    data.pop("format", None)
+    data.pop("app_version", None)
+    return _normalize(data)

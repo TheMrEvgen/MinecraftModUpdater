@@ -264,7 +264,8 @@ SEARCH_SORTS = ("relevance", "downloads", "updated", "newest")
 
 
 def search_projects(query: str, project_type: str = "mod", game_version: Optional[str] = None,
-                    loaders: Loaders = None, index: str = "relevance", offset: int = 0, limit: int = 20) -> Dict:
+                    loaders: Loaders = None, index: str = "relevance", offset: int = 0, limit: int = 20,
+                    categories: Optional[List[str]] = None, side: Optional[str] = None) -> Dict:
     """
     Поиск в каталоге Modrinth (GET /search). Возвращает {"hits": [...], "total_hits": N}.
     Фильтры передаются facets: внутри списка — «или», между списками — «и».
@@ -275,9 +276,28 @@ def search_projects(query: str, project_type: str = "mod", game_version: Optiona
     loader_list = _loader_list(loaders)
     if loader_list:
         facets.append([f"categories:{loader}" for loader in loader_list])
+    for category in categories or []:  # Каждая категория — отдельное условие «и»
+        facets.append([f"categories:{category}"])
+    if side == "client":
+        facets.append(["client_side:required", "client_side:optional"])
+    elif side == "server":
+        facets.append(["server_side:required", "server_side:optional"])
     params = {"query": query or "", "facets": json.dumps(facets), "index": index if index in SEARCH_SORTS else "relevance",
               "offset": max(0, offset), "limit": max(1, min(limit, 100))}
     return _get_json(f"{MODRINTH_API_BASE}/search", params=params)
+
+
+def get_project(project_id: str) -> Dict:
+    """Полная информация о проекте (GET /project/{id}): описание body, галерея, ссылки."""
+    return _get_json(f"{MODRINTH_API_BASE}/project/{project_id}")
+
+
+def get_categories(project_type: str = "mod") -> List[Dict]:
+    """Категории Modrinth для типа проекта (GET /tag/category) — для фильтров каталога."""
+    cache_key = "categories"
+    if cache_key not in SESSION_CACHE:
+        SESSION_CACHE[cache_key] = _get_json(f"{MODRINTH_API_BASE}/tag/category")
+    return [c for c in SESSION_CACHE[cache_key] if c.get("project_type") == project_type]  # type: ignore
 
 
 def get_game_versions(include_snapshots: bool = False) -> List[str]:
