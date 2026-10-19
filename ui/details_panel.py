@@ -2,22 +2,104 @@
 import os
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QPainter, QPainterPath, QPixmap
+from PyQt6.QtCore import QRect, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QFont, QFontMetrics, QPainter, QPainterPath, QPixmap
 from PyQt6.QtWidgets import (
-    QFormLayout, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QScrollArea,
-    QSizePolicy, QTextBrowser, QVBoxLayout, QWidget,
+    QAbstractItemView, QFormLayout, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QScrollArea,
+    QSizePolicy, QStyle, QStyledItemDelegate, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 import icons
 from enums import ModStatus
 from mod_updater_logic import format_date
-from theme import rgba
+from theme import qcolor, rgba
 from ui.widgets import button, label, refresh_button_icons
 from view_model import status_of, status_style
 
 SIDE_LABELS = {"required": "нужен", "optional": "необязателен", "unsupported": "не поддерживается"}
 VERSION_TYPES = {"release": "релиз", "beta": "бета", "alpha": "альфа"}
+VERSION_TYPE_ROLES = {"release": "accent", "beta": "warning", "alpha": "danger"}
+VERSION_ROLE = Qt.ItemDataRole.UserRole
+INSTALLED_ROLE = Qt.ItemDataRole.UserRole + 1
+
+
+class VersionDelegate(QStyledItemDelegate):
+    """Строка версии в цветах темы: номер, цветная метка типа, дата и отметка установленной версии."""
+
+    def __init__(self, view, tokens: dict):
+        super().__init__(view)
+        self.tokens = tokens
+        base = view.font()
+        self.font_bold = QFont(base)
+        self.font_bold.setWeight(QFont.Weight.DemiBold)
+        self.font_small = QFont(base)
+        self.font_small.setPointSizeF(max(base.pointSizeF() - 1, 7.5))
+        self.font_chip = QFont(self.font_small)
+        self.font_chip.setWeight(QFont.Weight.DemiBold)
+
+    def sizeHint(self, option, index):
+        return QSize(option.rect.width(), 46)
+
+    def paint(self, p: QPainter, option, index):
+        t = self.tokens
+        version = index.data(VERSION_ROLE)
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = option.rect.adjusted(4, 2, -4, -2)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        if selected or hovered:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(qcolor(t["accent"], 0.12) if selected else qcolor(t["surface2"]))
+            p.drawRoundedRect(QRectF(r), 8, 8)
+        if not version:  # Строка-сообщение («нет версий»)
+            p.setPen(qcolor(t["text_muted"]))
+            p.drawText(r.adjusted(10, 0, -10, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                       index.data(Qt.ItemDataRole.DisplayRole) or "")
+            p.restore()
+            return
+
+        installed = bool(index.data(INSTALLED_ROLE))
+        right = r.right() - 10
+        if installed:
+            fm = QFontMetrics(self.font_chip)
+            text = "установлена"
+            w = fm.horizontalAdvance(text) + 30
+            chip = QRectF(right - w, r.center().y() - 11, w, 22)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(qcolor(t["accent"], 0.14))
+            p.drawRoundedRect(chip, 11, 11)
+            p.drawPixmap(QRect(int(chip.left()) + 8, int(chip.center().y()) - 6, 12, 12),
+                         icons.pixmap("check", t["accent"], 12))
+            p.setFont(self.font_chip)
+            p.setPen(qcolor(t["accent"]))
+            p.drawText(chip.adjusted(23, 0, -6, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+            right = int(chip.left()) - 8
+
+        left = r.left() + 12
+        width = max(20, right - left)
+        p.setFont(self.font_bold)
+        p.setPen(qcolor(t["text"]))
+        fm_b = QFontMetrics(self.font_bold)
+        p.drawText(QRect(left, r.top() + 5, width, fm_b.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   fm_b.elidedText(str(version.get("version_number") or ""), Qt.TextElideMode.ElideMiddle, width))
+
+        vtype = version.get("version_type", "")
+        color = t.get(VERSION_TYPE_ROLES.get(vtype, "text_muted"), t["text_muted"])
+        p.setFont(self.font_small)
+        fm_s = QFontMetrics(self.font_small)
+        y = r.top() + 5 + fm_b.height() + 2
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(qcolor(color))
+        p.drawEllipse(QRectF(left, y + fm_s.height() / 2 - 3, 6, 6))
+        type_text = VERSION_TYPES.get(vtype, vtype)
+        p.setPen(qcolor(color))
+        p.drawText(QRect(left + 11, y, width, fm_s.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, type_text)
+        date_x = left + 11 + fm_s.horizontalAdvance(type_text) + 10
+        p.setPen(qcolor(t["text_faint"]))
+        p.drawText(QRect(date_x, y, max(0, right - date_x), fm_s.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   format_date(version.get("date_published")))
+        p.restore()
 
 
 def rounded_pixmap(pm: QPixmap, size: int, radius: int) -> QPixmap:
@@ -152,7 +234,13 @@ class DetailsPanel(QFrame):
         versions_header.setContentsMargins(0, 0, 0, 0)
         self.layout_.addWidget(self.versions_header_widget)
         self.versions_list = QListWidget()
-        self.versions_list.setMinimumHeight(180)
+        self.versions_list.setObjectName("VersionList")
+        self.versions_list.setMinimumHeight(220)
+        self.versions_list.setMouseTracking(True)
+        self.versions_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.versions_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.versions_delegate = VersionDelegate(self.versions_list, tokens)
+        self.versions_list.setItemDelegate(self.versions_delegate)
         self.versions_list.itemDoubleClicked.connect(self._install_selected_version)
         self.version_install_btn = button("Установить выбранную версию", None, "download", tokens, "text")
         self.version_install_btn.clicked.connect(self._install_selected_version)
@@ -163,6 +251,8 @@ class DetailsPanel(QFrame):
 
     def set_tokens(self, tokens: dict):
         self.tokens = tokens
+        self.versions_delegate.tokens = tokens
+        self.versions_list.viewport().update()
         refresh_button_icons(self, tokens)
         if self.entry:
             self.set_entry(self.entry, None)
@@ -295,9 +385,9 @@ class DetailsPanel(QFrame):
         current = (self.entry or {}).get("current_version")
         for v in versions:
             vtype = VERSION_TYPES.get(v.get("version_type"), v.get("version_type", ""))
-            mark = "   ✓ установлена" if v.get("version_number") == current else ""
-            item = QListWidgetItem(f"{v.get('version_number')}    ·  {vtype}  ·  {format_date(v.get('date_published'))}{mark}")
-            item.setData(Qt.ItemDataRole.UserRole, v)
+            item = QListWidgetItem(f"{v.get('version_number')} · {vtype} · {format_date(v.get('date_published'))}")
+            item.setData(VERSION_ROLE, v)
+            item.setData(INSTALLED_ROLE, v.get("version_number") == current)
             self.versions_list.addItem(item)
         if not versions:
             self.versions_list.addItem("Нет версий для этой версии игры и загрузчика")
@@ -305,6 +395,6 @@ class DetailsPanel(QFrame):
 
     def _install_selected_version(self, *_):
         item = self.versions_list.currentItem()
-        version = item.data(Qt.ItemDataRole.UserRole) if item else None
+        version = item.data(VERSION_ROLE) if item else None
         if self.entry and version:
             self.version_install_requested.emit(self.entry, version)

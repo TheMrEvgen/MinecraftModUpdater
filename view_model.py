@@ -95,6 +95,47 @@ def build_view_items(mods_data: List[Dict]) -> List[Dict]:
     return items
 
 
+# Режимы списка (настройка «Вид списка»)
+VIEW_FLAT = "flat"   # Все моды и зависимости одним списком
+VIEW_MINE = "mine"   # Только установленные моды — без недостающих зависимостей
+VIEW_TREE = "tree"   # Моды с раскрывающимися зависимостями
+VIEW_MODES = (VIEW_FLAT, VIEW_MINE, VIEW_TREE)
+DEP_TYPE_LABELS = {"required": "обязательная", "optional": "необязательная", "incompatible": "несовместимая"}
+
+
+def build_rows(mods_data: List[Dict], mode: str = VIEW_FLAT) -> tuple[List[tuple], List[Dict]]:
+    """
+    Строки списка для режима и записи для подсчёта карточек-сводок.
+    Строка — (запись, meta); meta: depth (0 — мод, 1 — зависимость), parent_row, dep_type, children (номера строк).
+    В дереве зависимость, которая есть и в плоском списке, — тот же словарь: отметка и статус у них общие.
+    """
+    items = build_view_items(mods_data)
+    if mode == VIEW_MINE:
+        mine = [e for e in items if e.get("filepath")]
+        if mine:  # В режиме импорта своих файлов нет — показываем всё
+            return [(e, {"depth": 0}) for e in mine], mine
+    if mode != VIEW_TREE:
+        return [(e, {"depth": 0}) for e in items], items
+
+    canonical = {entry_key(e): e for e in items}
+    rows: List[tuple] = []
+    for mod in mods_data:
+        parent = canonical.get(entry_key(mod), mod)
+        parent_row = len(rows)
+        meta = {"depth": 0, "children": []}
+        rows.append((parent, meta))
+        # В том же порядке, что и при показе (по имени): так известна последняя ветка дерева
+        for dep in sorted(mod.get("dependencies", []), key=lambda d: str(d.get("name", "")).lower()):
+            child = canonical.get(entry_key(dep), dep)
+            if child is dep and "_issues" not in dep:
+                dep["_required_by"], dep["_issues"] = [mod.get("name", "?")], entry_issues(dep)
+            meta["children"].append(len(rows))
+            rows.append((child, {"depth": 1, "parent_row": parent_row, "dep_type": dep.get("type")}))
+        if meta["children"]:
+            rows[meta["children"][-1]][1]["last"] = True
+    return rows, items
+
+
 def entry_issues(entry: Dict) -> List[str]:
     """Проблемы мода: недостающие обязательные и установленные несовместимые зависимости."""
     issues = []

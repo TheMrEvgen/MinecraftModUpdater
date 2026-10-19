@@ -25,7 +25,7 @@ from mod_updater_logic import format_date, get_latest_loader_version, select_pri
 from scanner import entries_from_mrpack, mrpack_game_info, read_mrpack
 from theme import THEMES, apply_window_frame_theme, build_stylesheet, detect_system_theme
 from ui.details_panel import DetailsPanel
-from ui.mod_list import ModDelegate, ModFilterProxy, ModListModel, ModListView, entry_at
+from ui.mod_list import ModDelegate, ModFilterProxy, ModListModel, ModListView, entry_at, meta_at
 from ui.pages import HistoryPage, LogPage, SettingsPage
 from ui.widgets import (
     ChipButton, DropOverlay, ElidedLabel, EmptyState, SearchBox, SelectionBar, Sidebar, StatCard, ToastManager,
@@ -37,9 +37,12 @@ from updater import (
     move_all_to_backup, remove_mods, rollback_transaction,
 )
 from view_model import (
-    CAT_ALL, CAT_INSTALL, CAT_NOT_FOUND, CAT_PROBLEMS, CAT_UPDATES, build_view_items, category_counts, entry_key,
-    iter_all_entries, status_of,
+    CAT_ALL, CAT_INSTALL, CAT_NOT_FOUND, CAT_PROBLEMS, CAT_UPDATES, VIEW_FLAT, VIEW_MINE, VIEW_MODES, VIEW_TREE,
+    build_rows, category_counts, entry_key, iter_all_entries, status_of,
 )
+
+VIEW_MODE_LABELS = {VIEW_FLAT: ("list", "Все моды и зависимости"), VIEW_MINE: ("user", "Только мои моды"),
+                    VIEW_TREE: ("list_tree", "Дерево с зависимостями")}
 from workers import (
     IconLoader, ImportWorker, LoaderVersionWorker, LocalScanWorker, ScanWorker, TaskWorker, UpdateWorker, fetch_json,
     fetch_versions,
@@ -94,6 +97,7 @@ class ModUpdaterApp(QMainWindow):
         self.current_loader_version: Optional[str] = None
         self.latest_loader_version: Optional[str] = None
         self.mods_data: List[dict] = []
+        self._count_items: List[dict] = []  # Записи для карточек-сводок (без повторов дерева)
         self.is_import_mode = False
         self.import_title = ""
         self.sessions: Dict[str, List[dict]] = {}
@@ -117,6 +121,7 @@ class ModUpdaterApp(QMainWindow):
         self._setup_logging()
         self._setup_shortcuts()
         self.apply_theme()
+        self._apply_view_settings()
         self._restore_geometry()
 
         if self.settings.get("discover_launchers", True):
@@ -283,6 +288,10 @@ class ModUpdaterApp(QMainWindow):
         self.sort_combo.currentIndexChanged.connect(lambda: self.proxy.set_sort_mode(self.sort_combo.currentData()))
         self.sort_combo.setMinimumHeight(36)
         toolbar.addWidget(self.sort_combo)
+        self.view_btn = button("", "IconButton", "list", t, "text_muted", "Вид списка")
+        self.view_btn.setFixedSize(38, 36)
+        self.view_btn.clicked.connect(self._show_view_menu)
+        toolbar.addWidget(self.view_btn)
         self.toolbar_widget = QWidget()
         self.toolbar_widget.setLayout(toolbar)
         toolbar.setContentsMargins(0, 0, 0, 0)
@@ -307,6 +316,11 @@ class ModUpdaterApp(QMainWindow):
         self.delegate.check_toggled.connect(lambda _: self._refresh_selection_ui())
         self.delegate.update_clicked.connect(lambda e: self.start_update([e]))
         self.delegate.menu_requested.connect(self._show_entry_menu)
+        self.delegate.expand_toggled.connect(lambda e: self._set_expanded(e, not self.proxy.is_expanded(e)))
+        self.delegate.is_expanded = self.proxy.is_expanded
+        self.view.expand_requested.connect(self._expand_current)
+        self.view.open_requested.connect(self._open_current_details)
+        self.view.doubleClicked.connect(lambda _: self._open_current_details())
         self.view.context_menu_requested.connect(self._show_entry_menu)
         self.view.toggle_requested.connect(self._toggle_current)
         self.view.delete_requested.connect(self._delete_checked_or_current)
@@ -680,7 +694,11 @@ class ModUpdaterApp(QMainWindow):
                          "success" if added else "info")
 
     def _on_settings_changed(self, settings: dict):
+        view_keys = ("view_mode", "compact_rows", "expand_dependencies")
+        view_changed = any(self.settings.get(k) != settings.get(k) for k in view_keys if k in settings)
         self.settings.update(settings)
+        if view_changed:
+            self._rebuild_view()
 
     def _clear_cache(self):
         if self._busy:
@@ -722,8 +740,10 @@ class ModUpdaterApp(QMainWindow):
         """Обновляет список модов, сохраняя выделение и открытую панель деталей."""
         selected_key = entry_key(self.details.entry) if keep_selection and self.details.entry else None
         self.mods_data = mods_data
-        items = build_view_items(mods_data)
-        self.model.set_items(items)
+        self._apply_view_settings()
+        rows, self._count_items = build_rows(mods_data, self._view_mode())
+        self.model.set_rows(rows)
+        items = self.model.items()
         self.proxy.sort(0)
         self._refresh_counts()
         self._refresh_selection_ui()
@@ -737,7 +757,7 @@ class ModUpdaterApp(QMainWindow):
                 self._close_details()
 
     def _refresh_counts(self):
-        counts = category_counts(self.model.items())
+        counts = category_counts(self._count_items)
         for category, card in self.cards.items():
             card.set_count(counts.get(category, 0))
         if self.is_import_mode:
@@ -899,11 +919,108 @@ class ModUpdaterApp(QMainWindow):
 
     def _on_current_changed(self, current, previous):
         entry = entry_at(current)
+        if not entry:
+            self.details.hide()
+        elif self.settings.get("details_on_select", True) or self.details.isVisible():
+            self.details.set_entry(entry, self._icon_for_entry(entry))
+            self.details.show()
+
+    def _open_current_details(self):
+        entry = entry_at(self.view.currentIndex())
         if entry:
             self.details.set_entry(entry, self._icon_for_entry(entry))
             self.details.show()
-        else:
-            self.details.hide()
+
+    # ================================================================== Вид списка
+
+    def _view_mode(self) -> str:
+        mode = self.settings.get("view_mode", VIEW_FLAT)
+        return mode if mode in VIEW_MODES else VIEW_FLAT
+
+    def _apply_view_settings(self):
+        """Переносит настройки вида в делегат и фильтр (без пересборки строк)."""
+        tree = self._view_mode() == VIEW_TREE
+        self.delegate.tree = tree
+        self.delegate.compact = bool(self.settings.get("compact_rows", False))
+        # Умолчание раскрытия применяем только при смене настройки, чтобы не сбрасывать «Раскрыть все» из меню
+        expand = bool(self.settings.get("expand_dependencies", False))
+        if getattr(self, "_expand_setting", None) != expand:
+            self._expand_setting = expand
+            self.proxy.set_expand_all(expand)
+        icon_name = VIEW_MODE_LABELS[self._view_mode()][0]
+        self.view_btn.setProperty("icon_name", icon_name)
+        self.view_btn.setIcon(icons.icon(icon_name, self.tokens["text_muted"], 16))
+        self.view_btn.setToolTip(f"Вид списка: {VIEW_MODE_LABELS[self._view_mode()][1].lower()}")
+
+    def _set_view_option(self, **options):
+        self.settings.update(options)
+        self.settings_page.load(self.config_theme, self.settings)
+        self._rebuild_view()
+
+    def _rebuild_view(self):
+        """Перестраивает список под новые настройки вида, сохраняя открытый мод."""
+        self._set_data(self.mods_data)
+        self.view.doItemsLayout()  # Высота строк могла измениться (компактный режим)
+        self.view.viewport().update()
+
+    def _show_view_menu(self):
+        t = self.tokens
+        menu = QMenu(self)
+        current = self._view_mode()
+        for mode in VIEW_MODES:
+            icon_name, text = VIEW_MODE_LABELS[mode]
+            action = make_action(menu, t, icon_name, text, lambda m=mode: self._set_view_option(view_mode=m),
+                                 "accent" if mode == current else "text_muted")
+            action.setCheckable(True)
+            action.setChecked(mode == current)
+            menu.addAction(action)
+        menu.addSeparator()
+        if current == VIEW_TREE:
+            menu.addAction(make_action(menu, t, "chevron_down", "Раскрыть все", lambda: self._expand_all(True)))
+            menu.addAction(make_action(menu, t, "chevron_right", "Свернуть все", lambda: self._expand_all(False)))
+            menu.addSeparator()
+        compact = make_action(menu, t, "layers", "Компактные строки",
+                              lambda: self._set_view_option(compact_rows=not self.settings.get("compact_rows", False)))
+        compact.setCheckable(True)
+        compact.setChecked(bool(self.settings.get("compact_rows", False)))
+        menu.addAction(compact)
+        details = make_action(menu, t, "info", "Открывать панель мода при выборе",
+                              lambda: self._set_view_option(details_on_select=not self.settings.get("details_on_select", True)))
+        details.setCheckable(True)
+        details.setChecked(bool(self.settings.get("details_on_select", True)))
+        menu.addAction(details)
+        menu.exec(self.view_btn.mapToGlobal(self.view_btn.rect().bottomRight()) - self._menu_offset(menu))
+
+    def _expand_all(self, expanded: bool):
+        self.proxy.set_expand_all(expanded)
+        self._after_tree_change()
+
+    def _set_expanded(self, entry: dict, expanded: bool):
+        self.proxy.set_expanded(entry, expanded)
+        self._after_tree_change()
+
+    def _expand_current(self, expand: bool):
+        index = self.view.currentIndex()
+        entry, meta = entry_at(index), meta_at(index)
+        if not entry or self._view_mode() != VIEW_TREE:
+            return
+        if meta.get("children"):
+            if self.proxy.is_expanded(entry) != expand:
+                self._set_expanded(entry, expand)
+        elif meta.get("depth") and not expand:
+            # ← на зависимости — к её моду
+            parent = self.model.entry(meta["parent_row"])
+            parent_index = self.proxy.mapFromSource(self.model.index(meta["parent_row"]))
+            if parent and parent_index.isValid():
+                self.view.setCurrentIndex(parent_index)
+
+    def _after_tree_change(self):
+        current = self.view.currentIndex()
+        self.proxy.sort(0)
+        self._refresh_empty_state()
+        self._refresh_selection_ui()
+        if current.isValid():
+            self.view.scrollTo(self.view.currentIndex())
 
     def _select_entry(self, entry: dict):
         key = entry_key(entry)
@@ -913,6 +1030,15 @@ class ModUpdaterApp(QMainWindow):
                 self.view.selectionModel().setCurrentIndex(idx, QItemSelectionModel.SelectionFlag.ClearAndSelect)
                 self.view.scrollTo(idx)
                 return
+        # Зависимость внутри свёрнутого мода — раскрываем его
+        for row in range(self.model.rowCount()):
+            meta = self.model.meta(row)
+            if meta.get("depth") and entry_key(self.model.entry(row)) == key:
+                parent = self.model.entry(meta["parent_row"])
+                if not self.proxy.is_expanded(parent):
+                    self._set_expanded(parent, True)
+                    self._select_entry(entry)
+                    return
         # Мод скрыт фильтром — показываем все
         if self.proxy.category != CAT_ALL or self.proxy.query:
             self._reset_filters()
@@ -941,6 +1067,9 @@ class ModUpdaterApp(QMainWindow):
     def _show_entry_menu(self, entry: dict, pos):
         t = self.tokens
         menu = QMenu(self)
+        if not self.details.isVisible() or self.details.entry is not entry:
+            menu.addAction(make_action(menu, t, "info", "Подробнее",
+                                       lambda: (self._select_entry(entry), self._open_current_details())))
         if entry.get("download_url"):
             verb = "Обновить до" if entry.get("filepath") else "Установить"
             menu.addAction(make_action(menu, t, "download", f"{verb} {entry.get('new_version', '')}",
@@ -1056,7 +1185,7 @@ class ModUpdaterApp(QMainWindow):
             return
         self._set_data(mods_data)
         self.sessions[self.current_profile_name] = mods_data
-        counts = category_counts(self.model.items())
+        counts = category_counts(self._count_items)
         updates, problems = counts[CAT_UPDATES], counts[CAT_PROBLEMS]
         if updates:
             self.toasts.show(f"Доступно обновлений: {updates}", "info", "Обновить все", self.update_all, timeout=8000)

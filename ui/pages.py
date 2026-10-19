@@ -193,6 +193,34 @@ class SettingsPage(QWidget):
         body.addLayout(theme_row)
         root.addWidget(card)
 
+        # Список модов
+        card, body = self._card("Список модов")
+        body.addWidget(label("Как показывать моды сборки. Вид можно быстро сменить и кнопкой справа от поиска.",
+                             "Muted", wrap=True))
+        self.view_group = QButtonGroup(self)
+        for i, (key, text, hint) in enumerate((
+                ("flat", "Все моды и зависимости", "установленные моды и недостающие зависимости одним списком"),
+                ("mine", "Только мои моды", "только файлы из папки mods, без недостающих зависимостей"),
+                ("tree", "Дерево с зависимостями", "у каждого мода раскрывается список его зависимостей"))):
+            radio = QRadioButton(text)
+            radio.setProperty("view_key", key)
+            self.view_group.addButton(radio, i)
+            body.addWidget(radio)
+            hint_label = label(hint[:1].upper() + hint[1:], "Faint", wrap=True)
+            hint_label.setContentsMargins(26, 0, 0, 4)
+            body.addWidget(hint_label)
+        self.view_group.buttonClicked.connect(self._emit)
+        self.expand_deps = QCheckBox("В дереве сразу раскрывать зависимости")
+        self.expand_deps.toggled.connect(self._emit)
+        self.compact_rows = QCheckBox("Компактные строки (без описания, больше модов на экране)")
+        self.compact_rows.toggled.connect(self._emit)
+        self.details_on_select = QCheckBox("Открывать панель мода сбоку при выборе строки "
+                                           "(иначе — двойной щелчок, Enter или «Подробнее» в меню)")
+        self.details_on_select.toggled.connect(self._emit)
+        for widget in (self.expand_deps, self.compact_rows, self.details_on_select):
+            body.addWidget(widget)
+        root.addWidget(card)
+
         # Обновления
         card, body = self._card("Проверка обновлений")
         self.auto_check = QCheckBox("Проверять обновления автоматически при открытии сборки")
@@ -241,6 +269,8 @@ class SettingsPage(QWidget):
                           "<tr><td><b>F5</b></td><td>&nbsp;&nbsp;проверить обновления</td></tr>"
                           "<tr><td><b>Ctrl+F</b></td><td>&nbsp;&nbsp;поиск</td></tr>"
                           "<tr><td><b>Пробел</b></td><td>&nbsp;&nbsp;отметить мод</td></tr>"
+                          "<tr><td><b>Enter</b></td><td>&nbsp;&nbsp;открыть панель мода</td></tr>"
+                          "<tr><td><b>→ / ←</b></td><td>&nbsp;&nbsp;раскрыть / свернуть зависимости (дерево)</td></tr>"
                           "<tr><td><b>Delete</b></td><td>&nbsp;&nbsp;удалить отмеченные</td></tr>"
                           "<tr><td><b>Esc</b></td><td>&nbsp;&nbsp;закрыть панель / сбросить поиск</td></tr>"
                           "<tr><td><b>Перетаскивание</b></td><td>&nbsp;&nbsp;.jar, .mrpack или строка сборки в окно</td></tr>"
@@ -270,11 +300,24 @@ class SettingsPage(QWidget):
         self.auto_check.setChecked(bool(settings.get("auto_check", True)))
         self.discover.setChecked(bool(settings.get("discover_launchers", True)))
         self.parallel.setCurrentText(str(int(settings.get("parallel_downloads", 3))))
+        for b in self.view_group.buttons():
+            b.setChecked(b.property("view_key") == settings.get("view_mode", "flat"))
+        self.expand_deps.setChecked(bool(settings.get("expand_dependencies", False)))
+        self.expand_deps.setEnabled(settings.get("view_mode") == "tree")
+        self.compact_rows.setChecked(bool(settings.get("compact_rows", False)))
+        self.details_on_select.setChecked(bool(settings.get("details_on_select", True)))
         self._loading = False
 
     def _emit(self, *_):
         if not self._loading:
+            checked_view = self.view_group.checkedButton()
+            view_mode = checked_view.property("view_key") if checked_view else "flat"
+            self.expand_deps.setEnabled(view_mode == "tree")
             self.settings_changed.emit({
+                "view_mode": view_mode,
+                "expand_dependencies": self.expand_deps.isChecked(),
+                "compact_rows": self.compact_rows.isChecked(),
+                "details_on_select": self.details_on_select.isChecked(),
                 "auto_check": self.auto_check.isChecked(),
                 "discover_launchers": self.discover.isChecked(),
                 "parallel_downloads": int(self.parallel.currentText()),

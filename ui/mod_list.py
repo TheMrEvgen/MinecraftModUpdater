@@ -14,11 +14,14 @@ import icons
 from enums import ModStatus
 from theme import qcolor
 from view_model import (
-    CAT_ALL, matches_category, search_text, status_of, status_sort_key, status_style, subtitle_for,
+    CAT_ALL, DEP_TYPE_LABELS, entry_key, matches_category, search_text, status_of, status_sort_key, status_style,
+    subtitle_for,
 )
 
 ENTRY_ROLE = Qt.ItemDataRole.UserRole + 1
 ROW_HEIGHT = 62
+ROW_HEIGHT_COMPACT = 44
+TREE_INDENT = 30  # Сдвиг строки зависимости в режиме дерева
 
 
 def entry_at(index: QModelIndex) -> Optional[Dict]:
@@ -34,29 +37,53 @@ def entry_at(index: QModelIndex) -> Optional[Dict]:
     return model.entry(index.row()) if isinstance(model, ModListModel) else None
 
 
+def meta_at(index: QModelIndex) -> Dict:
+    """Положение строки в дереве: depth, parent_row, dep_type, children (см. view_model.build_rows)."""
+    model = index.model() if index.isValid() else None
+    while isinstance(model, QSortFilterProxyModel):
+        index = model.mapToSource(index)
+        model = index.model()
+    return model.meta(index.row()) if isinstance(model, ModListModel) else {}
+
+
 class ModListModel(QAbstractListModel):
+    """Строки списка. В режиме дерева одна запись может стоять в нескольких строках (общая зависимость)."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._rows: List[tuple] = []
         self._items: List[Dict] = []
 
     def set_items(self, items: List[Dict]):
+        self.set_rows([(e, {"depth": 0}) for e in items])
+
+    def set_rows(self, rows: List[tuple]):
         self.beginResetModel()
-        self._items = list(items)
+        self._rows = list(rows)
+        seen, self._items = set(), []
+        for entry, _ in self._rows:
+            if id(entry) not in seen:
+                seen.add(id(entry))
+                self._items.append(entry)
         self.endResetModel()
 
     def items(self) -> List[Dict]:
+        """Записи без повторов (для отметок и массовых действий)."""
         return self._items
 
     def entry(self, row: int) -> Optional[Dict]:
-        return self._items[row] if 0 <= row < len(self._items) else None
+        return self._rows[row][0] if 0 <= row < len(self._rows) else None
+
+    def meta(self, row: int) -> Dict:
+        return self._rows[row][1] if 0 <= row < len(self._rows) else {}
 
     def rowCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(self._items)
+        return 0 if parent.isValid() else len(self._rows)
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
-        entry = self._items[index.row()]
+        entry = self._rows[index.row()][0]
         if role == ENTRY_ROLE:
             return entry
         if role == Qt.ItemDataRole.DisplayRole:
@@ -65,14 +92,14 @@ class ModListModel(QAbstractListModel):
 
     def refresh_where(self, predicate: Callable[[Dict], bool]):
         """Перерисовывает строки, для которых выполняется условие (без пересоздания модели)."""
-        for row, entry in enumerate(self._items):
+        for row, (entry, _) in enumerate(self._rows):
             if predicate(entry):
                 idx = self.index(row)
                 self.dataChanged.emit(idx, idx)
 
     def refresh_all(self):
-        if self._items:
-            self.dataChanged.emit(self.index(0), self.index(len(self._items) - 1))
+        if self._rows:
+            self.dataChanged.emit(self.index(0), self.index(len(self._rows) - 1))
 
 
 class ModFilterProxy(QSortFilterProxyModel):
@@ -83,7 +110,40 @@ class ModFilterProxy(QSortFilterProxyModel):
         self.category = CAT_ALL
         self.query = ""
         self.sort_mode = self.SORT_STATUS
+        self.expand_all = False   # Режим дерева: по умолчанию раскрыты все или ни один
+        self.toggled: set = set()  # Ключи модов, раскрытых/свёрнутых вручную вопреки умолчанию
         self.setDynamicSortFilter(False)
+
+    def is_expanded(self, entry: Dict) -> bool:
+        return (entry_key(entry) in self.toggled) != self.expand_all
+
+    def set_expanded(self, entry: Dict, expanded: bool):
+        key = entry_key(entry)
+        if expanded != self.expand_all:
+            self.toggled.add(key)
+        else:
+            self.toggled.discard(key)
+        self.invalidateFilter()
+
+    def set_expand_all(self, value: bool):
+        self.expand_all = value
+        self.toggled.clear()
+        self.invalidateFilter()
+
+    @property
+    def filter_active(self) -> bool:
+        return self.category != CAT_ALL or bool(self.query)
+
+    def _matches(self, entry: Optional[Dict]) -> bool:
+        if not entry or not matches_category(entry, self.category):
+            return False
+        return not self.query or all(word in search_text(entry) for word in self.query.split())
+
+    def _parent_visible(self, row: int, meta: Dict) -> bool:
+        model = self.sourceModel()
+        if self._matches(model.entry(row)):
+            return True
+        return self.filter_active and any(self._matches(model.entry(c)) for c in meta.get("children", ()))
 
     def set_filter(self, category: Optional[str] = None, query: Optional[str] = None):
         if category is not None:
@@ -98,17 +158,28 @@ class ModFilterProxy(QSortFilterProxyModel):
         self.sort(0)
 
     def filterAcceptsRow(self, source_row, source_parent):
-        entry = self.sourceModel().entry(source_row)
-        if not entry or not matches_category(entry, self.category):
+        model = self.sourceModel()
+        meta = model.meta(source_row)
+        if not meta.get("depth"):
+            return self._parent_visible(source_row, meta)
+        # Зависимость в дереве: видна под видимым раскрытым модом; при фильтре — ещё и если сама подходит под него
+        parent_row = meta["parent_row"]
+        if not self._parent_visible(parent_row, model.meta(parent_row)):
             return False
-        return not self.query or all(word in search_text(entry) for word in self.query.split())
+        return self.is_expanded(model.entry(parent_row)) or (self.filter_active and self._matches(model.entry(source_row)))
+
+    def _sort_key(self, row: int) -> tuple:
+        model = self.sourceModel()
+        meta = model.meta(row)
+        root = meta["parent_row"] if meta.get("depth") else row
+        root_entry = model.entry(root)
+        root_name = str(root_entry.get("name", "")).lower()
+        root_key = (status_sort_key(root_entry), root_name) if self.sort_mode == self.SORT_STATUS else (0, root_name)
+        # Зависимости идут сразу под своим модом, по имени
+        return root_key + (root, meta.get("depth", 0), str(model.entry(row).get("name", "")).lower())
 
     def lessThan(self, left, right):
-        a, b = self.sourceModel().entry(left.row()), self.sourceModel().entry(right.row())
-        name_a, name_b = str(a.get("name", "")).lower(), str(b.get("name", "")).lower()
-        if self.sort_mode == self.SORT_STATUS:
-            return (status_sort_key(a), name_a) < (status_sort_key(b), name_b)
-        return name_a < name_b
+        return self._sort_key(left.row()) < self._sort_key(right.row())
 
 
 class ModDelegate(QStyledItemDelegate):
@@ -116,6 +187,7 @@ class ModDelegate(QStyledItemDelegate):
     check_toggled = pyqtSignal(object)
     update_clicked = pyqtSignal(object)
     menu_requested = pyqtSignal(object, QPoint)
+    expand_toggled = pyqtSignal(object)
 
     def __init__(self, view: QListView, tokens: dict, icon_provider: Callable[[Dict], Optional[QPixmap]]):
         super().__init__(view)
@@ -123,6 +195,9 @@ class ModDelegate(QStyledItemDelegate):
         self.tokens = tokens
         self.icon_provider = icon_provider
         self._mouse = QPoint(-1, -1)
+        self.compact = False   # Компактные строки: одна строка вместо двух
+        self.tree = False      # Режим дерева: место под стрелку раскрытия
+        self.is_expanded: Callable[[Dict], bool] = lambda entry: False
         base = view.font()
         self.font_name = QFont(base)
         self.font_name.setPointSizeF(base.pointSizeF() + 0.5)
@@ -139,15 +214,21 @@ class ModDelegate(QStyledItemDelegate):
         self.tokens = tokens
 
     def sizeHint(self, option, index):
-        return QSize(option.rect.width(), ROW_HEIGHT)
+        return QSize(option.rect.width(), ROW_HEIGHT_COMPACT if self.compact else ROW_HEIGHT)
 
     # --- Геометрия ---
 
-    def _layout(self, rect: QRect) -> dict:
+    def _layout(self, rect: QRect, depth: int = 0) -> dict:
         r = rect.adjusted(14, 0, -10, 0)
         cy = r.center().y()
-        lay = {"check": QRect(r.left(), cy - 9, 18, 18)}
-        lay["icon"] = QRect(r.left() + 32, cy - 18, 36, 36)
+        left = r.left()
+        lay = {}
+        if self.tree:
+            lay["expander"] = QRect(left - 6, cy - 12, 24, 24)
+            left += 22 + depth * TREE_INDENT
+        lay["check"] = QRect(left, cy - 9, 18, 18)
+        icon_size = 28 if self.compact or depth else 36
+        lay["icon"] = QRect(left + 32, cy - icon_size // 2, icon_size, icon_size)
         right = r.right()
         lay["more"] = QRect(right - 30, cy - 15, 30, 30)
         lay["update"] = QRect(lay["more"].left() - 34, cy - 15, 30, 30)
@@ -155,7 +236,7 @@ class ModDelegate(QStyledItemDelegate):
         wide = rect.width() > 820
         version_width = 250 if wide else 0
         lay["versions"] = QRect(lay["status"].left() - version_width - 10, r.top(), version_width, r.height())
-        text_left = lay["icon"].right() + 14
+        text_left = lay["icon"].right() + 12
         text_right = (lay["versions"].left() if wide else lay["status"].left()) - 14
         lay["text"] = QRect(text_left, r.top(), max(40, text_right - text_left), r.height())
         lay["wide"] = wide
@@ -168,12 +249,14 @@ class ModDelegate(QStyledItemDelegate):
         if not entry:
             return
         t = self.tokens
+        meta = meta_at(index)
+        depth = meta.get("depth", 0) if self.tree else 0
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = option.rect
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
-        lay = self._layout(rect)
+        lay = self._layout(rect, depth)
 
         # Фон строки
         bg_rect = QRectF(rect.adjusted(4, 2, -4, -2))
@@ -188,9 +271,23 @@ class ModDelegate(QStyledItemDelegate):
             painter.setBrush(qcolor(t["surface2"]))
             painter.drawRoundedRect(bg_rect, 9, 9)
 
+        if self.tree:
+            # Ветка дерева: вертикаль от стрелки мода через все зависимости, к каждой — отвод
+            painter.setPen(QPen(qcolor(t["border_strong"]), 1.2))
+            x = lay["expander"].center().x() + 1
+            cy = rect.center().y()
+            if meta.get("children"):
+                expanded = self.is_expanded(entry)
+                self._paint_expander(painter, lay["expander"], expanded, lay["expander"].contains(self._mouse) and hovered)
+                if expanded:
+                    painter.setPen(QPen(qcolor(t["border_strong"]), 1.2))
+                    painter.drawLine(x, lay["expander"].bottom() + 2, x, rect.bottom() + 1)
+            elif depth:
+                painter.drawLine(x, rect.top(), x, cy if meta.get("last") else rect.bottom() + 1)
+                painter.drawLine(x, cy, lay["check"].left() - 8, cy)
         self._paint_checkbox(painter, lay["check"], bool(entry.get("_is_checked")), hovered)
         self._paint_icon(painter, lay["icon"], entry)
-        self._paint_texts(painter, lay, entry)
+        self._paint_texts(painter, lay, entry, meta.get("dep_type") if depth else None)
         if lay["wide"]:
             self._paint_versions(painter, lay["versions"], entry)
         self._paint_status(painter, lay["status"], entry)
@@ -204,6 +301,15 @@ class ModDelegate(QStyledItemDelegate):
             self._paint_round_button(painter, lay["more"], "more", accent=False,
                                      hot=lay["more"].contains(self._mouse) and hovered)
         painter.restore()
+
+    def _paint_expander(self, p: QPainter, r: QRect, expanded: bool, hot: bool):
+        t = self.tokens
+        if hot:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(qcolor(t["surface3"]))
+            p.drawRoundedRect(QRectF(r), 6, 6)
+        p.drawPixmap(r.adjusted(4, 4, -4, -4), icons.pixmap("chevron_down" if expanded else "chevron_right",
+                                                           t["text"] if hot else t["text_muted"], 16))
 
     def _paint_checkbox(self, p: QPainter, r: QRect, checked: bool, hovered: bool):
         t = self.tokens
@@ -237,18 +343,24 @@ class ModDelegate(QStyledItemDelegate):
             letter = (str(entry.get("name") or "?").strip()[:1] or "?").upper()
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, letter)
 
-    def _paint_texts(self, p: QPainter, lay: dict, entry: Dict):
+    def _paint_texts(self, p: QPainter, lay: dict, entry: Dict, dep_type: Optional[str] = None):
         t = self.tokens
         r = lay["text"]
         name = str(entry.get("name") or "")
         p.setFont(self.font_name)
         p.setPen(qcolor(t["text"]))
         fm = QFontMetrics(self.font_name)
+        if self.compact:
+            self._paint_compact_texts(p, lay, entry, dep_type, name, fm)
+            return
         name_rect = QRect(r.left(), r.top() + 11, r.width(), fm.height())
         p.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    fm.elidedText(name, Qt.TextElideMode.ElideRight, r.width()))
 
         subtitle, role = subtitle_for(entry)
+        if dep_type and not entry.get("_issues"):
+            kind = DEP_TYPE_LABELS.get(dep_type, "")
+            subtitle = f"{kind[:1].upper()}{kind[1:]} зависимость" + (f"  ·  {entry['description']}" if entry.get("description") else "")
         if not lay["wide"] and entry.get("current_version"):
             subtitle = self._versions_text(entry) + "  ·  " + subtitle
         p.setFont(self.font_small)
@@ -257,6 +369,26 @@ class ModDelegate(QStyledItemDelegate):
         sub_rect = QRect(r.left(), name_rect.bottom() + 3, r.width(), fm_small.height())
         p.drawText(sub_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    fm_small.elidedText(subtitle, Qt.TextElideMode.ElideRight, r.width()))
+
+    def _paint_compact_texts(self, p: QPainter, lay: dict, entry: Dict, dep_type: Optional[str], name: str,
+                             fm: QFontMetrics):
+        """Одна строка: название и короткая пометка рядом (тип зависимости, проблема, версии в узком окне)."""
+        t = self.tokens
+        r = lay["text"]
+        name_w = min(fm.horizontalAdvance(name), r.width())
+        p.drawText(QRect(r.left(), r.top(), r.width(), r.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   fm.elidedText(name, Qt.TextElideMode.ElideRight, r.width()))
+        note, role = (DEP_TYPE_LABELS.get(dep_type, ""), None) if dep_type else ("", None)
+        if entry.get("_issues"):
+            note, role = "⚠ " + entry["_issues"][0], "warning"
+        if not lay["wide"] and entry.get("current_version"):
+            note = self._versions_text(entry) + (f"  ·  {note}" if note else "")
+        if note and r.width() - name_w > 40:
+            p.setFont(self.font_small)
+            p.setPen(qcolor(t[role] if role else t["text_faint"]))
+            note_rect = QRect(r.left() + name_w + 10, r.top(), r.width() - name_w - 10, r.height())
+            p.drawText(note_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       QFontMetrics(self.font_small).elidedText(note, Qt.TextElideMode.ElideRight, note_rect.width()))
 
     @staticmethod
     def _versions_text(entry: Dict) -> str:
@@ -356,7 +488,12 @@ class ModDelegate(QStyledItemDelegate):
         if event.button() != Qt.MouseButton.LeftButton:
             return False
         pos = event.position().toPoint()
-        lay = self._layout(option.rect)
+        meta = meta_at(index)
+        lay = self._layout(option.rect, meta.get("depth", 0) if self.tree else 0)
+        if self.tree and meta.get("children") and lay["expander"].contains(pos):
+            if etype == QEvent.Type.MouseButtonRelease:
+                self.expand_toggled.emit(entry)
+            return True
         hit_check = lay["check"].adjusted(-8, -12, 8, 12).contains(pos)
         hit_update = bool(entry.get("download_url")) and lay["update"].contains(pos)
         hit_more = lay["more"].contains(pos)
@@ -378,9 +515,12 @@ class ModDelegate(QStyledItemDelegate):
         if not entry or event.type() != QEvent.Type.ToolTip:
             return super().helpEvent(event, view, option, index)
         pos = event.pos()
-        lay = self._layout(option.rect)
+        meta = meta_at(index)
+        lay = self._layout(option.rect, meta.get("depth", 0) if self.tree else 0)
         tip = None
-        if entry.get("download_url") and lay["update"].contains(pos):
+        if self.tree and meta.get("children") and lay["expander"].contains(pos):
+            tip = f"Зависимости: {len(meta['children'])}"
+        elif entry.get("download_url") and lay["update"].contains(pos):
             verb = "Установить" if not entry.get("filepath") else "Обновить до"
             tip = f"{verb} {entry.get('new_version') or ''}".strip()
         elif lay["more"].contains(pos):
@@ -404,6 +544,8 @@ class ModListView(QListView):
     context_menu_requested = pyqtSignal(object, QPoint)
     toggle_requested = pyqtSignal()
     delete_requested = pyqtSignal()
+    expand_requested = pyqtSignal(bool)   # → раскрыть, ← свернуть (режим дерева)
+    open_requested = pyqtSignal()         # Enter — открыть панель мода
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -431,6 +573,12 @@ class ModListView(QListView):
             return
         if event.key() == Qt.Key.Key_Delete:
             self.delete_requested.emit()
+            return
+        if event.key() in (Qt.Key.Key_Right, Qt.Key.Key_Left):
+            self.expand_requested.emit(event.key() == Qt.Key.Key_Right)
+            return
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.open_requested.emit()
             return
         super().keyPressEvent(event)
 

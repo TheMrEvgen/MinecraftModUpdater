@@ -103,3 +103,57 @@ def test_entry_at_returns_original_dict_through_proxy():
     assert entry is items[1]
     entry["_is_checked"] = True
     assert items[1]["_is_checked"] is True
+
+
+def _tree_data():
+    from enums import ModStatus
+    api = {"name": "Fabric API", "project_id": "api", "filepath": "mods/api.jar", "status": ModStatus.UP_TO_DATE,
+           "type": "required"}
+    api2 = dict(api)
+    missing = {"name": "Cloth", "project_id": "cloth", "filepath": None, "status": ModStatus.REQUIRED, "type": "required"}
+    optional = {"name": "ModMenu", "project_id": "mm", "filepath": None, "status": ModStatus.OPTIONAL, "type": "optional"}
+    a = {"name": "Alpha", "project_id": "a", "filepath": "mods/a.jar", "status": ModStatus.UP_TO_DATE,
+         "dependencies": [api, missing]}
+    b = {"name": "Beta", "project_id": "b", "filepath": "mods/b.jar", "status": ModStatus.UPDATE_AVAILABLE,
+         "dependencies": [api2, optional]}
+    return [a, b]
+
+
+def test_build_rows_modes():
+    from view_model import VIEW_FLAT, VIEW_MINE, VIEW_TREE, build_rows
+    data = _tree_data()
+    flat, counts = build_rows(data, VIEW_FLAT)
+    assert [e["name"] for e, _ in flat] == ["Alpha", "Beta", "Fabric API", "Cloth"]
+    mine, counts = build_rows(data, VIEW_MINE)
+    assert [e["name"] for e, _ in mine] == ["Alpha", "Beta", "Fabric API"] and len(counts) == 3
+    tree, counts = build_rows(data, VIEW_TREE)
+    assert [(e["name"], m["depth"]) for e, m in tree] == [
+        ("Alpha", 0), ("Cloth", 1), ("Fabric API", 1), ("Beta", 0), ("Fabric API", 1), ("ModMenu", 1)]
+    assert tree[2][0] is tree[4][0]  # Общая зависимость — одна запись: отметка и статус общие
+    assert tree[3][1]["children"] == [4, 5] and tree[5][1]["dep_type"] == "optional"
+    assert len(counts) == 4  # Карточки считают моды без повторов, как в плоском списке
+
+
+def test_proxy_tree_expand_and_filter():
+    from ui.mod_list import ModFilterProxy, ModListModel, entry_at
+    from view_model import CAT_UPDATES, VIEW_TREE, build_rows
+    model, proxy = ModListModel(), ModFilterProxy()
+    model.set_rows(build_rows(_tree_data(), VIEW_TREE)[0])
+    proxy.setSourceModel(model)
+    proxy.set_sort_mode(ModFilterProxy.SORT_NAME)
+
+    def names():
+        return [entry_at(proxy.index(r, 0))["name"] for r in range(proxy.rowCount())]
+
+    assert names() == ["Alpha", "Beta"]
+    proxy.set_expanded(model.entry(3), True)
+    proxy.sort(0)
+    assert names() == ["Alpha", "Beta", "Fabric API", "ModMenu"]
+    proxy.set_expand_all(True)
+    proxy.sort(0)
+    assert names() == ["Alpha", "Cloth", "Fabric API", "Beta", "Fabric API", "ModMenu"]
+    proxy.set_expand_all(False)
+    proxy.set_filter(query="cloth")
+    assert names() == ["Alpha", "Cloth"]  # Найденная зависимость видна вместе со своим модом
+    proxy.set_filter(category=CAT_UPDATES, query="")
+    assert names() == ["Beta"]

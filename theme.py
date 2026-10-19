@@ -138,10 +138,13 @@ QComboBox QAbstractItemView {{ background: {t['surface2']}; border: 1px solid {t
 QCheckBox {{ spacing: 8px; }}
 QCheckBox::indicator, QRadioButton::indicator {{ width: 16px; height: 16px; border-radius: 5px;
     border: 1.5px solid {t['border_strong']}; background: {t['surface']}; }}
+QRadioButton {{ spacing: 8px; }}
 QRadioButton::indicator {{ border-radius: 9px; }}
 QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {t['accent']}; }}
 QCheckBox::indicator:checked {{ background: {t['accent']}; border-color: {t['accent']}; {check_image} }}
-QRadioButton::indicator:checked {{ background: {t['accent']}; border: 4px solid {t['surface']}; outline: none; }}
+QRadioButton::indicator:checked {{ border-color: {t['accent']};
+    background: qradialgradient(cx: 0.5, cy: 0.5, radius: 0.5, fx: 0.5, fy: 0.5, stop: 0 {t['accent']},
+                                stop: 0.5 {t['accent']}, stop: 0.62 {t['surface']}, stop: 1 {t['surface']}); }}
 QCheckBox::indicator:indeterminate {{ background: {rgba(t['accent'], 0.5)}; border-color: {t['accent']}; }}
 
 /* --- Меню --- */
@@ -156,6 +159,11 @@ QMenu::icon {{ padding-left: 8px; }}
 #ModList {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 12px; }}
 #ListHeader {{ color: {t['text_muted']}; }}
 #DetailsPanel {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 12px; }}
+QListWidget {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 10px;
+                          color: {t['text']}; }}
+QListWidget::item:selected {{ background: {rgba(t['accent'], 0.14)}; color: {t['text']}; }}
+QListWidget::item:hover {{ background: {t['surface2']}; }}
+#VersionList {{ background: {t['bg']}; padding: 4px; }}
 #DetailsTitle {{ font-size: 14pt; font-weight: 700; }}
 #Card {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 12px; }}
 #Divider {{ background: {t['border']}; max-height: 1px; min-height: 1px; }}
