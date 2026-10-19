@@ -1,14 +1,18 @@
 # mod_updater_logic.py
+"""Сетевые запросы к Modrinth и API загрузчиков, скачивание файлов."""
+import datetime
 import hashlib
+import json
 import logging
 import os
-import requests
-import shutil
-import json
 import time
-import xml.etree.ElementTree as ET # type: ignore
-from typing import List, Dict, Optional
-from packaging.version import parse as parse_version
+import xml.etree.ElementTree as ET  # type: ignore
+from typing import Callable, Dict, Iterable, List, Optional
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from packaging.version import InvalidVersion, parse as parse_version
 
 # Константы для API Modrinth
 MODRINTH_API_BASE = "https://api.modrinth.com/v2"
@@ -17,361 +21,423 @@ HEADERS = {
     "User-Agent": "TheMrEvgen/MinecraftModUpdater (https://github.com/TheMrEvgen)"
 }
 
-# Создаем сессию для переиспользования TCP-соединений и улучшения стабильности
-SESSION = requests.Session()
-SESSION.headers.update(HEADERS)
+DEFAULT_TIMEOUT = 15
+DOWNLOAD_CHUNK_SIZE = 128 * 1024
+# Размеры пакетов: POST-запросы принимают большие списки, GET ограничен длиной URL
+HASH_CHUNK_SIZE = 500
+IDS_CHUNK_SIZE = 100
 
-# Простой кэш в памяти для хранения результатов API-запросов на время сессии
-# Ключ - строка запроса, значение - результат.
-SESSION_CACHE = {}
 
-def with_retries(retries: int = 3, delay: int = 2, backoff: int = 2):
+def _create_session() -> requests.Session:
     """
-    Декоратор для повторных попыток выполнения сетевых запросов с экспоненциальной задержкой.
-    В случае окончательной неудачи, пробрасывает исключение.
+    Сессия с повторными попытками на уровне транспорта: повторяются только временные ошибки
+    (429 и 5xx, обрывы соединения). Ошибки клиента (400, 404) не повторяются — это бессмысленно.
+    Retry учитывает заголовок Retry-After, который Modrinth присылает при превышении лимита.
     """
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            last_exception = None
-            for attempt in range(retries):
-                try:
-                    return func(*args, **kwargs)
-                except requests.RequestException as e:
-                    last_exception = e
-                    current_delay = delay * (backoff ** attempt)
-                    func_name = getattr(func, '__name__', 'decorated_function')
-                    logging.warning(f"Сетевая ошибка в {func_name} (попытка {attempt + 1}/{retries}): {e}. Повтор через {current_delay} сек...")
-                    time.sleep(current_delay)
-            
-            logging.error(f"Функция {func.__name__} окончательно провалилась после {retries} попыток.")
-            raise last_exception # type: ignore
-        return wrapper
-    return decorator
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=2,
+        backoff_factor=1,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET", "POST"]),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
-def get_file_hash(filepath: str, hash_algo="sha1") -> str:
-    """Вычисляет хэш-сумму файла (SHA1 по умолчанию)."""
-    h = hashlib.new(hash_algo)
-    with open(filepath, "rb") as f:
-        while chunk := f.read(8192):
-            h.update(chunk)
-    return h.hexdigest()
 
-def get_mods_info_from_hashes(hashes: List[str]) -> Dict:
-    """Получает информацию о модах от API Modrinth по списку SHA1 хэшей, разбивая на чанки."""
-    if not hashes:
-        return {}
+# Сессия переиспользует TCP-соединения между запросами
+SESSION = _create_session()
 
-    all_data: Dict[str, Dict] = {}
-    CHUNK_SIZE = 100  # Безопасный размер чанка для API Modrinth
+# Простой кэш в памяти для результатов, которые не меняются в течение сессии
+SESSION_CACHE: Dict[str, object] = {}
 
-    logging.info(f"Запрос информации для {len(hashes)} хэшей (будет разделен на чанки по {CHUNK_SIZE}).")
 
-    for i in range(0, len(hashes), CHUNK_SIZE):
-        if not hashes[i:i + CHUNK_SIZE]: continue # Пропускаем пустые чанки
-        chunk = hashes[i:i + CHUNK_SIZE]
-        url = f"{MODRINTH_API_BASE}/version_files"
-        params = {"hashes": chunk, "algorithm": "sha1"}
-        
-        # Ручная реализация логики повторных попыток для чанков
-        for attempt in range(3):
-            try:
-                logging.debug(f"Запрос информации для чанка из {len(chunk)} хэшей (попытка {attempt + 1}).")
-                response = SESSION.post(url, json=params, timeout=15)
-                response.raise_for_status()
-                data = response.json()
-                all_data.update(data)
-                logging.debug(f"Ответ для чанка получен, количество записей: {len(data)}.")
-                if len(hashes) > CHUNK_SIZE: time.sleep(0.2)
-                break # Успех, выходим из цикла попыток
-            except requests.RequestException as e:
-                logging.warning(f"Ошибка при запросе к API Modrinth по хэшам (чанк {i//CHUNK_SIZE + 1}, попытка {attempt + 1}): {e}")
-                if attempt < 2:
-                    time.sleep(2 * (2 ** attempt))
-                else:
-                    logging.error(f"Окончательная ошибка для чанка {i//CHUNK_SIZE + 1} после 3 попыток.")
-            except json.JSONDecodeError as e:
-                logging.error(f"Ошибка декодирования JSON ответа для чанка {i//CHUNK_SIZE + 1}: {e}")
-                break # Нет смысла повторять, если JSON невалидный
+class DownloadError(Exception):
+    """Не удалось скачать файл."""
 
-    logging.info(f"Суммарно получена информация для {len(all_data)} из {len(hashes)} запрошенных хэшей.")
-    return all_data
 
-@with_retries()
-def get_latest_version(project_id: str, game_version: str, loader: str, target_version: Optional[str] = None) -> Optional[Dict]:
-    """Находит версию мода (точную или последнюю) для указанной версии игры и загрузчика."""
-    url = f"{MODRINTH_API_BASE}/project/{project_id}/version"
-    params = {"loaders": json.dumps([loader]), "game_versions": json.dumps([game_version])}
-    logging.debug(f"Поиск версии (target={target_version}) для project_id={project_id} с параметрами: game_version={game_version}, loader={loader}")
-    
-    response = SESSION.get(url, params=params, timeout=15)
-    response.raise_for_status()
-    versions = response.json()
-    
-    if versions:
-        if target_version:
-            for v in versions:
-                if v['version_number'] == target_version:
-                    logging.debug(f"Найдена запрошенная точная версия: {target_version}")
-                    return v
-            logging.warning(f"Точная версия {target_version} для {project_id} не найдена. Откат к последней доступной.")
-        # API возвращает версии, отсортированные по дате, первая - самая новая
-        logging.debug(f"Найдено {len(versions)} версий для проекта {project_id}. Выбираем самую новую: {versions[0]['version_number']}")
-        return versions[0]
-    
-    logging.info(f"Для проекта {project_id} не найдено версий, совместимых с {game_version} и {loader}.")
-    return None
+class HashMismatchError(DownloadError):
+    """Хэш скачанного файла не совпал с ожидаемым."""
 
-@with_retries()
-def get_all_versions(project_id: str, game_version: str, loader: str) -> List[Dict]:
-    """Получает список всех версий мода для указанной версии игры и загрузчика."""
-    url = f"{MODRINTH_API_BASE}/project/{project_id}/version"
-    params = {"loaders": json.dumps([loader]), "game_versions": json.dumps([game_version])}
-    logging.debug(f"Поиск всех версий для project_id={project_id} с параметрами: game_version={game_version}, loader={loader}")
-    response = SESSION.get(url, params=params, timeout=15)
+
+class DownloadCancelled(DownloadError):
+    """Скачивание прервано пользователем."""
+
+
+def _chunks(items: List, size: int) -> Iterable[List]:
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
+def _get_json(url: str, params=None, timeout: int = DEFAULT_TIMEOUT):
+    response = SESSION.get(url, params=params, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
-@with_retries()
-def get_projects_info_from_ids(ids: List[str]) -> Dict[str, Dict]:
-    """Получает информацию о нескольких проектах по их ID."""
+
+def _post_json(url: str, payload, timeout: int = DEFAULT_TIMEOUT):
+    response = SESSION.post(url, json=payload, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+# --- Утилиты ---
+
+def get_file_hash(filepath: str, hash_algo: str = "sha1") -> str:
+    """Вычисляет хэш-сумму файла (SHA1 по умолчанию)."""
+    h = hashlib.new(hash_algo)
+    with open(filepath, "rb") as f:
+        while chunk := f.read(1024 * 1024):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def safe_filename(filename: str) -> str:
+    """
+    Защита от обхода путей: имя файла из API не должно содержать каталогов.
+    Возвращает только базовое имя или выбрасывает ValueError.
+    """
+    name = os.path.basename((filename or "").replace("\\", "/"))
+    if not name or name in (".", "..") or name.startswith("."):
+        raise ValueError(f"Недопустимое имя файла: {filename!r}")
+    return name
+
+
+def select_primary_file(version_info: Optional[Dict]) -> Optional[Dict]:
+    """Возвращает основной файл версии; если флаг primary нигде не стоит — первый файл."""
+    if not version_info:
+        return None
+    files = version_info.get('files') or []
+    return next((f for f in files if f.get('primary')), files[0] if files else None)
+
+
+def format_date(date_str: Optional[str]) -> str:
+    """ISO-дата Modrinth -> 'YYYY-MM-DD'."""
+    if not date_str:
+        return ""
+    try:
+        return datetime.datetime.fromisoformat(date_str.replace('Z', '+00:00')).strftime('%Y-%m-%d')
+    except ValueError:
+        return date_str.split('T')[0]
+
+
+def _parse_date(date_str: Optional[str]) -> Optional[datetime.datetime]:
+    if not date_str:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def is_newer_version(candidate: Optional[Dict], current: Optional[Dict]) -> bool:
+    """
+    True, если candidate — действительно более новая версия, чем current.
+    Сравнение по id и дате публикации: простое сравнение номеров версий (!=) предлагало
+    «обновление» на более старый релиз, если у пользователя стояла свежая бета.
+    """
+    if not candidate:
+        return False
+    if not current:
+        return True
+    if candidate.get('id') and candidate.get('id') == current.get('id'):
+        return False
+    if candidate.get('version_number') == current.get('version_number'):
+        return False
+    candidate_date = _parse_date(candidate.get('date_published'))
+    current_date = _parse_date(current.get('date_published'))
+    if candidate_date and current_date:
+        return candidate_date > current_date
+    return True
+
+
+# --- Modrinth API ---
+
+def get_mods_info_from_hashes(hashes: List[str]) -> Dict[str, Dict]:
+    """Информация об установленных версиях по SHA1 хэшам (POST /version_files)."""
+    if not hashes:
+        return {}
+    all_data: Dict[str, Dict] = {}
+    url = f"{MODRINTH_API_BASE}/version_files"
+    for chunk in _chunks(hashes, HASH_CHUNK_SIZE):
+        try:
+            all_data.update(_post_json(url, {"hashes": chunk, "algorithm": "sha1"}))
+        except (requests.RequestException, json.JSONDecodeError) as e:
+            logging.error(f"Ошибка при запросе к API Modrinth по хэшам: {e}")
+    logging.info(f"Получена информация для {len(all_data)} из {len(hashes)} запрошенных хэшей.")
+    return all_data
+
+
+def get_latest_versions_from_hashes(hashes: List[str], game_version: str, loader: str,
+                                    version_types: Optional[List[str]] = None) -> Dict[str, Dict]:
+    """
+    Последние совместимые версии сразу для всех установленных файлов (POST /version_files/update).
+    Один запрос вместо отдельного запроса на каждый мод.
+    """
+    if not hashes:
+        return {}
+    url = f"{MODRINTH_API_BASE}/version_files/update"
+    result: Dict[str, Dict] = {}
+    for chunk in _chunks(hashes, HASH_CHUNK_SIZE):
+        payload = {"hashes": chunk, "algorithm": "sha1", "loaders": [loader], "game_versions": [game_version]}
+        if version_types:
+            payload["version_types"] = version_types
+        result.update(_post_json(url, payload, timeout=30))
+    logging.info(f"Получены последние версии для {len(result)} из {len(hashes)} файлов.")
+    return result
+
+
+def get_versions_by_ids(version_ids: List[str]) -> Dict[str, Dict]:
+    """Информация о нескольких версиях по их ID (GET /versions)."""
+    result: Dict[str, Dict] = {}
+    for chunk in _chunks(list(version_ids), IDS_CHUNK_SIZE):
+        for v in _get_json(f"{MODRINTH_API_BASE}/versions", params={"ids": json.dumps(chunk)}):
+            result[v['id']] = v
+    return result
+
+
+def get_all_versions(project_id: str, game_version: str, loader: str) -> List[Dict]:
+    """Список всех версий мода для указанной версии игры и загрузчика (новые первыми)."""
+    url = f"{MODRINTH_API_BASE}/project/{project_id}/version"
+    params = {"loaders": json.dumps([loader]), "game_versions": json.dumps([game_version])}
+    logging.debug(f"Поиск версий для project_id={project_id}: game_version={game_version}, loader={loader}")
+    return _get_json(url, params=params)
+
+
+def get_latest_version(project_id: str, game_version: str, loader: str, target_version: Optional[str] = None,
+                       version_types: Optional[List[str]] = None) -> Optional[Dict]:
+    """Находит версию мода (точную или последнюю в выбранном канале) для версии игры и загрузчика."""
+    versions = get_all_versions(project_id, game_version, loader)
+    if not versions:
+        logging.info(f"Для проекта {project_id} не найдено версий, совместимых с {game_version} и {loader}.")
+        return None
+
+    if target_version:
+        for v in versions:
+            if v['version_number'] == target_version:
+                return v
+        logging.warning(f"Точная версия {target_version} для {project_id} не найдена. Откат к последней доступной.")
+
+    if version_types:
+        filtered = [v for v in versions if v.get('version_type', 'release') in version_types]
+        if not filtered:
+            logging.info(f"Для проекта {project_id} нет версий в канале {version_types}.")
+            return None
+        versions = filtered
+    # API возвращает версии, отсортированные по дате, первая - самая новая
+    return versions[0]
+
+
+def get_projects_info_from_ids(ids: Iterable[str]) -> Dict[str, Dict]:
+    """Информация о нескольких проектах по их ID (название, иконка, client_side/server_side)."""
+    ids = list(dict.fromkeys(i for i in ids if i))
     if not ids:
         return {}
-    
-    url = f"{MODRINTH_API_BASE}/projects"
-    params = {"ids": json.dumps(ids)}
-    
-    logging.info(f"Запрос информации для {len(ids)} проектов.")
-    response = SESSION.get(url, params=params, timeout=15)
-    response.raise_for_status()
-    projects = response.json()
-    projects_dict = {p['id']: p for p in projects}
+    projects_dict: Dict[str, Dict] = {}
+    for chunk in _chunks(ids, IDS_CHUNK_SIZE):
+        for p in _get_json(f"{MODRINTH_API_BASE}/projects", params={"ids": json.dumps(chunk)}):
+            projects_dict[p['id']] = p
     logging.debug(f"Получена информация о {len(projects_dict)} проектах.")
     return projects_dict
 
+
+# --- Версии загрузчиков ---
+
+def _find_best_game_version(all_game_versions: List[Dict], game_version: str) -> Optional[str]:
+    """Самая новая версия игры из API, не превосходящая версию пользователя (учитывает pre-release)."""
+    user_v = parse_version(game_version)
+    best_match = None
+    for v_info in all_game_versions:
+        api_v_str = v_info.get('version')
+        if not api_v_str:
+            continue
+        try:
+            api_v = parse_version(api_v_str)
+        except InvalidVersion:
+            continue  # Снапшоты вида 24w14a не являются валидными версиями
+        if api_v.release <= user_v.release and (best_match is None or api_v > best_match):
+            best_match = api_v
+    return str(best_match) if best_match else None
+
+
+def _get_meta_loader_version(meta_base: str, game_version: str) -> Optional[str]:
+    """Общая логика для Fabric и Quilt: у них одинаковая структура meta API."""
+    best_match = _find_best_game_version(_get_json(f"{meta_base}/versions/game", timeout=10), game_version)
+    if not best_match:
+        logging.warning(f"Не удалось найти совместимую версию игры в {meta_base} для {game_version}")
+        return None
+    if best_match != game_version:
+        logging.info(f"Для {game_version} используется версия {best_match} для поиска загрузчика.")
+
+    data = _get_json(f"{meta_base}/versions/loader/{best_match}", timeout=10)
+
+    def is_stable(loader_info: Dict) -> bool:
+        # У Fabric есть флаг stable, у Quilt его нет — тогда определяем по номеру версии (beta/rc)
+        if 'stable' in loader_info:
+            return bool(loader_info['stable'])
+        try:
+            return not parse_version(loader_info['version']).is_prerelease
+        except InvalidVersion:
+            return False
+
+    stable = next((v['loader']['version'] for v in data if is_stable(v['loader'])), None)
+    return stable or (data[0]['loader']['version'] if data else None)
+
+
+def neoforge_version_prefix(game_version: str) -> Optional[str]:
+    """
+    Префикс версии NeoForge для версии игры: 1.20.4 -> '20.4.', 1.21 -> '21.0.'.
+    Завершающая точка обязательна: иначе '21.1' совпадает с '21.10.x' и '21.11.x'.
+    """
+    parts = game_version.split('.')
+    if len(parts) < 2 or not all(p.isdigit() for p in parts[1:3]):
+        return None
+    mc_major = parts[1]
+    mc_minor = parts[2] if len(parts) > 2 else "0"
+    return f"{mc_major}.{mc_minor}."
+
+
+def pick_neoforge_version(all_versions: List[str], game_version: str) -> Optional[str]:
+    """Выбирает последнюю стабильную (или любую последнюю) версию NeoForge для версии игры."""
+    prefix = neoforge_version_prefix(game_version)
+    if not prefix:
+        logging.warning(f"Некорректная версия игры для NeoForge: {game_version}")
+        return None
+
+    candidates = []
+    for v_str in all_versions:
+        if v_str and v_str.startswith(prefix):
+            try:
+                candidates.append((parse_version(v_str), v_str))
+            except InvalidVersion:
+                continue
+    if not candidates:
+        logging.warning(f"Не найдено подходящих версий NeoForge для префикса {prefix}")
+        return None
+    candidates.sort(reverse=True)
+    stable = next((s for v, s in candidates if not v.is_prerelease), None)
+    return stable or candidates[0][1]
+
+
 def get_latest_loader_version(loader: str, game_version: str) -> Optional[str]:
-    """Fetches the latest stable loader version for a given game version."""
+    """Последняя стабильная версия загрузчика для версии игры."""
     cache_key = f"loader_version:{loader}:{game_version}"
     if cache_key in SESSION_CACHE:
-        logging.debug(f"Используем кэшированную версию загрузчика для {loader} {game_version}.")
-        return SESSION_CACHE[cache_key]
+        return SESSION_CACHE[cache_key]  # type: ignore
 
     logging.info(f"Запрос последней версии загрузчика: {loader} для Minecraft {game_version}")
     result = None
-    
     try:
         if loader == "fabric":
-            # Find the best matching game version from the API to get a compatible loader
-            game_versions_url = "https://meta.fabricmc.net/v2/versions/game" # No retry for this, it's a static list
-            response = SESSION.get(game_versions_url, timeout=10)
-            response.raise_for_status()
-            all_game_versions = response.json()
-
-            user_v = parse_version(game_version)
-            best_match_v = None
-
-            # Find the latest game version in the API that is less than or equal to the user's version
-            for v_info in all_game_versions:
-                api_v_str = v_info.get('version')
-                if not api_v_str: continue
-
-                try:
-                    api_v = parse_version(api_v_str)
-                    if api_v.release <= user_v.release: # Compare releases to handle versions like 1.19.4 and 1.19.4-pre1
-                        if best_match_v is None or api_v > best_match_v:
-                            best_match_v = api_v
-                except Exception:
-                    continue # Ignore invalid version strings from API
-
-            if not best_match_v:
-                logging.warning(f"Не удалось найти совместимую версию игры в Fabric API для {game_version}")
-                return None
-
-            best_match_v_str = str(best_match_v)
-            if best_match_v_str != game_version:
-                logging.info(f"Для {game_version} используется API-ендпоинт версии {best_match_v_str} для поиска загрузчика.")
-
-            url = f"https://meta.fabricmc.net/v2/versions/loader/{best_match_v_str}" # No retry for this either
-            response = SESSION.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            # Find the first stable version
-            for v in data:
-                if v['loader']['stable']:                    
-                    result = v['loader']['version']
-                    break
-            if not result and data: result = data[0]['loader']['version'] # Fallback to latest if no stable
-
+            result = _get_meta_loader_version("https://meta.fabricmc.net/v2", game_version)
         elif loader == "quilt":
-            # Quilt has a similar structure
-            game_versions_url = "https://meta.quiltmc.org/v3/versions/game" # No retry
-            response = SESSION.get(game_versions_url, timeout=10)
-            response.raise_for_status()
-            all_game_versions = response.json()
-
-            user_v = parse_version(game_version)
-            best_match_v = None
-
-            for v_info in all_game_versions:
-                api_v_str = v_info.get('version')
-                if not api_v_str: continue
-
-                try:
-                    api_v = parse_version(api_v_str)
-                    if api_v.release <= user_v.release:
-                        if best_match_v is None or api_v > best_match_v:
-                            best_match_v = api_v
-                except Exception:
-                    continue
-
-            if not best_match_v:
-                logging.warning(f"Не удалось найти совместимую версию игры в Quilt API для {game_version}")
-                return None
-
-            best_match_v_str = str(best_match_v)
-            if best_match_v_str != game_version:
-                logging.info(f"Для {game_version} используется API-ендпоинт версии {best_match_v_str} для поиска загрузчика.")
-
-            url = f"https://meta.quiltmc.org/v3/versions/loader/{best_match_v_str}" # No retry
-            response = SESSION.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            for v in data:
-                if v['loader']['stable']:                    
-                    result = v['loader']['version']
-                    break
-            if not result and data: result = data[0]['loader']['version']
-
+            result = _get_meta_loader_version("https://meta.quiltmc.org/v3", game_version)
         elif loader == "forge":
-            url = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json" # No retry
-            response = SESSION.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            promo_key = f"{game_version}-latest"
-            result = data.get("promos", {}).get(promo_key)
-
+            data = _get_json("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json", timeout=10)
+            result = data.get("promos", {}).get(f"{game_version}-latest")
         elif loader == "neoforge":
-            # NeoForge does not have a promotions_slim.json. We must parse the maven metadata.
-            try:
-                url = "https://maven.neoforged.net/net/neoforged/neoforge/maven-metadata.xml" # No retry
-                response = SESSION.get(url, timeout=10)
-                response.raise_for_status()
-                
-                root = ET.fromstring(response.content)
-                all_versions_str = [v.text for v in root.findall('.//version')]
-
-                # Determine the prefix for the NeoForge version based on the game version
-                # e.g., 1.20.4 -> "20.4", 1.21 -> "21.0"
-                parts = game_version.split('.')
-                if len(parts) < 2:
-                    logging.warning(f"Некорректная версия игры для NeoForge: {game_version}")
-                    result = None
-                
-                mc_major = parts[1]
-                mc_minor = parts[2] if len(parts) > 2 else "0"
-                neoforge_prefix = f"{mc_major}.{mc_minor}"
-
-                logging.debug(f"Ищем версии NeoForge с префиксом '{neoforge_prefix}' для Minecraft {game_version}")
-
-                candidate_versions = []
-                for v_str in all_versions_str:
-                    if v_str and v_str.startswith(neoforge_prefix):
-                        try:
-                            candidate_versions.append(parse_version(v_str))
-                        except Exception:
-                            continue # Ignore invalid version strings
-                
-                if not candidate_versions:
-                    logging.warning(f"Не найдено подходящих версий NeoForge для префикса {neoforge_prefix}")
-                    result = None
-
-                else:
-                    candidate_versions.sort(reverse=True)
-
-                    latest_stable = next((v for v in candidate_versions if not v.is_prerelease), None)
-                    
-                    if latest_stable:
-                        result = str(latest_stable)
-                    else:
-                        result = str(candidate_versions[0])
-            except (requests.RequestException, ET.ParseError) as e:
-                logging.error(f"Ошибка при получении или парсинге метаданных NeoForge: {e}")
-                result = None
-
-    except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
+            # У NeoForge нет promotions_slim.json, разбираем maven-metadata
+            response = SESSION.get("https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml", timeout=10)
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+            result = pick_neoforge_version([v.text for v in root.findall('.//version') if v.text], game_version)
+    except requests.RequestException as e:
         logging.error(f"Сетевая ошибка при получении версии загрузчика {loader}: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            logging.error(f"  Ответ сервера ({e.response.status_code}): {e.response.text}")
-        result = None
-    except (json.JSONDecodeError, KeyError) as e:
-        logging.error(f"Ошибка парсинга ответа для загрузчика {loader}: {e}")
-        result = None
+    except (json.JSONDecodeError, KeyError, ET.ParseError, InvalidVersion) as e:
+        logging.error(f"Ошибка разбора ответа для загрузчика {loader}: {e}")
 
     SESSION_CACHE[cache_key] = result
-    if not result: logging.warning(f"Не удалось найти последнюю версию для загрузчика {loader}.")
+    if not result:
+        logging.warning(f"Не удалось найти последнюю версию для загрузчика {loader}.")
     return result
 
-def download_mod(url: str, folder: str, filename: str, retries: int = 5, delay: int = 3, mod_name: str = "unknown", progress_callback=None) -> bool:
-    """Скачивает файл по URL, с возможностью повторных попыток при ошибке."""
-    filepath = os.path.join(folder, filename)
+
+# --- Скачивание ---
+
+def verify_file_hashes(filepath: str, expected_hashes: Optional[Dict[str, str]]) -> bool:
+    """Проверяет файл по самому надёжному из доступных хэшей (sha512, затем sha1)."""
+    if not expected_hashes:
+        return True
+    for algo in ("sha512", "sha1"):
+        expected = expected_hashes.get(algo)
+        if expected:
+            return get_file_hash(filepath, algo) == expected.lower()
+    return True
+
+
+def download_file(url: str, dest_path: str, expected_hashes: Optional[Dict[str, str]] = None,
+                  progress_callback: Optional[Callable[[int, int], None]] = None,
+                  is_cancelled: Optional[Callable[[], bool]] = None,
+                  retries: int = 3, delay: int = 2) -> None:
+    """
+    Скачивает файл в dest_path с проверкой хэша. При ошибке выбрасывает DownloadError,
+    HashMismatchError или DownloadCancelled; частично скачанный файл удаляется.
+    """
+    filename = os.path.basename(dest_path)
+    last_error: Optional[Exception] = None
 
     for attempt in range(retries):
         try:
-            logging.info(f"Попытка скачивания {filename} (попытка {attempt + 1}/{retries})...")
-            logging.debug(f"URL для скачивания: {url}")
-            # Устанавливаем таймаут, чтобы не ждать вечно при зависании сети
+            logging.info(f"Скачивание {filename} (попытка {attempt + 1}/{retries})...")
             with SESSION.get(url, stream=True, timeout=60) as r:
                 r.raise_for_status()
                 total_size = int(r.headers.get('content-length', 0))
                 downloaded_size = 0
-                logging.info(f"Успешное соединение для скачивания {filename} (код ответа: {r.status_code}, размер: {total_size} байт).")
-
-                with open(filepath, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk: # filter out keep-alive new chunks
+                with open(dest_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                        if is_cancelled and is_cancelled():
+                            raise DownloadCancelled(filename)
+                        if chunk:
                             f.write(chunk)
                             downloaded_size += len(chunk)
                             if progress_callback and total_size > 0:
                                 progress_callback(downloaded_size, total_size)
-            
-            # Проверяем, что скачанный файл не пустой
-            if os.path.getsize(filepath) > 0:
-                logging.info(f"Файл {filename} успешно скачан (размер: {os.path.getsize(filepath)} байт).")
-                return True  # Успех
-            else:
-                logging.warning(f"Скачанный файл {filename} пуст (0 байт). Считаем это ошибкой.")
-                # Искусственно вызываем ошибку, чтобы попасть в блок except для очистки и повтора
-                raise IOError("Downloaded file is empty")
 
-        except (requests.RequestException, IOError, OSError) as e:
-            logging.warning(f"Ошибка скачивания или записи файла {filename} на попытке {attempt + 1}: {e}")
-            if os.path.exists(filepath):
-                try:
-                    os.remove(filepath) # Удаляем частично скачанный файл
-                except OSError as remove_error:
-                    logging.error(f"Не удалось удалить частично скачанный файл {filepath}: {remove_error}")
+            if os.path.getsize(dest_path) == 0:
+                raise DownloadError("Скачанный файл пуст")
+            if not verify_file_hashes(dest_path, expected_hashes):
+                raise HashMismatchError(f"Хэш файла {filename} не совпадает с ожидаемым")
+            logging.info(f"Файл {filename} успешно скачан и проверен ({downloaded_size} байт).")
+            return
 
+        except DownloadCancelled:
+            _remove_quietly(dest_path)
+            raise
+        except (requests.RequestException, OSError, DownloadError) as e:
+            last_error = e
+            logging.warning(f"Ошибка скачивания {filename} на попытке {attempt + 1}: {e}")
+            _remove_quietly(dest_path)
             if attempt < retries - 1:
-                # Экспоненциальная задержка (3s, 6s, 12s, 24s), чтобы быть "вежливее" к серверу
-                current_delay = delay * (2 ** attempt)
-                logging.info(f"Ожидание {current_delay} секунд перед следующей попыткой...")
-                time.sleep(current_delay)
+                time.sleep(delay * (2 ** attempt))
 
     logging.error(f"Не удалось скачать {filename} после {retries} попыток.")
-    return False
+    if isinstance(last_error, HashMismatchError):
+        raise last_error
+    raise DownloadError(str(last_error))
 
-def backup_and_remove_mod(mod_path: str):
-    """Создает бэкап старого файла мода и удаляет его."""
-    # Главная папка для бэкапов внутри папки mods
-    main_backup_dir = os.path.join(os.path.dirname(mod_path), "ModUpdater_Backups")
-    # Подпапка для одиночных файлов
-    file_backup_dir = os.path.join(main_backup_dir, "file_backups")
 
-    os.makedirs(file_backup_dir, exist_ok=True)
+def download_bytes(url: str, timeout: int = 15, max_size: int = 2 * 1024 * 1024) -> bytes:
+    """Скачивает небольшой файл (например, иконку) в память с ограничением размера."""
+    with SESSION.get(url, stream=True, timeout=timeout) as r:
+        r.raise_for_status()
+        data = bytearray()
+        for chunk in r.iter_content(chunk_size=64 * 1024):
+            data.extend(chunk)
+            if len(data) > max_size:
+                raise DownloadError("Файл слишком большой")
+        return bytes(data)
 
-    backup_path = os.path.join(file_backup_dir, os.path.basename(mod_path))
-    # Если бэкап уже существует, удаляем его, чтобы создать новый
-    if os.path.exists(backup_path):
-        os.remove(backup_path)
 
-    shutil.move(mod_path, backup_path)
-    logging.info(f"Старый файл {os.path.basename(mod_path)} перемещен в бэкап: {file_backup_dir}")
+def _remove_quietly(path: str) -> None:
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError as e:
+        logging.error(f"Не удалось удалить файл {path}: {e}")

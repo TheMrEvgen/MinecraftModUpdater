@@ -1,0 +1,312 @@
+"""
+Установка модов, резервные копии и откат (без зависимостей от Qt).
+
+Каждая операция, меняющая папку mods (обновление, установка, удаление, «заменить все»), выполняется
+в рамках UpdateTransaction: заменяемые файлы переносятся в отдельную папку бэкапа с журналом
+manifest.json. По журналу последнюю операцию можно полностью откатить.
+"""
+import datetime
+import json
+import logging
+import os
+import shutil
+import sys
+import threading
+from typing import Callable, Dict, Iterable, List, Optional
+
+from enums import ModStatus
+from mod_updater_logic import (
+    DownloadCancelled, DownloadError, HashMismatchError, download_file, safe_filename,
+)
+
+BACKUP_DIR_NAME = "ModUpdater_Backups"
+TRANSACTIONS_DIR_NAME = "transactions"
+MANIFEST_NAME = "manifest.json"
+
+KIND_LABELS = {
+    "update": "обновление/установка",
+    "delete": "удаление",
+    "replace_all": "замена сборки",
+}
+
+
+def backup_root(mods_path: str) -> str:
+    return os.path.join(mods_path, BACKUP_DIR_NAME)
+
+
+def transactions_root(mods_path: str) -> str:
+    return os.path.join(backup_root(mods_path), TRANSACTIONS_DIR_NAME)
+
+
+class UpdateTransaction:
+    """Журнал одной операции над папкой mods. Потокобезопасен (обновления идут параллельно)."""
+
+    def __init__(self, mods_path: str, kind: str = "update"):
+        self.mods_path = mods_path
+        self.kind = kind
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+        self.dir = os.path.join(transactions_root(mods_path), timestamp)
+        self.manifest = {"created": datetime.datetime.now().isoformat(timespec="seconds"), "kind": kind,
+                         "installed": [], "backed_up": [], "rolled_back": False}
+        self._lock = threading.Lock()
+        self._dir_created = False
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.manifest["installed"] and not self.manifest["backed_up"]
+
+    def _ensure_dir(self):
+        if not self._dir_created:
+            os.makedirs(self.dir, exist_ok=True)
+            self._dir_created = True
+
+    def backup_file(self, path: str) -> str:
+        """Переносит файл или папку из mods в бэкап транзакции. Возвращает путь копии."""
+        with self._lock:
+            self._ensure_dir()
+            name = os.path.basename(path)
+            backup_name = name
+            counter = 1
+            while os.path.exists(os.path.join(self.dir, backup_name)):
+                backup_name = f"{counter}_{name}"
+                counter += 1
+            backup_path = os.path.join(self.dir, backup_name)
+            shutil.move(path, backup_path)
+            self.manifest["backed_up"].append({"name": name, "backup": backup_name})
+            self._save_locked()
+        logging.info(f"Файл {name} перемещен в бэкап: {self.dir}")
+        return backup_path
+
+    def restore_file(self, backup_path: str, original_path: str):
+        """Возвращает файл из бэкапа (используется при сбое установки одного мода)."""
+        with self._lock:
+            shutil.move(backup_path, original_path)
+            backup_name = os.path.basename(backup_path)
+            self.manifest["backed_up"] = [e for e in self.manifest["backed_up"] if e["backup"] != backup_name]
+            self._save_locked()
+
+    def record_installed(self, filename: str):
+        with self._lock:
+            self._ensure_dir()
+            self.manifest["installed"].append(filename)
+            self._save_locked()
+
+    def _save_locked(self):
+        tmp_path = os.path.join(self.dir, MANIFEST_NAME + ".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(self.manifest, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, os.path.join(self.dir, MANIFEST_NAME))
+
+
+# --- Откат ---
+
+def list_transactions(mods_path: str) -> List[Dict]:
+    """Список операций (новые первыми), которые ещё можно откатить."""
+    root = transactions_root(mods_path)
+    if not os.path.isdir(root):
+        return []
+    result = []
+    for name in sorted(os.listdir(root), reverse=True):
+        manifest_path = os.path.join(root, name, MANIFEST_NAME)
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if manifest.get("rolled_back") or not (manifest.get("installed") or manifest.get("backed_up")):
+            continue
+        manifest["dir"] = os.path.join(root, name)
+        result.append(manifest)
+    return result
+
+
+def get_last_transaction(mods_path: str) -> Optional[Dict]:
+    transactions = list_transactions(mods_path)
+    return transactions[0] if transactions else None
+
+
+def describe_transaction(manifest: Dict) -> str:
+    created = manifest.get("created", "").replace("T", " ")
+    kind = KIND_LABELS.get(manifest.get("kind"), manifest.get("kind", ""))
+    return (f"Операция: {kind}\nДата: {created}\n"
+            f"Установлено файлов: {len(manifest.get('installed', []))}\n"
+            f"Файлов в бэкапе: {len(manifest.get('backed_up', []))}")
+
+
+def rollback_transaction(mods_path: str, manifest: Dict) -> List[str]:
+    """
+    Откатывает операцию: удаляет установленные ею файлы и возвращает файлы из бэкапа.
+    Возвращает список ошибок (пустой при успехе).
+    """
+    errors = []
+    tx_dir = manifest["dir"]
+
+    for filename in manifest.get("installed", []):
+        path = os.path.join(mods_path, safe_filename(filename))
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                logging.info(f"Откат: удален установленный файл {filename}")
+        except OSError as e:
+            errors.append(f"Не удалось удалить {filename}: {e}")
+
+    for entry in manifest.get("backed_up", []):
+        source = os.path.join(tx_dir, entry["backup"])
+        target = os.path.join(mods_path, entry["name"])
+        if not os.path.exists(source):
+            errors.append(f"Бэкап {entry['backup']} не найден")
+            continue
+        if os.path.exists(target):
+            errors.append(f"Файл {entry['name']} уже существует в папке mods, восстановление пропущено")
+            continue
+        try:
+            shutil.move(source, target)
+            logging.info(f"Откат: восстановлен файл {entry['name']}")
+        except OSError as e:
+            errors.append(f"Не удалось восстановить {entry['name']}: {e}")
+
+    manifest_path = os.path.join(tx_dir, MANIFEST_NAME)
+    if errors:
+        # Оставляем бэкап на месте, но помечаем операцию, чтобы не откатывать её повторно
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                stored = json.load(f)
+            stored["rolled_back"] = True
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(stored, f, ensure_ascii=False, indent=2)
+        except (OSError, json.JSONDecodeError) as e:
+            errors.append(f"Не удалось обновить журнал операции: {e}")
+    else:
+        shutil.rmtree(tx_dir, ignore_errors=True)
+    return errors
+
+
+# --- Проверка блокировки файлов (запущенный Minecraft) ---
+
+def _is_file_locked_windows(path: str) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                     wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    GENERIC_READ = 0x80000000
+    OPEN_EXISTING = 3
+    ERROR_SHARING_VIOLATION = 32
+    INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+
+    # Открытие без общего доступа (share mode = 0) не удаётся, если файл открыт другим процессом.
+    # Файл при этом не изменяется.
+    handle = kernel32.CreateFileW(path, GENERIC_READ, 0, None, OPEN_EXISTING, 0x80, None)
+    if handle == INVALID_HANDLE_VALUE:
+        return ctypes.get_last_error() == ERROR_SHARING_VIOLATION
+    kernel32.CloseHandle(handle)
+    return False
+
+
+def find_locked_files(paths: Iterable[str]) -> List[str]:
+    """Файлы, открытые другим процессом (обычно запущенной игрой). Работает только на Windows."""
+    if sys.platform != "win32":
+        return []
+    locked = []
+    for path in paths:
+        try:
+            if path and os.path.isfile(path) and _is_file_locked_windows(path):
+                locked.append(path)
+        except OSError:
+            continue
+    return locked
+
+
+def is_game_running(mods_path: str, sample_size: int = 5) -> bool:
+    """Эвристика: если игра запущена, загруженные jar-файлы модов заблокированы."""
+    if sys.platform != "win32" or not os.path.isdir(mods_path):
+        return False
+    jars = [os.path.join(mods_path, f) for f in os.listdir(mods_path) if f.lower().endswith('.jar')]
+    return bool(find_locked_files(jars[:sample_size]))
+
+
+# --- Установка ---
+
+def install_mod(mod: Dict, mods_path: str, transaction: UpdateTransaction,
+                progress_callback: Optional[Callable[[int, int], None]] = None,
+                is_cancelled: Optional[Callable[[], bool]] = None) -> ModStatus:
+    """
+    Скачивает и устанавливает один мод. Старый файл не трогается, пока новый не скачан
+    и не проверен по хэшу; при ошибке замены старые файлы возвращаются на место.
+    """
+    mod_name = mod.get('name', '?')
+    try:
+        new_filename = safe_filename(mod['new_filename'])
+    except (KeyError, ValueError) as e:
+        logging.error(f"Некорректное имя файла для '{mod_name}': {e}")
+        return ModStatus.DOWNLOAD_ERROR
+
+    final_path = os.path.join(mods_path, new_filename)
+    temp_path = final_path + ".part"
+
+    try:
+        download_file(mod['download_url'], temp_path, expected_hashes=mod.get('new_hashes'),
+                      progress_callback=progress_callback, is_cancelled=is_cancelled)
+    except DownloadCancelled:
+        return ModStatus.CANCELLED
+    except HashMismatchError as e:
+        logging.error(f"'{mod_name}': {e}")
+        return ModStatus.HASH_ERROR
+    except DownloadError as e:
+        logging.error(f"Не удалось скачать мод '{mod_name}': {e}")
+        return ModStatus.DOWNLOAD_ERROR
+
+    backups: List[tuple] = []  # (backup_path, original_path)
+    try:
+        old_path = mod.get('filepath')
+        if old_path and os.path.exists(old_path) and os.path.normcase(os.path.normpath(old_path)) != os.path.normcase(os.path.normpath(final_path)):
+            backups.append((transaction.backup_file(old_path), old_path))
+        if os.path.exists(final_path):
+            backups.append((transaction.backup_file(final_path), final_path))
+        os.replace(temp_path, final_path)
+        transaction.record_installed(new_filename)
+    except Exception as e:
+        logging.error(f"Ошибка при замене файла для мода '{mod_name}': {e}. Восстановление старой версии...")
+        for backup_path, original_path in reversed(backups):
+            try:
+                transaction.restore_file(backup_path, original_path)
+            except Exception as restore_error:
+                logging.critical(f"Не удалось восстановить {original_path}: {restore_error}")
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
+        return ModStatus.REPLACE_ERROR
+
+    status = ModStatus.UPDATED if mod.get('filepath') else ModStatus.INSTALLED
+    logging.info(f"Мод '{mod_name}' успешно {'обновлен' if status == ModStatus.UPDATED else 'установлен'} до версии {mod.get('new_version')}.")
+    return status
+
+
+def remove_mods(filepaths: Iterable[str], transaction: UpdateTransaction) -> tuple[List[str], List[str]]:
+    """Переносит файлы в бэкап транзакции. Возвращает (удалённые, ошибки)."""
+    removed, errors = [], []
+    for path in filepaths:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            transaction.backup_file(path)
+            removed.append(path)
+        except Exception as e:
+            errors.append(f"{os.path.basename(path)}: {e}")
+            logging.error(f"Не удалось удалить {path}: {e}")
+    return removed, errors
+
+
+def move_all_to_backup(mods_path: str, transaction: UpdateTransaction) -> None:
+    """Для режима «Заменить все»: переносит всё содержимое mods (кроме папки бэкапов) в транзакцию."""
+    backup_dir = os.path.normcase(os.path.normpath(backup_root(mods_path)))
+    for item_name in os.listdir(mods_path):
+        source_path = os.path.join(mods_path, item_name)
+        if os.path.normcase(os.path.normpath(source_path)) == backup_dir:
+            continue
+        transaction.backup_file(source_path)

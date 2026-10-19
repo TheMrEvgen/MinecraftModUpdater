@@ -106,6 +106,40 @@ class CustomMessageBox(QDialog):
     def clickedButton(self):
         return self._clicked_button
 
+
+def show_message(parent, icon, title: str, text: str) -> None:
+    """Информационное окно с одной кнопкой «ОК»."""
+    box = CustomMessageBox(icon, title, text, parent)
+    box.setDefaultButton(box.addButton("ОК", QMessageBox.ButtonRole.AcceptRole))
+    box.exec()
+
+
+def ask_choice(parent, icon, title: str, text: str, buttons: list, default: int = 0,
+               rich_text: bool = False) -> int | None:
+    """
+    Окно с выбором. buttons — список подписей; возвращает индекс нажатой кнопки
+    или None, если окно закрыто крестиком.
+    """
+    box = CustomMessageBox(icon, title, "" if rich_text else text, parent)
+    if rich_text:
+        box.text_label.setTextFormat(Qt.TextFormat.RichText)
+        box.text_label.setText(text)
+    created = []
+    for label in buttons:
+        btn = QPushButton(label)
+        btn.clicked.connect(lambda _=False, b=btn: (setattr(box, '_clicked_button', b), box.accept()))
+        box.button_layout.addWidget(btn)
+        created.append(btn)
+    if created:
+        box.setDefaultButton(created[default])
+    box.exec()
+    clicked = box.clickedButton()
+    return created.index(clicked) if clicked in created else None
+
+
+def confirm(parent, title: str, text: str, yes_text: str = "Да", no_text: str = "Нет") -> bool:
+    return ask_choice(parent, QMessageBox.Icon.Question, title, text, [yes_text, no_text], default=1) == 0
+
 class ImportDialog(QDialog):
     """Диалоговое окно для ввода и импорта строки со списком модов."""
     def __init__(self, parent=None):
@@ -158,7 +192,7 @@ class ShareDialog(QDialog):
         layout = QVBoxLayout(content_widget)
         main_layout.addWidget(content_widget)
         
-        info_label = QLabel("Скопируйте эту строку и отправьте другу.\nВ будущих версиях появится функция импорта.")
+        info_label = QLabel("Скопируйте эту строку и отправьте другу.\nОн сможет загрузить её через «Управление сборкой → Импортировать список».")
         layout.addWidget(info_label)
 
         self.share_text_edit = QLineEdit(share_string)
@@ -171,9 +205,7 @@ class ShareDialog(QDialog):
 
     def copy_to_clipboard(self):
         QApplication.clipboard().setText(self.share_text_edit.text())
-        msg_box = CustomMessageBox(QMessageBox.Icon.Information, "Скопировано", "Строка скопирована в буфер обмена!", self)
-        msg_box.addButton("ОК", QMessageBox.ButtonRole.AcceptRole)
-        msg_box.exec()
+        show_message(self, QMessageBox.Icon.Information, "Скопировано", "Строка скопирована в буфер обмена!")
 
 class TitleBar(QWidget):
     """Пользовательский заголовок окна для поддержки тем."""

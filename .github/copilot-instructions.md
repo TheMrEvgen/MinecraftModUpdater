@@ -1,45 +1,51 @@
 # Copilot / AI agent instructions — Minecraft Mod Updater
 
-Краткое руководство для AI‑агента, чтобы быстро стать продуктивным в этом репозитории.
+Краткое руководство для AI-агента, чтобы быстро стать продуктивным в этом репозитории.
 
-Архитектура и поток данных
-- UI: `main.py` — PyQt6 приложение с классом `ModUpdaterApp`.
-- Фоновые задачи: `ScanWorker` (сканирование и запрос Modrinth) и `UpdateWorker` (бэкап + скачивание).
-- Логика API/файлов: `mod_updater_logic.py` — все сетевые вызовы и файловые операции.
-- Поток: сканирование `.jar` → вычисление SHA1 (`get_file_hash`) → POST `/version_files` → по `project_id` GET `/project/{id}/version` → показать в таблице → при обновлении: `backup_and_remove_mod` → `download_mod`.
+## Архитектура
 
-Ключевые файлы для правок
-- `mod_updater_logic.py`: меняйте здесь поведение сетевых запросов, заголовков (`HEADERS`), retry/backoff.
-- `main.py`: интерфейс, слот‑сигнал связка, логика отображения таблицы и обработка потоков.
+Логика отделена от интерфейса: модули без Qt используются и GUI, и консольным режимом.
 
-Специфичные паттерны и соглашения
-- Сетевые функции безопасно отлавливают `requests.RequestException` и возвращают `{}` или `None` и логируют `print()`; при изменении этого поведения нужно обновить и обработку в `main.py`.
-- `HEADERS['User-Agent']` должен оставаться и
-<!--
-[PROMPT_SUGGESTION]Добавь в таблицу столбец с датой выхода новой версии мода.[/PROMPT_SUGGESTION]
-[PROMPT_SUGGESTION]Можно ли добавить общий прогресс-бар, который бы показывал скачивание всех модов?[/PROMPT_SUGGESTION]
--->
-нформативным (Modrinth требует валидный UA).
-- Бэкап: старые файлы перемещаются в `mod_backups` рядом с модом; файл бэкапа перезаписывается, если уже существует.
-- Потоки: `UpdateWorker.progress` эмиттит `(index, status)` где `index` — индекс в `mods_to_update`. `start_update_worker` создаёт `row_map` для соответствия индексов строк таблицы.
+| Модуль | Назначение |
+|---|---|
+| `main.py` | Точка входа: GUI или CLI (если переданы флаги `--update-all`, `--check`, `--profile`...) |
+| `main_window.py` | Главное окно PyQt6 (`ModUpdaterApp`): таблица, профили, импорт/экспорт |
+| `ui_components.py` | Диалоги без рамки, хелперы `show_message` / `ask_choice` / `confirm` |
+| `workers.py` | Тонкие `QThread`-обёртки над ядром + `IconLoader` (асинхронные иконки с кэшем) |
+| `scanner.py` | Ядро сканирования: индекс файлов (SQLite-кэш по path/size/mtime), запросы к Modrinth, дерево зависимостей |
+| `updater.py` | Установка модов, транзакции с журналом для отката, проверка блокировки файлов (запущенная игра) |
+| `mod_updater_logic.py` | HTTP: Modrinth API, версии загрузчиков, скачивание с проверкой хэша |
+| `exporters.py` | Строка «Поделиться», JSON для сервера, `.mrpack` |
+| `game_detection.py` | Определение версии игры и загрузчика по папке `versions` |
+| `config.py` | Пути (platformdirs), атомарное сохранение конфига, логирование с ротацией |
+| `enums.py` | `ModStatus` (str-Enum со статусами для отображения), `UpdateChannel` |
+| `cli.py` | Консольный режим для серверов и планировщика |
 
-Запуск и зависимости
-- Рекомендуемая версия Python: 3.8+ (рекомендуется 3.10+).
-- Базовые зависимости: `PyQt6`, `requests`, `packaging`, `tomli`.
-- Примеры команд:
+## Поток данных сканирования
+
+`.jar` → SHA1 (кэшируется) → `POST /v2/version_files` (информация об установленной версии, кэшируется в SQLite)
+→ **один** `POST /v2/version_files/update` с `loaders`, `game_versions`, `version_types` (последние версии всех модов)
+→ недостающие зависимости: `GET /project/{id}/version` → `GET /v2/projects?ids=` (названия, иконки, client/server side).
+
+## Соглашения
+
+- Статусы — только через `ModStatus`, не строковыми литералами. `ModStatus` наследует `str`, поэтому хранится в словарях модов как есть.
+- Новые сетевые вызовы — в `mod_updater_logic.py` через `SESSION` (там настроены повторы для 429/5xx; 4xx не повторяются). `HEADERS['User-Agent']` должен оставаться информативным (Modrinth требует валидный UA).
+- Любое изменение папки `mods` выполняется через `UpdateTransaction` (бэкап в `mods/ModUpdater_Backups/transactions/<timestamp>` + `manifest.json`), чтобы его можно было откатить.
+- Имена файлов из API проходят через `safe_filename()`; скачанные файлы проверяются по `sha512`/`sha1`.
+- Перед изменением файлов проверяйте `find_locked_files()` / `is_game_running()`.
+- Блокирующие операции в GUI выполняйте в потоках (`TaskWorker` для разовых запросов), не в UI-потоке.
+- Воркеры сканирования/импорта отправляют `finished(None)` при отмене — UI сохраняет прежние данные.
+
+## Запуск, тесты, сборка
 
 ```bash
-pip install PyQt6 requests packaging tomli
-python main.py
+pip install -r requirements-dev.txt
+python main.py                      # GUI
+python main.py --list-profiles      # CLI
+python main.py --profile Server --check
+python -m pytest -q                 # тесты (без сети)
+build.bat                           # тесты + сборка .exe (build.bat --onedir — сборка папкой)
 ```
 
-Советы при изменении кода
-- Если меняете формат данных, возвращаемых `get_mods_info_from_hashes` или `get_latest_version`, обновите логику разбора в `ScanWorker.run`.
-- При добавлении retry/backoff для сетевых вызовов: реализуйте в `mod_updater_logic.py` и сохраняйте интерфейс (возвращаемое значение и ошибки) для совместимости с UI.
-- Для изменения поведения бэкапов учитывайте, что UI ожидает, что `backup_and_remove_mod` завершится до попытки скачивания (последовательность в `UpdateWorker.run`).
-
-Полезные места в коде (ориентиры)
-- Сканирование и построение `mods_data`: в `ScanWorker.run` (см. проверку `mods_info` и формирование `mod_entry`).
-- Выбор основного файла для скачивания: `primary_file = next((f for f in latest_version_info['files'] if f['primary']), None)` — при смене API убедитесь, что этот поиск корректен.
-
-Если что-то непонятно — спросите: укажите файл и функцию, и я опишу ожидаемые контракты и стороны взаимодействия.
+Python 3.10+ (рекомендуется 3.12).

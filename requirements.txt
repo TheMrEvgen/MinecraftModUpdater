@@ -1,6 +1,6 @@
-PyQt6
-requests
-packaging
-tomli; python_version < '3.11'
-appdirs
-pyinstaller
+PyQt6>=6.5,<7
+requests>=2.31,<3
+urllib3>=2,<3
+packaging>=23
+platformdirs>=4
+tomli>=2; python_version < '3.11'

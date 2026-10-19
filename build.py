@@ -73,17 +73,32 @@ VSVersionInfo(
         ))
     print("--- Файл версии успешно создан ---")
 
-def build_executable():
-    """Запускает PyInstaller для сборки .exe файла."""
+# Модули Qt, которые приложение не использует: исключаем, чтобы уменьшить размер сборки
+EXCLUDED_MODULES = [
+    "PyQt6.QtWebEngineCore", "PyQt6.QtWebEngineWidgets", "PyQt6.QtQml", "PyQt6.QtQuick",
+    "PyQt6.QtMultimedia", "PyQt6.QtNetwork", "PyQt6.QtSql", "PyQt6.QtBluetooth",
+    "PyQt6.QtDesigner", "PyQt6.QtOpenGL", "PyQt6.QtOpenGLWidgets", "tkinter", "unittest", "pytest",
+]
+
+
+def build_executable(onedir: bool = False):
+    """
+    Запускает PyInstaller для сборки .exe файла.
+    onedir=True собирает папку вместо одного файла: запуск быстрее (exe не распаковывается
+    во временную папку при каждом старте) и реже бывают ложные срабатывания антивирусов.
+    """
     print("--- Начало сборки .exe ---")
     params = [
         ENTRY_POINT,
         '--name', APP_NAME,
-        '--onefile',      # Собрать всё в один .exe файл
-        '--windowed',     # Запускать без консольного окна
+        '--onedir' if onedir else '--onefile',
+        '--windowed',     # Запускать без консольного окна (консольный режим подключается к консоли сам)
         '--clean',        # Очистить кэш PyInstaller перед сборкой
+        '--noconfirm',
         '--version-file', VERSION_FILE # Добавляем информацию о версии
     ]
+    for module in EXCLUDED_MODULES:
+        params.extend(['--exclude-module', module])
 
     if os.path.exists(ICON_FILE):
         params.extend(['--icon', ICON_FILE])
@@ -99,26 +114,31 @@ def build_executable():
         print(f"\n--- ОШИБКА СБОРКИ .exe: {e} ---")
         return False
 
-def create_zip_archive():
-    """Создает ZIP-архив с готовым .exe файлом."""
+def create_zip_archive(onedir: bool = False):
+    """Создает ZIP-архив с готовым .exe файлом (или папкой сборки в режиме onedir)."""
     dist_path = 'dist'
     exe_name = f"{APP_NAME}.exe"
-    exe_path = os.path.join(dist_path, exe_name)
+    source_path = os.path.join(dist_path, APP_NAME) if onedir else os.path.join(dist_path, exe_name)
 
-    if not os.path.exists(exe_path):
-        print(f"Не найден исполняемый файл '{exe_path}'. Архив не будет создан.")
+    if not os.path.exists(source_path):
+        print(f"Не найден результат сборки '{source_path}'. Архив не будет создан.")
         return
 
     print("\n--- Начало создания ZIP-архива ---")
     # Создаем "безопасное" имя файла, заменяя пробелы и другие символы
     safe_version_str = re.sub(r'[^\w.-]', '_', VERSION)
     zip_filename = f"{APP_NAME}_v{safe_version_str}.zip"
-    
+
     try:
         with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zf:
-            zf.write(exe_path, exe_name)
+            if onedir:
+                for root, _, files in os.walk(source_path):
+                    for name in files:
+                        full_path = os.path.join(root, name)
+                        zf.write(full_path, os.path.relpath(full_path, dist_path))
+            else:
+                zf.write(source_path, exe_name)
         print(f"Архив '{zip_filename}' успешно создан в корневой папке проекта.")
-        print(f"Он содержит: {exe_name}")
         print("--- Создание ZIP-архива завершено! ---")
     except Exception as e:
         print(f"--- ОШИБКА СОЗДАНИЯ АРХИВА: {e} ---")
@@ -139,7 +159,9 @@ def cleanup():
     print("--- Очистка завершена ---")
 
 if __name__ == '__main__':
+    import sys
+    onedir_mode = '--onedir' in sys.argv
     create_version_file()
-    if build_executable():
-        create_zip_archive()
+    if build_executable(onedir_mode):
+        create_zip_archive(onedir_mode)
     cleanup()
