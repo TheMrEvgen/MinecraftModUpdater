@@ -168,3 +168,30 @@ def test_check_target_version(monkeypatch):
                {"name": "Local", "sha1": "h3"}]
     result = scanner.check_target_version(entries, "1.21.4", "fabric", UpdateChannel.RELEASE)
     assert [bool(r["version"]) for r in result] == [True, False, False]
+
+
+def test_dependency_of_other_loader_is_skipped():
+    from scanner import dependency_applies
+    fabric_api = {"title": "Fabric API", "loaders": ["fabric"]}
+    assert not dependency_applies(fabric_api, "neoforge")
+    assert dependency_applies(fabric_api, "fabric") and dependency_applies(fabric_api, "quilt")
+    assert dependency_applies({"loaders": []}, "neoforge") and dependency_applies(None, "forge")
+
+
+def test_scan_skips_fabric_api_on_neoforge(tmp_path, monkeypatch):
+    import scanner
+    from mod_updater_logic import get_file_hash
+    path = _jar(tmp_path / "lambdynamiclights.jar")
+    sha = get_file_hash(path)
+    info = {"project_id": "ldl", "version_number": "4.9.1", "loaders": ["fabric", "neoforge", "quilt"],
+            "dependencies": [{"project_id": "P7dR8mSH", "dependency_type": "required"}]}
+    monkeypatch.setattr(scanner, "get_mods_info_from_hashes", lambda hashes: {sha: info})
+    monkeypatch.setattr(scanner, "get_latest_versions_from_hashes", lambda *a, **k: {})
+    monkeypatch.setattr(scanner, "get_latest_version", lambda *a, **k: None)
+    monkeypatch.setattr(scanner, "get_projects_info_from_ids", lambda ids: {
+        "ldl": {"title": "LambDynamicLights", "loaders": ["fabric", "neoforge", "quilt"]},
+        "P7dR8mSH": {"title": "Fabric API", "loaders": ["fabric"]}})
+    neo = scanner.scan_mods(str(tmp_path), "1.21.11", "neoforge", None)
+    assert neo[0]["dependencies"] == []
+    fabric = scanner.scan_mods(str(tmp_path), "1.21.11", "fabric", None)
+    assert [d["name"] for d in fabric[0]["dependencies"]] == ["Fabric API"]

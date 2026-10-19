@@ -174,7 +174,7 @@ class ModCache:
         # Храним только поля, нужные интерфейсу: ответ /projects довольно объёмный
         keys = ('id', 'slug', 'title', 'description', 'icon_url', 'client_side', 'server_side', 'project_type',
                 'categories', 'updated', 'downloads', 'followers', 'source_url', 'issues_url', 'wiki_url',
-                'discord_url', 'donation_urls')
+                'discord_url', 'donation_urls', 'loaders')
 
         def compact(info: Dict) -> Dict:
             data = {k: info.get(k) for k in keys}
@@ -280,6 +280,22 @@ def apply_install_info(entry: Dict, version_info: Optional[Dict]) -> bool:
     entry["new_size"] = primary_file.get('size') or 0
     entry["_latest_info"] = version_info
     return True
+
+
+# Загрузчики, моды для которых работают на данном (Quilt запускает моды Fabric)
+COMPATIBLE_LOADERS = {"quilt": {"quilt", "fabric"}}
+
+
+def dependency_applies(project: Optional[Dict], loader: Optional[str]) -> bool:
+    """
+    Нужна ли зависимость на этом загрузчике. Мультизагрузочные версии (одна версия для Fabric и NeoForge)
+    перечисляют зависимости всех загрузчиков сразу — например, Fabric API у мода, который стоит на NeoForge.
+    Если проект зависимости не выпускается для текущего загрузчика, зависимость относится к другому загрузчику.
+    """
+    project_loaders = set((project or {}).get('loaders') or [])
+    if not loader or not project_loaders:
+        return True  # Нет данных — не скрываем
+    return bool(project_loaders & COMPATIBLE_LOADERS.get(loader, {loader}))
 
 
 def project_links(project: Dict) -> List[tuple]:
@@ -496,6 +512,10 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
                 if dep_type == 'embedded' or (dep_type == 'incompatible' and not is_installed):
                     continue
                 project = projects_info.get(dep_pid, {})
+                if content.has_dependencies and not is_installed and not dependency_applies(project, loader):
+                    logging.debug(f"Зависимость {project.get('title', dep_pid)} мода {project_id} относится к другому "
+                                  f"загрузчику ({', '.join(project.get('loaders') or [])}) — пропущена.")
+                    continue
                 if is_installed:
                     dep_entry = build_installed_entry(dep_pid)
                 else:
@@ -632,9 +652,12 @@ def resolve_project_install(project_id: str, game_version: str, loader: Optional
             continue
         versions[pid] = version
         if depth < max_depth and content.has_dependencies:
-            for dep in version.get('dependencies') or []:
-                if dep.get('dependency_type') == 'required' and dep.get('project_id') and dep['project_id'] not in seen:
-                    queue.append((dep['project_id'], depth + 1))
+            dep_ids = [d['project_id'] for d in version.get('dependencies') or []
+                       if d.get('dependency_type') == 'required' and d.get('project_id') and d['project_id'] not in seen]
+            dep_projects = get_projects_info_from_ids(dep_ids) if dep_ids and loader else {}
+            for dep_id in dep_ids:
+                if dependency_applies(dep_projects.get(dep_id), loader):
+                    queue.append((dep_id, depth + 1))
     projects = get_projects_info_from_ids(versions)
     for pid, version in versions.items():
         entry = {"name": pid, "project_id": pid, "current_version": "", "filepath": None,
