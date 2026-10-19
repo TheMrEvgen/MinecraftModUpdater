@@ -1,6 +1,8 @@
+import os
+
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QPushButton, QDialog, QVBoxLayout,
-    QMessageBox, QStyle, QLineEdit, QApplication,
+    QMessageBox, QStyle, QLineEdit, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
 )
 from PyQt6.QtCore import Qt
@@ -44,6 +46,7 @@ class CustomMessageBox(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setObjectName("DialogFrame")
         self.setMinimumWidth(400)
 
         main_layout = QVBoxLayout(self)
@@ -146,6 +149,7 @@ class ImportDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Импортировать список модов")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setObjectName("DialogFrame")
         self.setMinimumWidth(500)
 
         main_layout = QVBoxLayout(self)
@@ -179,6 +183,7 @@ class ShareDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Поделиться списком модов")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setObjectName("DialogFrame")
         self.setMinimumWidth(500)
 
         main_layout = QVBoxLayout(self)
@@ -207,74 +212,13 @@ class ShareDialog(QDialog):
         QApplication.clipboard().setText(self.share_text_edit.text())
         show_message(self, QMessageBox.Icon.Information, "Скопировано", "Строка скопирована в буфер обмена!")
 
-class TitleBar(QWidget):
-    """Пользовательский заголовок окна для поддержки тем."""
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent_window = parent
-        self.setObjectName("TitleBar")
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        self.title = QLabel("Minecraft Mod Updater")
-        self.title.setStyleSheet("font-weight: bold;")
-        
-        self.toggle_theme_btn = QPushButton()
-        self.toggle_theme_btn.setObjectName("ThemeButton")
-
-        layout.addWidget(self.title)
-        layout.addStretch()
-
-        layout.addWidget(self.toggle_theme_btn)
-
-        self.minimize_button = QPushButton("🗕")
-        self.maximize_button = QPushButton("🗖")
-        self.close_button = QPushButton("✕")
-        
-        self.minimize_button.setObjectName("MinimizeButton")
-        self.maximize_button.setObjectName("MaximizeButton")
-        self.close_button.setObjectName("CloseButton")
-
-        for btn in [self.minimize_button, self.maximize_button, self.close_button]:
-            btn.setFixedSize(45, 30)
-
-        self.toggle_theme_btn.clicked.connect(self.parent_window.toggle_theme)
-        self.minimize_button.clicked.connect(self.parent_window.showMinimized)
-        self.maximize_button.clicked.connect(self.toggle_maximize_restore)
-        self.close_button.clicked.connect(self.parent_window.close)
-
-        layout.addWidget(self.minimize_button)
-        layout.addWidget(self.maximize_button)
-        layout.addWidget(self.close_button)
-
-    def toggle_maximize_restore(self):
-        if self.parent_window.isMaximized():
-            self.parent_window.showNormal()
-        else:
-            self.parent_window.showMaximized()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.parent_window.drag_pos = event.globalPosition().toPoint() - self.parent_window.frameGeometry().topLeft()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton and hasattr(self.parent_window, 'drag_pos'):
-            self.parent_window.move(event.globalPosition().toPoint() - self.parent_window.drag_pos)
-            event.accept()
-    
-    def mouseDoubleClickEvent(self, event):
-        self.toggle_maximize_restore()
-        event.accept()
-
 class VersionPickerDialog(QDialog):
     """Диалоговое окно для выбора конкретной версии мода (Даунгрейд/Откат)."""
     def __init__(self, versions, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Выбор версии")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setObjectName("DialogFrame")
         self.setMinimumSize(600, 400)
         self.selected_version = None
 
@@ -327,6 +271,7 @@ class SyncDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Синхронизация по URL")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setObjectName("DialogFrame")
         self.setMinimumWidth(500)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0,0,0,0)
@@ -350,3 +295,152 @@ class SyncDialog(QDialog):
 
     def get_url(self):
         return self.url_input.text().strip()
+
+
+class ProfileDialog(QDialog):
+    """Создание и редактирование сборки: папка игры, версия, загрузчик, канал обновлений."""
+
+    LOADERS = ["fabric", "neoforge", "forge", "quilt"]
+
+    def __init__(self, parent=None, name: str = "", profile: dict | None = None, existing_names=(), channels=()):
+        super().__init__(parent)
+        self.setWindowTitle("Изменить сборку" if name else "Новая сборка")
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setObjectName("DialogFrame")
+        self.setMinimumWidth(580)
+        self.existing_names = set(existing_names) - {name}
+        self.profile = dict(profile or {})
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        main_layout.addWidget(DialogTitleBar(self))
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(20, 16, 20, 18)
+        layout.setSpacing(12)
+        main_layout.addWidget(content)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(10)
+        self.name_edit = QLineEdit(name)
+        self.name_edit.setPlaceholderText("Например: Выживание с друзьями")
+        form.addRow("Название", self.name_edit)
+
+        path_row = QHBoxLayout()
+        self.path_edit = QLineEdit(self.profile.get("mods_path", ""))
+        self.path_edit.setPlaceholderText("Папка игры, внутри которой лежит папка mods")
+        browse = QPushButton("Обзор…")
+        browse.clicked.connect(self._browse)
+        path_row.addWidget(self.path_edit, 1)
+        path_row.addWidget(browse)
+        form.addRow("Папка игры", path_row)
+        self.path_status = QLabel()
+        self.path_status.setObjectName("Faint")
+        form.addRow("", self.path_status)
+
+        self.manual = QCheckBox("Указать версию игры и загрузчик вручную")
+        self.manual.setChecked(bool(self.profile.get("manual_mode")))
+        form.addRow("", self.manual)
+        self.version_combo = QComboBox()
+        self.version_combo.setEditable(True)
+        self.loader_combo = QComboBox()
+        self.loader_combo.addItems(self.LOADERS)
+        form.addRow("Версия игры", self.version_combo)
+        form.addRow("Загрузчик", self.loader_combo)
+        self.channel_combo = QComboBox()
+        for value, title in channels:
+            self.channel_combo.addItem(title, value)
+        self.channel_combo.setCurrentIndex(max(0, self.channel_combo.findData(self.profile.get("channel"))))
+        form.addRow("Обновления", self.channel_combo)
+        layout.addLayout(form)
+
+        self.error_label = QLabel()
+        self.error_label.setStyleSheet("color: #f25f5c;")
+        self.error_label.hide()
+        layout.addWidget(self.error_label)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton("Отмена")
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton("Сохранить")
+        ok.setObjectName("PrimaryButton")
+        ok.setDefault(True)
+        ok.clicked.connect(self._accept)
+        buttons.addWidget(cancel)
+        buttons.addWidget(ok)
+        layout.addLayout(buttons)
+
+        self.path_edit.textChanged.connect(self._on_path_changed)
+        self.manual.toggled.connect(self._sync_enabled)
+        self._on_path_changed(self.path_edit.text())
+        if self.profile.get("game_version"):
+            self.version_combo.setCurrentText(self.profile["game_version"])
+        if self.profile.get("loader") in self.LOADERS:
+            self.loader_combo.setCurrentText(self.profile["loader"])
+        self._sync_enabled()
+
+    def _browse(self):
+        path = QFileDialog.getExistingDirectory(self, "Папка игры (где находится папка mods)", self.path_edit.text())
+        if path:
+            self.path_edit.setText(path)
+
+    def _on_path_changed(self, path: str):
+        from game_detection import detect_game_versions
+        mods_dir = os.path.join(path, "mods") if path else ""
+        if not path:
+            self.path_status.setText("")
+        elif os.path.isdir(mods_dir):
+            count = len([f for f in os.listdir(mods_dir) if f.lower().endswith(".jar")])
+            self.path_status.setText(f"✓ Папка mods найдена, модов: {count}")
+        elif os.path.isdir(path):
+            self.path_status.setText("Папки mods нет — она будет создана при первой установке")
+        else:
+            self.path_status.setText("⚠ Папка не существует")
+        detected = detect_game_versions(path) if path and os.path.isdir(path) else None
+        current = self.version_combo.currentText()
+        self.version_combo.clear()
+        if detected and detected.versions:
+            self.version_combo.addItems(detected.game_versions)
+            if not self.manual.isChecked() and detected.best_guess:
+                self.version_combo.setCurrentText(detected.best_guess[0])
+                self.loader_combo.setCurrentText(detected.best_guess[1])
+        if current and (self.manual.isChecked() or not (detected and detected.versions)):
+            self.version_combo.setCurrentText(current)
+
+    def _sync_enabled(self):
+        manual = self.manual.isChecked()
+        self.version_combo.setEnabled(manual)
+        self.loader_combo.setEnabled(manual)
+
+    def _accept(self):
+        name = self.name_edit.text().strip()
+        path = self.path_edit.text().strip()
+        error = None
+        if not name:
+            error = "Введите название сборки."
+        elif name in self.existing_names:
+            error = "Сборка с таким названием уже есть."
+        elif not path or not os.path.isdir(path):
+            error = "Укажите существующую папку игры."
+        elif self.manual.isChecked() and not self.version_combo.currentText().strip():
+            error = "Укажите версию игры."
+        if error:
+            self.error_label.setText(error)
+            self.error_label.show()
+            return
+        self.accept()
+
+    def result_profile(self) -> tuple[str, dict]:
+        profile = dict(self.profile)
+        profile.update({
+            "mods_path": self.path_edit.text().strip(),
+            "manual_mode": self.manual.isChecked(),
+            "game_version": self.version_combo.currentText().strip(),
+            "loader": self.loader_combo.currentText(),
+            "channel": self.channel_combo.currentData(),
+        })
+        profile.setdefault("source", "manual")
+        return self.name_edit.text().strip(), profile

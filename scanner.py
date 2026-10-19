@@ -115,6 +115,7 @@ class ModCache:
         self.conn = sqlite3.connect(db_path)
         self.conn.executescript('''
             CREATE TABLE IF NOT EXISTS mod_info (sha1 TEXT PRIMARY KEY, data TEXT);
+            CREATE TABLE IF NOT EXISTS project_info (project_id TEXT PRIMARY KEY, data TEXT);
             CREATE TABLE IF NOT EXISTS file_index (
                 path TEXT PRIMARY KEY, size INTEGER, mtime_ns INTEGER,
                 sha1 TEXT, name TEXT, version TEXT, project_hint TEXT
@@ -153,6 +154,27 @@ class ModCache:
                 except json.JSONDecodeError:
                     pass
         return result
+
+    def get_project_infos(self, project_ids) -> Dict[str, Dict]:
+        ids = list(project_ids)
+        result = {}
+        for i in range(0, len(ids), 900):
+            chunk = ids[i:i + 900]
+            placeholders = ','.join('?' * len(chunk))
+            query = f"SELECT project_id, data FROM project_info WHERE project_id IN ({placeholders})"
+            for pid, data in self.conn.execute(query, chunk):
+                try:
+                    result[pid] = json.loads(data)
+                except json.JSONDecodeError:
+                    pass
+        return result
+
+    def put_project_infos(self, infos: Dict[str, Dict]):
+        # Храним только поля, нужные интерфейсу: ответ /projects довольно объёмный
+        keys = ('id', 'slug', 'title', 'description', 'icon_url', 'client_side', 'server_side', 'project_type')
+        with self.conn:
+            self.conn.executemany("INSERT OR REPLACE INTO project_info (project_id, data) VALUES (?, ?)",
+                                  [(pid, json.dumps({k: info.get(k) for k in keys})) for pid, info in infos.items()])
 
     def put_mod_infos(self, infos: Dict[str, Dict]):
         with self.conn:
@@ -240,6 +262,9 @@ def apply_install_info(entry: Dict, version_info: Optional[Dict]) -> bool:
 def _apply_project_info(entry: Dict, project: Optional[Dict]):
     if not project:
         return
+    if project.get('title'):
+        entry["name"] = project['title']
+    entry["description"] = project.get('description') or ""
     entry["icon_url"] = project.get('icon_url')
     entry["client_side"] = project.get('client_side')
     entry["server_side"] = project.get('server_side')
@@ -247,10 +272,27 @@ def _apply_project_info(entry: Dict, project: Optional[Dict]):
 
 
 def scan_local(mods_path: str, cache_file: Optional[str]) -> List[Dict]:
-    """Быстрое локальное сканирование без сети."""
+    """
+    Быстрое локальное сканирование без сети. Если мод уже проверялся раньше, данные о нём
+    (название, иконка, описание, версия на Modrinth) берутся из кэша — интерфейс сразу
+    показывает знакомые моды, а сетевая проверка лишь дополняет статусы.
+    """
     cache = ModCache(cache_file) if cache_file else None
     try:
-        return [make_local_entry(local) for local in index_local_files(mods_path, cache)]
+        local_files = index_local_files(mods_path, cache)
+        entries = [make_local_entry(local) for local in local_files]
+        if not cache:
+            return entries
+        infos = cache.get_mod_infos([e['sha1'] for e in entries if e.get('sha1')])
+        projects = cache.get_project_infos({i['project_id'] for i in infos.values() if i.get('project_id')})
+        for entry in entries:
+            info = infos.get(entry.get('sha1'))
+            if info and info.get('project_id'):
+                entry["project_id"] = info['project_id']
+                entry["current_version"] = info.get('version_number', entry["current_version"])
+                entry["installed_info"] = info
+                _apply_project_info(entry, projects.get(info['project_id']))
+        return entries
     finally:
         if cache:
             cache.close()
@@ -351,8 +393,12 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
             progress(f"Запрос информации о {len(all_project_ids)} проектах...")
             try:
                 projects_info = get_projects_info_from_ids(all_project_ids)
+                if cache and projects_info:
+                    cache.put_project_infos(projects_info)
             except requests.RequestException as e:
                 logging.error(f"Не удалось получить информацию о проектах: {e}")
+                if cache:
+                    projects_info = cache.get_project_infos(all_project_ids)
         check_cancel()
 
         # --- Основные моды: установленные, которые не являются зависимостью других ---
@@ -378,7 +424,10 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
             return entry
 
         mods_data: List[Dict] = []
-        for project_id in sorted(standalone, key=lambda p: installed[p]['local']['name'].lower()):
+        def sort_name(pid):
+            return (projects_info.get(pid, {}).get('title') or installed[pid]['local']['name']).lower()
+
+        for project_id in sorted(standalone, key=sort_name):
             entry = build_installed_entry(project_id)
             dependencies = []
             for dep in deps_of(project_id):
@@ -391,7 +440,6 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
                 project = projects_info.get(dep_pid, {})
                 if is_installed:
                     dep_entry = build_installed_entry(dep_pid)
-                    dep_entry["name"] = project.get('title') or dep_entry["name"]
                 else:
                     dep_entry = {
                         "name": project.get('title', dep_pid), "project_id": dep_pid, "current_version": "",
@@ -426,3 +474,58 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
     finally:
         if cache:
             cache.close()
+
+
+# --- Импорт .mrpack ---
+
+def read_mrpack(path: str) -> Dict:
+    """Читает modrinth.index.json из .mrpack. Выбрасывает ValueError при некорректном файле."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            index = json.loads(z.read("modrinth.index.json").decode("utf-8"))
+    except (OSError, KeyError, zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise ValueError(f"Не удалось прочитать .mrpack: {e}") from e
+    if not isinstance(index, dict) or not isinstance(index.get("files"), list):
+        raise ValueError("Некорректный modrinth.index.json")
+    return index
+
+
+def mrpack_game_info(index: Dict) -> tuple[Optional[str], Optional[str]]:
+    """(версия игры, загрузчик) из раздела dependencies индекса .mrpack."""
+    deps = index.get("dependencies") or {}
+    loader = next((name for key, name in (("fabric-loader", "fabric"), ("quilt-loader", "quilt"),
+                                          ("neoforge", "neoforge"), ("forge", "forge")) if key in deps), None)
+    return deps.get("minecraft"), loader
+
+
+def entries_from_mrpack(index: Dict) -> List[Dict]:
+    """
+    Записи «к установке» для модов из .mrpack. Файлы берутся ровно те, что указаны в сборке
+    (с проверкой хэшей), а названия и иконки подтягиваются с Modrinth по SHA1.
+    Файлы вне папки mods (ресурспаки, шейдеры), серверные моды и папка overrides пропускаются.
+    """
+    files = [f for f in index["files"] if str(f.get("path", "")).replace("\\", "/").startswith("mods/")
+             and f.get("downloads") and (f.get("env") or {}).get("client") != "unsupported"]
+    sha1_list = [f["hashes"]["sha1"] for f in files if f.get("hashes", {}).get("sha1")]
+    try:
+        versions = get_mods_info_from_hashes(sha1_list)
+        projects = get_projects_info_from_ids({v.get('project_id') for v in versions.values()})
+    except requests.RequestException as e:
+        logging.warning(f"Не удалось получить информацию о модах сборки: {e}")
+        versions, projects = {}, {}
+
+    entries = []
+    for f in files:
+        filename = os.path.basename(f["path"])
+        version = versions.get(f.get("hashes", {}).get("sha1"), {})
+        entry = {
+            "name": os.path.splitext(filename)[0], "project_id": version.get("project_id"),
+            "current_version": "", "filepath": None, "status": ModStatus.READY_TO_INSTALL,
+            "new_version": version.get("version_number", ""),
+            "new_version_date": format_date(version.get("date_published")),
+            "download_url": f["downloads"][0], "new_filename": filename, "new_hashes": f.get("hashes"),
+            "_latest_info": version or None,
+        }
+        _apply_project_info(entry, projects.get(version.get("project_id")))
+        entries.append(entry)
+    return entries

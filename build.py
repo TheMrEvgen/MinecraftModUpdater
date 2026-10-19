@@ -7,7 +7,7 @@ import datetime
 
 # --- НАСТРОЙКИ ---
 APP_NAME = "Minecraft Mod Updater beta"
-VERSION = "2.0.0-beta"  # Версия продукта. Может содержать текст.
+VERSION = "3.0.0-beta"  # Версия продукта. Может содержать текст.
 COPYRIGHT_INFO = f"Copyright (c) {datetime.datetime.now().year} TheMrEvgen" # Заменено © на (c) для совместимости
 COMPANY_NAME = "TheMrEvgen" # Укажите название компании
 # -----------------

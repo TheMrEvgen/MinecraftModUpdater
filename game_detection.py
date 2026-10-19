@@ -8,6 +8,9 @@ from typing import Optional
 
 SUPPORTED_LOADERS = ("fabric", "neoforge", "forge", "quilt")
 
+# Версии игры: старый формат 1.x.y и новый «годовой» формат 26.x / 26.x.y (с 2026 года)
+GAME_VERSION_RE = r"(?:1\.\d+(?:\.\d+)?|[2-9]\d\.\d+(?:\.\d+)?)"
+
 _LOADER_VERSION_PATTERNS = {
     'fabric': r'fabric-loader-([\d\.\w-]+)-',
     'quilt': r'quilt-loader-([\d\.\w-]+)-',
@@ -42,19 +45,19 @@ def extract_game_version(data: dict) -> Optional[str]:
         lib_name = lib.get('name', '') if isinstance(lib, dict) else ''
         if lib_name.startswith(('net.minecraft:client:', 'com.mojang:minecraft:')):
             parts = lib_name.split(':')
-            if len(parts) == 3 and re.fullmatch(r"1\.\d+(\.\d+)?(-\w+)?", parts[2]):
+            if len(parts) == 3 and re.fullmatch(GAME_VERSION_RE + r"(-\w+)?", parts[2]):
                 return parts[2].split('-')[0]
 
     # Способ 2 и 3: 'inheritsFrom' (Fabric и др.) и 'jar' (старый Forge)
     for key in ('inheritsFrom', 'jar'):
         value = data.get(key)
         if isinstance(value, str):
-            match = re.search(r"1\.\d+(\.\d+)?", value)
+            match = re.search(GAME_VERSION_RE, value)
             if match:
                 return match.group(0)
 
     # Способ 4: последняя версия в 'id' (e.g., fabric-loader-0.15.11-1.20.1)
-    all_versions = re.findall(r"1\.\d+(?:\.\d+)?", str(data.get('id', '')))
+    all_versions = re.findall(r"(?<![\d.])" + GAME_VERSION_RE, str(data.get('id', '')))
     return all_versions[-1] if all_versions else None
 
 

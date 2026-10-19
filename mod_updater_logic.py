@@ -293,15 +293,19 @@ def _get_meta_loader_version(meta_base: str, game_version: str) -> Optional[str]
 
 def neoforge_version_prefix(game_version: str) -> Optional[str]:
     """
-    Префикс версии NeoForge для версии игры: 1.20.4 -> '20.4.', 1.21 -> '21.0.'.
+    Префикс версии NeoForge для версии игры:
+      старый формат: 1.20.4 -> '20.4.', 1.21 -> '21.0.'
+      новый формат (с 2026): 26.3 -> '26.3.0.', 26.3.1 -> '26.3.1.'
     Завершающая точка обязательна: иначе '21.1' совпадает с '21.10.x' и '21.11.x'.
     """
     parts = game_version.split('.')
-    if len(parts) < 2 or not all(p.isdigit() for p in parts[1:3]):
+    if len(parts) < 2 or not all(p.isdigit() for p in parts[:3]):
         return None
-    mc_major = parts[1]
-    mc_minor = parts[2] if len(parts) > 2 else "0"
-    return f"{mc_major}.{mc_minor}."
+    if parts[0] == "1":
+        mc_minor = parts[2] if len(parts) > 2 else "0"
+        return f"{parts[1]}.{mc_minor}."
+    patch = parts[2] if len(parts) > 2 else "0"
+    return f"{parts[0]}.{parts[1]}.{patch}."
 
 
 def pick_neoforge_version(all_versions: List[str], game_version: str) -> Optional[str]:

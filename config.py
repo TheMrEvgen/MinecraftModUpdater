@@ -17,7 +17,8 @@ CONFIG_DIR = platformdirs.user_data_dir(APP_NAME, appauthor=False)
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 CACHE_DIR = os.path.join(CONFIG_DIR, "cache")
 CACHE_FILE = os.path.join(CACHE_DIR, "mod_cache.db")
-ICON_CACHE_DIR = os.path.join(CACHE_DIR, "icons")
+ICON_CACHE_DIR = os.path.join(CACHE_DIR, "icons96")
+APP_VERSION = "3.0.0-beta"
 LOG_DIR = os.path.join(CONFIG_DIR, "logs")
 
 DEFAULT_GAME_VERSION = "1.21.11"
@@ -33,11 +34,22 @@ def default_profile() -> dict:
         "loader": DEFAULT_LOADER,
         "manual_mode": False,
         "channel": DEFAULT_CHANNEL.value,
+        "source": "manual",
+        "loader_version": "",
+    }
+
+
+def default_settings() -> dict:
+    return {
+        "auto_check": True,          # Проверять обновления автоматически при открытии сборки
+        "discover_launchers": True,  # Искать сборки Prism/Modrinth/CurseForge при запуске
+        "parallel_downloads": 3,
     }
 
 
 def default_config() -> dict:
-    return {"theme": "system", "current_profile": "Default", "profiles": {"Default": default_profile()}}
+    return {"theme": "system", "current_profile": "Default", "profiles": {"Default": default_profile()},
+            "settings": default_settings(), "hidden_instances": [], "window": {}}
 
 
 def _normalize(config: dict) -> dict:
@@ -57,6 +69,13 @@ def _normalize(config: dict) -> dict:
     if config.get("current_profile") not in config["profiles"]:
         config["current_profile"] = next(iter(config["profiles"]))
     config.setdefault("theme", "system")
+    settings = default_settings()
+    settings.update(config.get("settings") or {})
+    config["settings"] = settings
+    if not isinstance(config.get("hidden_instances"), list):
+        config["hidden_instances"] = []
+    if not isinstance(config.get("window"), dict):
+        config["window"] = {}
     return config
 
 
@@ -71,7 +90,7 @@ def load_config(path: str = CONFIG_FILE) -> dict:
         logging.info("Файл конфигурации не найден, используются значения по умолчанию.")
     except (json.JSONDecodeError, UnicodeDecodeError, AttributeError, TypeError) as e:
         logging.warning(f"Ошибка при чтении файла конфигурации ({e}), будут использованы значения по умолчанию.")
-    return default_config()
+    return _normalize(default_config())
 
 
 def save_config(config: dict, path: str = CONFIG_FILE) -> None:

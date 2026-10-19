@@ -27,6 +27,7 @@ KIND_LABELS = {
     "update": "обновление/установка",
     "delete": "удаление",
     "replace_all": "замена сборки",
+    "add": "добавление файлов",
 }
 
 
@@ -310,3 +311,24 @@ def move_all_to_backup(mods_path: str, transaction: UpdateTransaction) -> None:
         if os.path.normcase(os.path.normpath(source_path)) == backup_dir:
             continue
         transaction.backup_file(source_path)
+
+
+def add_files(paths: Iterable[str], mods_path: str, transaction: UpdateTransaction) -> tuple[List[str], List[str]]:
+    """Копирует jar-файлы в папку mods (перетаскивание). Файл с тем же именем уходит в бэкап."""
+    added, errors = [], []
+    os.makedirs(mods_path, exist_ok=True)
+    for source in paths:
+        name = os.path.basename(source)
+        target = os.path.join(mods_path, name)
+        try:
+            if os.path.normcase(os.path.abspath(source)) == os.path.normcase(os.path.abspath(target)):
+                continue
+            if os.path.exists(target):
+                transaction.backup_file(target)
+            shutil.copy2(source, target)
+            transaction.record_installed(name)
+            added.append(name)
+        except OSError as e:
+            errors.append(f"{name}: {e}")
+            logging.error(f"Не удалось добавить {source}: {e}")
+    return added, errors

@@ -85,8 +85,10 @@ class UpdateWorker(QThread):
     # Не чаще одного обновления прогресса на мод за этот интервал (сек.), чтобы не перегружать UI
     PROGRESS_INTERVAL = 0.1
 
-    def __init__(self, mods_to_update: List[Dict], mods_path: str, transaction: Optional[UpdateTransaction] = None):
+    def __init__(self, mods_to_update: List[Dict], mods_path: str, transaction: Optional[UpdateTransaction] = None,
+                 max_workers: int = MAX_WORKERS):
         super().__init__()
+        self.max_workers = max(1, int(max_workers))
         self.mods_to_update = mods_to_update
         self.mods_path = mods_path
         self.transaction = transaction or UpdateTransaction(mods_path, "update")
@@ -121,8 +123,8 @@ class UpdateWorker(QThread):
         self.progress.emit(i, status.value)
 
     def run(self):
-        logging.info(f"Запуск обновления {len(self.mods_to_update)} модов в {self.MAX_WORKERS} потока.")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
+        logging.info(f"Запуск обновления {len(self.mods_to_update)} модов в {self.max_workers} потока.")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = [executor.submit(self._process_single_mod, i, mod) for i, mod in enumerate(self.mods_to_update)]
             concurrent.futures.wait(futures)
         logging.info("Все задачи по обновлению модов завершены.")
@@ -298,7 +300,7 @@ class IconLoader(QObject):
     Сигнал icon_ready(project_id, path) приходит в главном потоке.
     """
     icon_ready = pyqtSignal(str, str)
-    ICON_SIZE = 48
+    ICON_SIZE = 96
 
     def __init__(self, cache_dir: str, parent=None):
         super().__init__(parent)
@@ -316,12 +318,12 @@ class IconLoader(QObject):
 
     def request(self, project_id: Optional[str], url: Optional[str]) -> Optional[str]:
         """Возвращает путь, если иконка уже в кэше; иначе ставит загрузку в очередь и возвращает None."""
-        if not project_id or not url:
+        if not project_id:
             return None
         cached = self.cached_path(project_id)
         if cached:
             return cached
-        if project_id not in self._pending:
+        if url and project_id not in self._pending:
             self._pending.add(project_id)
             path = os.path.join(self.cache_dir, f"{project_id}.png")
             self.pool.start(_IconTask(project_id, url, path, self.ICON_SIZE, self._signals))
