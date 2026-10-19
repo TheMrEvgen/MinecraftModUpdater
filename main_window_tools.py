@@ -896,6 +896,70 @@ class ToolsMixin:
         self._run_task(download_file, (url, target), lambda _: self._import_mrpack(target),
                        lambda e: self.toasts.show(f"Не удалось скачать сборку: {e}", "error"), "Скачиваем сборку…")
 
+    # ================================================================== Готовность к новой версии Minecraft
+
+    def _maybe_check_readiness(self, force: bool = False):
+        """После проверки обновлений: вышла ли новая версия игры и сколько модов уже готовы к ней."""
+        import readiness
+        if self.content is not MODS or self.is_import_mode or not self.game_version or not self.loader:
+            return
+        profile_name = self.current_profile_name
+        saved = self._profile().get("readiness")
+        if not force and not readiness.needs_check(saved):
+            self._show_readiness()
+            return
+        entries = [e for e in self._count_items if e.get("filepath")]
+        self._run_task(readiness.check_readiness, (entries, self.game_version, self.loader, self._channel()),
+                       lambda result: self._on_readiness(profile_name, result),
+                       lambda e: logging.info(f"Проверка готовности к новой версии не удалась: {e}"), None)
+
+    def _on_readiness(self, profile_name: str, result: Optional[Dict]):
+        profile = self.profiles.get(profile_name)
+        if profile is None:
+            return
+        previous = profile.get("readiness") or {}
+        if result is None:
+            profile.pop("readiness", None)
+        else:
+            same_target = previous.get("target") == result["target"]
+            result["dismissed"] = previous.get("dismissed", False) and same_target
+            result["notified_all"] = previous.get("notified_all", False) and same_target
+            if result["total"] and result["ready"] == result["total"] and not result["notified_all"]:
+                result["notified_all"] = True
+                result["dismissed"] = False
+                self.toasts.show(f"Все моды сборки «{profile_name}» готовы к Minecraft {result['target']}!", "success",
+                                 "Перейти", lambda t=result["target"]: self.migrate_game_version(t), timeout=15000)
+                QApplication.alert(self)
+            elif not same_target:
+                self.toasts.show(f"Вышла Minecraft {result['target']}: готово {result['ready']} из {result['total']} модов.",
+                                 "info", "Подробнее", lambda t=result["target"]: self.migrate_game_version(t), timeout=10000)
+            profile["readiness"] = result
+        self.save_config()
+        if profile_name == self.current_profile_name:
+            self._show_readiness()
+
+    def _show_readiness(self):
+        data = self._profile().get("readiness")
+        visible = bool(data) and not data.get("dismissed") and self.content is MODS and not self.is_import_mode \
+            and data.get("target") != self.game_version
+        if visible:
+            t = self.tokens
+            ready, total = data["ready"], data["total"]
+            color = t["accent"] if ready == total else t["warning"]
+            missing = data.get("missing") or []
+            rest = f" Ещё не готовы: {', '.join(missing[:4])}" + (f" и ещё {len(missing) - 4}" if len(missing) > 4 else "") \
+                if missing else " Можно переходить."
+            self.readiness_text.setText(f"<b>Вышла Minecraft {data['target']}</b> — готово "
+                                        f"<span style='color:{color}'><b>{ready} из {total}</b></span> модов.{rest}")
+        self.readiness_banner.setVisible(visible)
+
+    def _dismiss_readiness(self):
+        data = self._profile().get("readiness")
+        if data:
+            data["dismissed"] = True
+            self.save_config()
+        self.readiness_banner.hide()
+
     # ================================================================== Мелочи для меню
 
     def _abandoned(self, entry: dict) -> bool:

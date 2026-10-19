@@ -213,8 +213,9 @@ class MigrationDialog(FramelessDialog):
     """
 
     def __init__(self, parent, tokens: dict, entries: List[Dict], game_version: str, loader: str,
-                 channel: UpdateChannel, run_task: Callable, content: ContentType = MODS):
+                 channel: UpdateChannel, run_task: Callable, content: ContentType = MODS, target: Optional[str] = None):
         super().__init__(parent, "Переход на другую версию Minecraft", 640)
+        self._preselect = target
         self.resize(700, 600)
         self.tokens = tokens
         self.entries = entries
@@ -269,7 +270,10 @@ class MigrationDialog(FramelessDialog):
     def _on_versions(self, versions: List[str]):
         self.version_combo.clear()
         self.version_combo.addItems(versions)
-        if versions and versions[0] != self._current:
+        if self._preselect and self._preselect in versions:  # Открыто из «Вышла новая версия» — сразу проверяем
+            self.version_combo.setCurrentText(self._preselect)
+            self._check()
+        elif versions and versions[0] != self._current:
             self.version_combo.setCurrentIndex(0)
         elif len(versions) > 1:
             self.version_combo.setCurrentIndex(1)

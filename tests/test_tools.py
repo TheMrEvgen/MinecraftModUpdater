@@ -214,3 +214,18 @@ def test_prepare_markdown_strips_images():
     result = prepare_markdown(text)
     assert "img" not in result and "![" not in result and "<center>" not in result
     assert result.startswith("#### Title") and "(https://discord.gg/x)" in result and "**More**" in result
+
+
+def test_readiness(monkeypatch):
+    import readiness
+    from enums import UpdateChannel
+    assert readiness.newer_release("1.21.11", ["1.21.12", "1.21.11", "1.21.10"]) == "1.21.12"
+    assert readiness.newer_release("1.21.12", ["1.21.12", "1.21.11"]) is None
+    assert readiness.newer_release("24w10a", ["1.21.12"]) is None  # Снапшоты не сравниваем
+    monkeypatch.setattr(readiness, "get_game_versions", lambda: ["1.21.12", "1.21.11"])
+    monkeypatch.setattr(readiness, "check_target_version", lambda entries, target, loader, channel, content: [
+        {"entry": entries[0], "version": {"id": "v"}}, {"entry": entries[1], "version": None}])
+    entries = [{"name": "A", "filepath": "a.jar", "sha1": "1"}, {"name": "B", "filepath": "b.jar", "sha1": "2"}]
+    result = readiness.check_readiness(entries, "1.21.11", "fabric", UpdateChannel.RELEASE)
+    assert result["target"] == "1.21.12" and (result["ready"], result["total"]) == (1, 2) and result["missing"] == ["B"]
+    assert readiness.needs_check(None) and not readiness.needs_check(result)

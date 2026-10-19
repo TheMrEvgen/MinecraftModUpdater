@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 
 import icons
-from theme import ACCENTS, DEFAULT_ACCENT
+from theme import ACCENTS, DEFAULT_ACCENT, THEME_TITLES
 from ui.shortcuts import ShortcutEditor
 from ui.widgets import EmptyState, button, label, refresh_button_icons
 from updater import KIND_LABELS, SNAPSHOT_REASONS
@@ -277,7 +277,7 @@ class SettingsPage(QWidget):
         card, body = self._card("Оформление")
         theme_row = QHBoxLayout()
         self.theme_group = QButtonGroup(self)
-        for i, (key, text) in enumerate((("system", "Как в системе"), ("dark", "Тёмная"), ("light", "Светлая"))):
+        for i, (key, text) in enumerate(THEME_TITLES.items()):
             radio = QRadioButton(text)
             radio.setProperty("theme_key", key)
             self.theme_group.addButton(radio, i)
@@ -322,6 +322,17 @@ class SettingsPage(QWidget):
         row.addWidget(label("применится после перезапуска", "Faint"))
         row.addStretch()
         body.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(label("Картинка в боковой панели:"))
+        self.sidebar_image_btn = button("Выбрать…", None, "image", tokens, "text")
+        self.sidebar_image_btn.clicked.connect(self._pick_sidebar_image)
+        self.sidebar_image_clear = button("Убрать", "GhostButton", "x", tokens, "text_muted")
+        self.sidebar_image_clear.clicked.connect(lambda: self._set_sidebar_image(""))
+        row.addWidget(self.sidebar_image_btn)
+        row.addWidget(self.sidebar_image_clear)
+        row.addStretch()
+        body.addLayout(row)
+        self._sidebar_image = ""
         self.minimal = QCheckBox("Режим «Минимум»")
         self.minimal.toggled.connect(self._emit)
         self._add_with_hint(body, self.minimal, "Только список модов и большая кнопка «Обновить все».")
@@ -543,6 +554,8 @@ class SettingsPage(QWidget):
         self.custom_accent.setText("Свой цвет ✓" if self._accent.startswith("#") else "Свой цвет…")
         self.scale.setCurrentIndex(max(0, self.scale.findData(int(settings.get("ui_scale", 100)))))
         self.minimal.setChecked(bool(settings.get("minimal_mode", False)))
+        self._sidebar_image = settings.get("sidebar_image") or ""
+        self.sidebar_image_clear.setVisible(bool(self._sidebar_image))
         self.per_profile.setChecked(bool(settings.get("per_profile_view", True)))
         self.abandoned.setChecked(bool(settings.get("abandoned_warning", True)))
         columns = set(settings.get("columns") or ())
@@ -593,6 +606,18 @@ class SettingsPage(QWidget):
     def set_backup_usage(self, text: str):
         self.backup_usage.setText(text)
 
+    def _pick_sidebar_image(self):
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Картинка для боковой панели", "",
+                                              "Картинки (*.png *.jpg *.jpeg *.webp *.bmp)")
+        if path:
+            self._set_sidebar_image(path)
+
+    def _set_sidebar_image(self, path: str):
+        self._sidebar_image = path
+        self.sidebar_image_clear.setVisible(bool(path))
+        self._emit()
+
     def _set_accent(self, accent: str):
         self._accent = accent
         self.custom_accent.setText("Свой цвет ✓" if accent.startswith("#") else "Свой цвет…")
@@ -626,6 +651,7 @@ class SettingsPage(QWidget):
                 "accent": self._accent,
                 "ui_scale": self.scale.currentData(),
                 "minimal_mode": self.minimal.isChecked(),
+                "sidebar_image": self._sidebar_image,
                 "per_profile_view": self.per_profile.isChecked(),
                 "abandoned_warning": self.abandoned.isChecked(),
                 "columns": [key for key, box in self.column_boxes.items() if box.isChecked()],

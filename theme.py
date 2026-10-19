@@ -6,6 +6,7 @@ from PyQt6.QtGui import QColor
 
 DARK = {
     "name": "dark",
+    "is_dark": True,
     "bg": "#0f1115",
     "sidebar": "#0b0d11",
     "surface": "#161920",
@@ -30,6 +31,7 @@ DARK = {
 
 LIGHT = {
     "name": "light",
+    "is_dark": False,
     "bg": "#f5f6f8",
     "sidebar": "#eceef2",
     "surface": "#ffffff",
@@ -52,7 +54,51 @@ LIGHT = {
     "shadow": "#1a2030",
 }
 
-THEMES = {"dark": DARK, "light": LIGHT}
+# Чистый чёрный для OLED-экранов: пиксели фона не светятся
+OLED = {
+    **DARK,
+    "name": "oled",
+    "bg": "#000000",
+    "sidebar": "#000000",
+    "surface": "#0a0a0a",
+    "surface2": "#141414",
+    "surface3": "#1e1e1e",
+    "border": "#1c1c1c",
+    "border_strong": "#2e2e2e",
+    "text": "#f2f2f2",
+    "text_muted": "#a0a0a0",
+    "text_faint": "#6e6e6e",
+    "selection": "#0b1a12",
+}
+
+# Высокий контраст: белые рамки, яркий жёлтый акцент, без полупрозрачных оттенков текста
+CONTRAST = {
+    **DARK,
+    "name": "contrast",
+    "bg": "#000000",
+    "sidebar": "#000000",
+    "surface": "#000000",
+    "surface2": "#1a1a1a",
+    "surface3": "#2e2e2e",
+    "border": "#bdbdbd",
+    "border_strong": "#ffffff",
+    "text": "#ffffff",
+    "text_muted": "#ebebeb",
+    "text_faint": "#cfcfcf",
+    "accent": "#ffd400",
+    "accent_hover": "#ffe04d",
+    "accent_pressed": "#d9b400",
+    "accent_text": "#000000",
+    "info": "#5cd6ff",
+    "warning": "#ffb020",
+    "danger": "#ff6b6b",
+    "success": "#4dff88",
+    "selection": "#332b00",
+}
+
+THEMES = {"dark": DARK, "light": LIGHT, "oled": OLED, "contrast": CONTRAST}
+THEME_TITLES = {"system": "Как в системе", "dark": "Тёмная", "light": "Светлая", "oled": "OLED (чёрная)",
+                "contrast": "Контрастная"}
 
 
 def rgba(hex_color: str, alpha: float) -> str:
@@ -253,7 +299,7 @@ def apply_window_frame_theme(widget, tokens: dict) -> None:
         from ctypes import wintypes
         hwnd = wintypes.HWND(int(widget.winId()))
         dwm = ctypes.windll.dwmapi
-        dark = ctypes.c_int(1 if tokens["name"] == "dark" else 0)
+        dark = ctypes.c_int(1 if tokens.get("is_dark", True) else 0)
         for attribute in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (новый и старый номер)
             if dwm.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(dark), ctypes.sizeof(dark)) == 0:
                 break
@@ -297,7 +343,7 @@ def make_tokens(theme_name: str, accent: str = DEFAULT_ACCENT) -> dict:
     if accent == DEFAULT_ACCENT or not accent:
         return tokens
     if accent in ACCENTS:
-        base = QColor(ACCENTS[accent][1 if tokens["name"] == "dark" else 2])
+        base = QColor(ACCENTS[accent][1 if tokens.get("is_dark", True) else 2])
     else:
         base = QColor(accent)
         if not base.isValid():
@@ -307,7 +353,7 @@ def make_tokens(theme_name: str, accent: str = DEFAULT_ACCENT) -> dict:
     tokens["accent_pressed"] = base.darker(118).name()
     tokens["accent_text"] = _accent_text_for(base)
     selection = QColor(tokens["surface"])
-    mix = 0.14 if tokens["name"] == "dark" else 0.12
+    mix = 0.14 if tokens.get("is_dark", True) else 0.12
     tokens["selection"] = QColor.fromRgbF(
         selection.redF() * (1 - mix) + base.redF() * mix, selection.greenF() * (1 - mix) + base.greenF() * mix,
         selection.blueF() * (1 - mix) + base.blueF() * mix).name()

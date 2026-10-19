@@ -339,6 +339,26 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self.banner.hide()
         layout.addWidget(self.banner)
 
+        # --- Вышла новая версия Minecraft ---
+        self.readiness_banner = QFrame()
+        self.readiness_banner.setObjectName("Banner")
+        readiness = QHBoxLayout(self.readiness_banner)
+        readiness.setContentsMargins(14, 8, 8, 8)
+        self.readiness_icon = QLabel()
+        self.readiness_text = label("", None, wrap=True)
+        self.readiness_text.setTextFormat(Qt.TextFormat.RichText)
+        self.readiness_more = button("Подробнее", None, "trending_up", t, "text")
+        self.readiness_more.clicked.connect(lambda: self.migrate_game_version(self._profile().get("readiness", {}).get("target")))
+        self.readiness_close = button("", "IconButton", "x", t, "text_muted", "Скрыть до следующей версии")
+        self.readiness_close.setFixedSize(30, 30)
+        self.readiness_close.clicked.connect(self._dismiss_readiness)
+        readiness.addWidget(self.readiness_icon)
+        readiness.addWidget(self.readiness_text, 1)
+        readiness.addWidget(self.readiness_more)
+        readiness.addWidget(self.readiness_close)
+        self.readiness_banner.hide()
+        layout.addWidget(self.readiness_banner)
+
         # --- Поиск проблемного мода (шаги) ---
         self.bisect_banner = BisectBanner(t)
         self.bisect_banner.answered.connect(self._on_bisect_answer)
@@ -486,6 +506,8 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
                        self.drop_overlay, self.toasts, self.catalog_page, self.palette, self.stats_page):
             widget.set_tokens(t)
         refresh_button_icons(self.bisect_banner, t)
+        self.readiness_icon.setPixmap(icons.pixmap("trending_up", t["info"], 18))
+        self.sidebar.set_background(self.settings.get("sidebar_image") or "")
         style_segments(self.content_group, t)
         for card in self.cards.values():
             card.set_tokens(t)
@@ -693,6 +715,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self._restore_profile_view()
         self._load_content()
         self._restore_bisect_banner()
+        self._show_readiness()
 
     def _resolve_versions(self, profile: dict):
         """Определяет версию игры и загрузчик: из настроек сборки или по папке versions."""
@@ -863,10 +886,20 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
     def _on_settings_changed(self, settings: dict):
         view_keys = ("view_mode", "compact_rows", "expand_dependencies", "group_by_status", "columns", "abandoned_warning")
         view_changed = any(self.settings.get(k) != settings.get(k) for k in view_keys if k in settings)
-        accent_changed = settings.get("accent") != self.settings.get("accent")
+        accent_changed = settings.get("accent") != self.settings.get("accent") or \
+            settings.get("sidebar_image") != self.settings.get("sidebar_image")
         scale_changed = settings.get("ui_scale") != self.settings.get("ui_scale")
         minimal_changed = settings.get("minimal_mode") != self.settings.get("minimal_mode")
         shortcuts_changed = settings.get("shortcuts") != self.settings.get("shortcuts")
+        image = settings.get("sidebar_image")
+        if image and os.path.isfile(image) and os.path.dirname(os.path.abspath(image)) != os.path.abspath(app_config.CONFIG_DIR):
+            # Копия в папке программы: картинка не пропадёт, если исходный файл переместят
+            target = os.path.join(app_config.CONFIG_DIR, "sidebar_background" + os.path.splitext(image)[1].lower())
+            try:
+                shutil.copyfile(image, target)
+                settings["sidebar_image"] = target
+            except OSError as e:
+                logging.warning(f"Не удалось скопировать картинку боковой панели: {e}")
         if self.settings.get("per_profile_view", True) and "view_mode" in settings:
             self._profile()["view_mode"] = settings["view_mode"]  # Вид запоминается для текущей сборки
         self.settings.update(settings)
@@ -1495,6 +1528,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         if problems:
             self.toasts.show(f"Найдены проблемы с зависимостями: {problems}", "warning", "Показать",
                              lambda: self._set_category(CAT_PROBLEMS), timeout=8000)
+        self._maybe_check_readiness()
 
     def _run_task(self, func, args, on_success: Callable, on_failure: Callable, busy_text: Optional[str]):
         """Разовая блокирующая операция в фоне. busy_text=None — не блокировать интерфейс (поиск в каталоге)."""
@@ -2245,12 +2279,12 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
 
     # ================================================================== Переход на другую версию Minecraft
 
-    def migrate_game_version(self):
+    def migrate_game_version(self, target: Optional[str] = None):
         if self._busy or not self.mods_data or self.content is not MODS or self.is_import_mode:
             return
         entries = [e for e in self._count_items if e.get("filepath")]
         dialog = MigrationDialog(self, self.tokens, entries, self.game_version, self.loader, self._channel(),
-                                 self._run_task, self.content)
+                                 self._run_task, self.content, target if isinstance(target, str) else None)
         if not dialog.exec() or not dialog.results:
             return
         target = dialog.target
@@ -2402,6 +2436,8 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
             Command("Режим «Минимум»: вкл/выкл", self._toggle_minimal, "list", group="Оформление"),
             Command("Тёмная тема", lambda: self._set_theme_from_palette("dark"), "moon", group="Оформление"),
             Command("Светлая тема", lambda: self._set_theme_from_palette("light"), "sun", group="Оформление"),
+            Command("Тема OLED (чёрная)", lambda: self._set_theme_from_palette("oled"), "moon", group="Оформление"),
+            Command("Контрастная тема", lambda: self._set_theme_from_palette("contrast"), "sun", group="Оформление"),
             Command("Тема как в системе", lambda: self._set_theme_from_palette("system"), "settings", group="Оформление"),
         ]
         for mode, (icon_name, title) in {"flat": ("list", "Все моды и зависимости"), "mine": ("user", "Только мои моды"),

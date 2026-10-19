@@ -542,6 +542,31 @@ class Sidebar(QFrame):
         self.nav_group.idClicked.connect(self._on_nav)
         self.set_tokens(tokens)
 
+    def set_background(self, path: str):
+        """Своя картинка под боковой панелью (с затемнением, чтобы текст оставался читаемым)."""
+        from PyQt6.QtGui import QPixmap
+        self._background = QPixmap(path) if path else None
+        if self._background is not None and self._background.isNull():
+            self._background = None
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        background = getattr(self, "_background", None)
+        if not background:
+            return
+        from PyQt6.QtGui import QLinearGradient
+        p = QPainter(self)
+        scaled = background.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                   Qt.TransformationMode.SmoothTransformation)
+        p.drawPixmap((self.width() - scaled.width()) // 2, (self.height() - scaled.height()) // 2, scaled)
+        gradient = QLinearGradient(0, 0, 0, self.height())  # Сверху и снизу темнее — там текст и кнопки
+        gradient.setColorAt(0.0, qcolor(self.tokens["sidebar"], 0.88))
+        gradient.setColorAt(0.45, qcolor(self.tokens["sidebar"], 0.62))
+        gradient.setColorAt(1.0, qcolor(self.tokens["sidebar"], 0.9))
+        p.fillRect(self.rect(), gradient)
+        p.end()
+
     def set_tokens(self, tokens: dict):
         self.tokens = tokens
         self.profile_delegate.tokens = tokens
