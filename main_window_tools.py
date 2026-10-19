@@ -10,6 +10,7 @@ import copy
 import logging
 import math
 import os
+import time
 import sys
 from typing import Callable, Dict, List, Optional
 
@@ -415,9 +416,23 @@ class ToolsMixin:
                                       [name_of[e["filepath"]] for e in mods if e.get("disabled")], requires)
         if not self._confirm_game_not_running([e["filepath"] for e in mods]):
             return
+        auto = False
+        if self._auto_bisect_available():
+            plan = self._launch_plan()
+            choice = ask_choice(self, QMessageBox.Icon.Question, "Как проверять запуск?",
+                                f"<b>Автоматически</b> — программа сама запускает игру через {plan.title}, ждёт главного "
+                                "меню или вылета, закрывает игру и делает следующий шаг. Подходит, если игра "
+                                "<b>вылетает при запуске</b>.<br><br><b>Вручную</b> — игру запускаете вы и отвечаете "
+                                "кнопками. Подходит для любой проблемы, в том числе в мире.",
+                                ["Автоматически", "Вручную", "Отмена"], default=0, rich_text=True)
+            if choice not in (0, 1):
+                return
+            auto = choice == 0
         self._profile()["bisect"] = session.to_dict()
         self.save_config()
         self._apply_bisect_state(session)
+        if auto:
+            self._start_auto_step()
 
     def _bisect_session(self) -> Optional[BisectSession]:
         data = self._profile().get("bisect")
@@ -464,6 +479,7 @@ class ToolsMixin:
         self._apply_bisect_state(session)
 
     def _finish_bisect(self, keep_culprit_disabled: bool):
+        self._auto_bisect = None
         session = self._bisect_session()
         self._profile().pop("bisect", None)
         self.save_config()
@@ -493,11 +509,12 @@ class ToolsMixin:
 
     # ================================================================== Разбор краша
 
-    def _show_crash_dialog(self):
+    def _show_crash_dialog(self, preferred: Optional[str] = None):
         game_dir = self._profile().get("mods_path", "")
         if not game_dir:
             return
-        dialog = CrashDialog(self, self.tokens, find_crash_files(game_dir), self._installed_mods(), self._run_task)
+        dialog = CrashDialog(self, self.tokens, find_crash_files(game_dir), self._installed_mods(), self._run_task,
+                             preferred if isinstance(preferred, str) else None)
         dialog.disable_requested.connect(lambda e: self._toggle_disabled([e]))
         dialog.show_requested.connect(self._show_entry_in_list)
         dialog.bisect_requested.connect(self._start_bisect)
@@ -967,3 +984,179 @@ class ToolsMixin:
 
     def _preset_key(self, entry: dict) -> str:
         return preset_key(entry)
+
+    # ================================================================== Игра: запуск, наблюдение, вылеты
+
+    def _game_dir(self) -> str:
+        return self._profile().get("mods_path", "")
+
+    def _launch_plan(self):
+        import game_runner
+        return game_runner.launch_plan(self._profile())
+
+    def _refresh_play_button(self):
+        plan = self._launch_plan()
+        running = self._game_running
+        self.play_btn.setVisible(bool(self._game_dir()))
+        if running:
+            self.play_btn.setText("Игра запущена")
+            self.play_btn.setEnabled(False)
+        else:
+            self.play_btn.setText("Играть")
+            self.play_btn.setEnabled(bool(plan) and not self._busy and not self._auto_bisect)
+        tip = (f"Запустить сборку ({plan.title})" if plan and plan.opens_instance else
+               f"Открыть {plan.title} (выберите сборку там)" if plan else
+               "Не удалось найти лаунчер — укажите команду запуска в настройках сборки")
+        self.play_btn.setToolTip(tip)
+
+    def _play(self):
+        import game_runner
+        plan = self._launch_plan()
+        if not plan:
+            self.toasts.show("Не удалось найти лаунчер для этой сборки.", "warning", "Настроить", self._edit_current_profile)
+            return
+        try:
+            game_runner.launch(plan)
+        except OSError as e:
+            show_message(self, QMessageBox.Icon.Critical, "Не удалось запустить", str(e))
+            return
+        self._launched_at = time.time()
+        self.toasts.show(f"Запускаем игру через {plan.title}…" if plan.opens_instance else
+                         f"Открыт {plan.title} — запустите сборку «{self.current_profile_name}» там.", "info")
+
+    def _poll_game(self):
+        """Раз в несколько секунд: запущена ли игра этой сборки (файлы модов заняты) и не вылетела ли она."""
+        import game_runner
+        from updater import is_game_running
+        game_dir = self._game_dir()
+        mods = MODS.path(game_dir)
+        if not game_dir or not os.path.isdir(mods) or self._busy == "update":
+            return
+        running = is_game_running(mods)
+        if self._auto_bisect:
+            self._auto_bisect_poll(running)
+            return
+        if running and not self._game_running:
+            self._game_started_at = self._launched_at or time.time()
+            self._set_game_running(True)
+        elif not running and self._game_running:
+            self._set_game_running(False)
+            self._after_game_exit(self._game_started_at)
+        elif not running and self._launched_at and time.time() - self._launched_at < 300:
+            # Игра могла упасть ещё до того, как заняла файлы модов (ошибка загрузчика)
+            state = game_runner.run_state(game_dir, self._launched_at)
+            if state.crashed:
+                launched, self._launched_at = self._launched_at, None
+                self._after_game_exit(launched, state)
+
+    def _set_game_running(self, running: bool):
+        self._game_running = running
+        self.game_banner.setVisible(running)
+        self._refresh_play_button()
+        self._refresh_actions()
+
+    def _after_game_exit(self, started_at: Optional[float], state=None):
+        import game_runner
+        self._launched_at = None
+        game_dir = self._game_dir()
+        state = state or game_runner.run_state(game_dir, started_at or time.time() - 3600)
+        if not state.crashed:
+            return
+        logging.info(f"Игра завершилась с ошибкой: {state.reason}")
+        QApplication.alert(self)
+        if self.settings.get("auto_crash_analysis", True):
+            self.toasts.show("Игра вылетела — открываем разбор.", "warning")
+            self._show_crash_dialog(preferred=state.crash_file)
+        else:
+            self.toasts.show("Игра вылетела.", "warning", "Разобрать", lambda: self._show_crash_dialog(state.crash_file),
+                             timeout=12000)
+
+    def _stop_game(self):
+        import game_runner
+        if confirm(self, "Закрыть игру", "Закрыть Minecraft этой сборки? Несохранённый прогресс в мире может потеряться.",
+                   "Закрыть", "Отмена"):
+            self._run_task(game_runner.stop_game, (self._game_dir(),),
+                           lambda n: self.toasts.show("Игра закрыта." if n else "Процесс игры не найден.", "info"),
+                           lambda e: self.toasts.show(f"Не удалось закрыть игру: {e}", "error"), None)
+
+    # ================================================================== Автоматический поиск проблемного мода
+
+    def _auto_bisect_available(self) -> bool:
+        plan = self._launch_plan()
+        return bool(plan and plan.opens_instance)
+
+    def _start_auto_step(self):
+        """Шаг автопоиска: состояние модов уже применено — запускаем игру и ждём меню или вылета."""
+        import game_runner
+        session = self._bisect_session()
+        if not session or session.done:
+            self._auto_bisect = None
+            return
+        plan = self._launch_plan()
+        self._auto_bisect = {"phase": "starting", "since": time.time(), "seen_running": False}
+        try:
+            game_runner.launch(plan)
+        except OSError as e:
+            self._auto_bisect = None
+            show_message(self, QMessageBox.Icon.Critical, "Не удалось запустить игру", str(e))
+            self._restore_bisect_banner()
+            return
+        self._show_auto_status("запускаем игру и ждём главного меню…")
+
+    def _show_auto_status(self, text: str):
+        session = self._bisect_session()
+        if session:
+            self.bisect_banner.show_auto(session.step + 1, session.step + session.steps_left(),
+                                         len(session.disabled_now), len(session.suspects), text)
+
+    def _auto_bisect_poll(self, running: bool):
+        import game_runner
+        auto = self._auto_bisect
+        if not auto or auto.get("phase") != "starting":
+            return
+        auto["seen_running"] = auto["seen_running"] or running
+        state = game_runner.run_state(self._game_dir(), auto["since"])
+        timeout = int(self.settings.get("auto_bisect_timeout", 5)) * 60
+        if state.crashed:
+            self._auto_answer(True, f"вылет ({state.reason})")
+        elif state.reached_menu:
+            self._auto_answer(False, "игра дошла до меню")
+        elif auto["seen_running"] and not running:
+            self._auto_answer(True, "игра закрылась, не дойдя до меню")
+        elif time.time() - auto["since"] > timeout:
+            self._auto_bisect = None
+            self.toasts.show("Игра не загрузилась за отведённое время — ответьте на этот шаг вручную.", "warning")
+            self._restore_bisect_banner()
+        elif auto["seen_running"]:
+            self._show_auto_status("игра загружается…")
+
+    def _auto_answer(self, problem_persists: bool, reason: str):
+        import game_runner
+        self._auto_bisect["phase"] = "stopping"
+        logging.info(f"Автопоиск: {reason} → проблема {'осталась' if problem_persists else 'пропала'}")
+        self._show_auto_status(f"{reason}; закрываем игру…")
+        game_dir = self._game_dir()
+
+        def wait_closed():
+            from updater import is_game_running
+            game_runner.stop_game(game_dir)
+            deadline = time.time() + 30
+            while is_game_running(MODS.path(game_dir)) and time.time() < deadline:
+                time.sleep(1)
+
+        def next_step(_=None):
+            if not self._auto_bisect:  # Остановлено пользователем
+                return
+            self._on_bisect_answer(problem_persists)
+            session = self._bisect_session()
+            if session and not session.done:
+                self._start_auto_step()
+            else:
+                self._auto_bisect = None
+
+        self._run_task(wait_closed, (), next_step, lambda e: next_step(), None)
+
+    def _stop_auto_bisect(self):
+        self._auto_bisect = None
+        self.toasts.show("Автоматический поиск остановлен — продолжайте вручную или прервите поиск.", "info")
+        self._restore_bisect_banner()

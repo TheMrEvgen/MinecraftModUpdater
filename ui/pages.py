@@ -449,6 +449,23 @@ class SettingsPage(QWidget):
         body.addLayout(row)
         root.addWidget(card)
 
+        # Игра
+        card, body = self._card("Игра")
+        self.auto_crash = QCheckBox("Открывать разбор, если игра вылетела")
+        self.auto_crash.toggled.connect(self._emit)
+        self._add_with_hint(body, self.auto_crash, "Программа следит за игрой этой сборки (по занятым файлам модов и логу) "
+                            "и после вылета сама показывает, какие моды упоминаются в ошибке.")
+        row = QHBoxLayout()
+        row.addWidget(label("Автопоиск проблемного мода: ждать загрузку игры до"))
+        self.bisect_timeout = QComboBox()
+        for minutes in (2, 3, 5, 8, 12):
+            self.bisect_timeout.addItem(f"{minutes} мин", minutes)
+        self.bisect_timeout.currentIndexChanged.connect(self._emit)
+        row.addWidget(self.bisect_timeout)
+        row.addStretch()
+        body.addLayout(row)
+        root.addWidget(card)
+
         # Лаунчеры
         card, body = self._card("Лаунчеры")
         body.addWidget(label("Сборки из Prism Launcher, MultiMC, Modrinth App, CurseForge и официального "
@@ -554,6 +571,8 @@ class SettingsPage(QWidget):
         self.custom_accent.setText("Свой цвет ✓" if self._accent.startswith("#") else "Свой цвет…")
         self.scale.setCurrentIndex(max(0, self.scale.findData(int(settings.get("ui_scale", 100)))))
         self.minimal.setChecked(bool(settings.get("minimal_mode", False)))
+        self.auto_crash.setChecked(bool(settings.get("auto_crash_analysis", True)))
+        self.bisect_timeout.setCurrentIndex(max(0, self.bisect_timeout.findData(int(settings.get("auto_bisect_timeout", 5)))))
         self._sidebar_image = settings.get("sidebar_image") or ""
         self.sidebar_image_clear.setVisible(bool(self._sidebar_image))
         self.per_profile.setChecked(bool(settings.get("per_profile_view", True)))
@@ -651,6 +670,8 @@ class SettingsPage(QWidget):
                 "accent": self._accent,
                 "ui_scale": self.scale.currentData(),
                 "minimal_mode": self.minimal.isChecked(),
+                "auto_crash_analysis": self.auto_crash.isChecked(),
+                "auto_bisect_timeout": self.bisect_timeout.currentData(),
                 "sidebar_image": self._sidebar_image,
                 "per_profile_view": self.per_profile.isChecked(),
                 "abandoned_warning": self.abandoned.isChecked(),

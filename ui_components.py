@@ -382,6 +382,11 @@ class ProfileDialog(QDialog):
             self.icon_combo.addItem(title, key)
         self.icon_combo.setCurrentIndex(max(0, self.icon_combo.findData(self.profile.get("icon") or "")))
         form.addRow("Значок", self.icon_combo)
+        self.launch_edit = QLineEdit(self.profile.get("launch_command") or "")
+        self.launch_edit.setPlaceholderText("Необязательно: своя команда для кнопки «Играть»")
+        self.launch_edit.setToolTip("Prism, MultiMC и официальный лаунчер находятся сами. Здесь можно указать свою "
+                                    'команду, например: "C:\\Games\\launcher.exe" --profile Survival')
+        form.addRow("Запуск игры", self.launch_edit)
         layout.addLayout(form)
 
         self.error_label = QLabel()
@@ -472,6 +477,7 @@ class ProfileDialog(QDialog):
             "group": self.group_combo.currentText().strip(),
             "color": self.color_combo.currentData() or "",
             "icon": self.icon_combo.currentData() or "",
+            "launch_command": self.launch_edit.text().strip(),
         })
         profile.setdefault("source", "manual")
         return self.name_edit.text().strip(), profile

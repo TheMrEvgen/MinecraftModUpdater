@@ -31,7 +31,8 @@ class CrashDialog(FramelessDialog):
     show_requested = pyqtSignal(object)
     bisect_requested = pyqtSignal()
 
-    def __init__(self, parent, tokens: dict, files: List[str], entries: List[Dict], run_task: Callable):
+    def __init__(self, parent, tokens: dict, files: List[str], entries: List[Dict], run_task: Callable,
+                 preferred: str = None):
         super().__init__(parent, "Почему упала игра", 680)
         self.resize(760, 620)
         self.tokens = tokens
@@ -46,6 +47,12 @@ class CrashDialog(FramelessDialog):
         for path in files:
             name = os.path.basename(path)
             self.file_combo.addItem(name if name != "latest.log" else "latest.log — лог последнего запуска", path)
+        if preferred:
+            index = self.file_combo.findData(preferred)
+            if index < 0 and os.path.isfile(preferred):
+                self.file_combo.insertItem(0, os.path.basename(preferred), preferred)
+                index = 0
+            self.file_combo.setCurrentIndex(max(0, index))
         self.file_combo.currentIndexChanged.connect(self._analyze)
         row.addWidget(self.file_combo, 1)
         self.open_btn = button("", "IconButton", "external", tokens, "text_muted", "Открыть файл")
@@ -138,6 +145,7 @@ class BisectBanner(QFrame):
     """Плашка над списком модов на время поиска: шаг, вопрос и кнопки ответа."""
     answered = pyqtSignal(bool)     # True — проблема осталась
     cancel_requested = pyqtSignal()
+    auto_stop_requested = pyqtSignal()
     finish_requested = pyqtSignal(bool)  # True — оставить виновника выключенным
 
     def __init__(self, tokens: dict, parent=None):
@@ -158,13 +166,16 @@ class BisectBanner(QFrame):
         self.stop = button("Прервать", "GhostButton", "x", tokens, "text_muted", "Вернуть все моды как было")
         self.keep = button("Выключить его, остальное вернуть", "PrimaryButton", "power", tokens, "accent_text")
         self.restore = button("Вернуть всё как было", None, "undo", tokens, "text")
+        self.auto_stop = button("Остановить автопоиск", "GhostButton", "square", tokens, "text_muted")
+        self.auto_stop.clicked.connect(self.auto_stop_requested)
         self.yes.clicked.connect(lambda: self.answered.emit(True))
         self.no.clicked.connect(lambda: self.answered.emit(False))
         self.stop.clicked.connect(self.cancel_requested)
         self.keep.clicked.connect(lambda: self.finish_requested.emit(True))
         self.restore.clicked.connect(lambda: self.finish_requested.emit(False))
-        for b in (self.yes, self.no, self.stop, self.keep, self.restore):
+        for b in (self.yes, self.no, self.stop, self.keep, self.restore, self.auto_stop):
             layout.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.auto_stop.hide()
         self.hide()
 
     def show_step(self, step: int, total_steps: int, disabled: int, suspects: int):
@@ -173,13 +184,21 @@ class BisectBanner(QFrame):
                           "осталась ли проблема.")
         for b in (self.yes, self.no, self.stop):
             b.show()
-        for b in (self.keep, self.restore):
+        for b in (self.keep, self.restore, self.auto_stop):
             b.hide()
+        self.show()
+
+    def show_auto(self, step: int, total_steps: int, disabled: int, suspects: int, status: str):
+        self.text.setText(f"<b>Автоматический поиск — шаг {step} из ~{total_steps}.</b> Выключено модов: {disabled}, "
+                          f"подозреваемых: {suspects}.<br>Сейчас: {status} Ничего нажимать не нужно.")
+        for b in (self.yes, self.no, self.stop, self.keep, self.restore):
+            b.hide()
+        self.auto_stop.show()
         self.show()
 
     def show_result(self, name: str):
         self.text.setText(f"<b>Виновник найден: {name}.</b> Выключите его — остальные моды вернутся в прежнее состояние.")
-        for b in (self.yes, self.no, self.stop):
+        for b in (self.yes, self.no, self.stop, self.auto_stop):
             b.hide()
         for b in (self.keep, self.restore):
             b.show()

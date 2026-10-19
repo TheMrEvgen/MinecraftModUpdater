@@ -221,6 +221,10 @@ QListWidget::item:hover {{ background: {t['surface2']}; }}
 #GalleryArrow {{ background: {rgba(t['surface3'], 0.92)}; border: 1px solid {t['border_strong']};
                  border-radius: 16px; }}
 #GalleryArrow:hover {{ background: {t['surface2']}; border-color: {t['accent']}; }}
+#PlayButton {{ background: {rgba(t['accent'], 0.14)}; border: 1px solid {rgba(t['accent'], 0.45)}; color: {t['accent']};
+               font-weight: 600; padding: 6px 14px; border-radius: 8px; }}
+#PlayButton:hover {{ background: {rgba(t['accent'], 0.24)}; }}
+#PlayButton:disabled {{ background: {t['surface2']}; border-color: {t['border']}; color: {t['text_muted']}; }}
 #WarningText {{ color: {t['warning']}; }}
 #Segment {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 9px; padding: 7px 14px;
             color: {t['text_muted']}; font-weight: 600; }}

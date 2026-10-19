@@ -111,6 +111,10 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self.last_seen: Dict[str, Dict[str, str]] = cfg["last_seen"]
         self._seen_baseline = {k: dict(v) for k, v in self.last_seen.items()}  # Что было при прошлом запуске
         self._undo: List[tuple] = []
+        self._game_running = False
+        self._launched_at: Optional[float] = None      # Когда игру запустили кнопкой «Играть»
+        self._game_started_at: Optional[float] = None
+        self._auto_bisect: Optional[dict] = None       # Состояние автоматического поиска проблемного мода
         self._undoing = False
         self._minimal = False
         self.tokens = make_tokens(self._resolve_theme(), self.settings.get("accent"))
@@ -167,6 +171,9 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self._refresh_sidebar()
         QTimer.singleShot(0, lambda: self._load_profile(self.current_profile_name))
         QTimer.singleShot(4000, self._offer_install)
+        self._game_timer = QTimer(self, interval=2000)  # Наблюдение за игрой: запущена ли, не вылетела ли
+        self._game_timer.timeout.connect(self._poll_game)
+        self._game_timer.start()
 
     # ================================================================== Построение интерфейса
 
@@ -248,6 +255,10 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self.edit_btn.clicked.connect(self._edit_current_profile)
         header.addWidget(self.edit_btn)
         header.addStretch()
+        self.play_btn = button("Играть", "PlayButton", "play", t, "accent", "Запустить сборку")
+        self.play_btn.clicked.connect(self._play)
+        self.play_btn.setMinimumHeight(36)
+        header.addWidget(self.play_btn)
         self.check_btn = button("Проверить", None, "refresh", t, "text", "Проверить обновления (F5)")
         self.check_btn.clicked.connect(self._on_check_clicked)
         self.update_all_btn = button("Обновить все", "PrimaryButton", "download", t, "accent_text")
@@ -339,6 +350,20 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self.banner.hide()
         layout.addWidget(self.banner)
 
+        # --- Игра запущена ---
+        self.game_banner = QFrame()
+        self.game_banner.setObjectName("Banner")
+        game_row = QHBoxLayout(self.game_banner)
+        game_row.setContentsMargins(14, 8, 8, 8)
+        self.game_icon = QLabel()
+        game_row.addWidget(self.game_icon)
+        game_row.addWidget(label("<b>Игра запущена</b> — изменения модов заблокированы, пока она открыта.", None, True), 1)
+        stop = button("Закрыть игру", None, "square", t, "text")
+        stop.clicked.connect(self._stop_game)
+        game_row.addWidget(stop)
+        self.game_banner.hide()
+        layout.addWidget(self.game_banner)
+
         # --- Вышла новая версия Minecraft ---
         self.readiness_banner = QFrame()
         self.readiness_banner.setObjectName("Banner")
@@ -364,6 +389,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self.bisect_banner.answered.connect(self._on_bisect_answer)
         self.bisect_banner.cancel_requested.connect(self._cancel_bisect)
         self.bisect_banner.finish_requested.connect(self._finish_bisect)
+        self.bisect_banner.auto_stop_requested.connect(self._stop_auto_bisect)
         layout.addWidget(self.bisect_banner)
 
         # --- Карточки-сводки (фильтры) ---
@@ -507,6 +533,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
             widget.set_tokens(t)
         refresh_button_icons(self.bisect_banner, t)
         self.readiness_icon.setPixmap(icons.pixmap("trending_up", t["info"], 18))
+        self.game_icon.setPixmap(icons.pixmap("play", t["accent"], 18))
         self.sidebar.set_background(self.settings.get("sidebar_image") or "")
         style_segments(self.content_group, t)
         for card in self.cards.values():
@@ -646,6 +673,10 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
     def _on_profile_selected(self, name: str):
         if name == self.current_profile_name:
             return
+        if self._auto_bisect:
+            self.toasts.show("Идёт автоматический поиск проблемного мода — остановите его, чтобы сменить сборку.", "warning")
+            self._refresh_sidebar()
+            return
         if self._busy:
             self.toasts.show("Дождитесь окончания текущей операции.", "warning")
             self._refresh_sidebar()
@@ -716,6 +747,9 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self._load_content()
         self._restore_bisect_banner()
         self._show_readiness()
+        self._game_running = False
+        self.game_banner.hide()
+        self._refresh_play_button()
 
     def _resolve_versions(self, profile: dict):
         """Определяет версию игры и загрузчик: из настроек сборки или по папке versions."""
@@ -1071,6 +1105,12 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self.check_btn.setProperty("icon_name", "x" if scanning else "refresh")
         self.check_btn.setIcon(icons.icon("x" if scanning else "refresh", self.tokens["text"], 16))
         self.check_btn.setEnabled((scanning or not busy) and bool(self.mods_path) and not self.is_import_mode)
+        if self._game_running:
+            self.update_all_btn.setEnabled(False)
+            self.update_all_btn.setToolTip("Закройте игру, чтобы обновлять моды")
+        else:
+            self.update_all_btn.setToolTip("")
+        self._refresh_play_button()
         self.more_btn.setEnabled(not busy)
         self.edit_btn.setEnabled(not busy)
         self.sidebar.add_btn.setEnabled(not busy)
@@ -1573,6 +1613,12 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self.start_update([e for e in self._checked_entries() if e.get("download_url")])
 
     def _confirm_game_not_running(self, paths: List[str]) -> bool:
+        if self._game_running:
+            self.toasts.show("Игра запущена — закройте её, чтобы менять моды.", "warning", "Закрыть игру", self._stop_game)
+            return False
+        return self._ask_game_not_running(paths)
+
+    def _ask_game_not_running(self, paths: List[str]) -> bool:
         while True:
             locked = find_locked_files([p for p in paths if p])
             if not locked and not is_game_running(self.mods_path):
