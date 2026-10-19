@@ -76,7 +76,7 @@ VSVersionInfo(
 # Модули Qt, которые приложение не использует: исключаем, чтобы уменьшить размер сборки
 EXCLUDED_MODULES = [
     "PyQt6.QtWebEngineCore", "PyQt6.QtWebEngineWidgets", "PyQt6.QtQml", "PyQt6.QtQuick",
-    "PyQt6.QtMultimedia", "PyQt6.QtNetwork", "PyQt6.QtSql", "PyQt6.QtBluetooth",
+    "PyQt6.QtMultimedia", "PyQt6.QtSql", "PyQt6.QtBluetooth",  # QtNetwork нужен: связь с уже запущенной копией
     "PyQt6.QtDesigner", "PyQt6.QtOpenGL", "PyQt6.QtOpenGLWidgets", "tkinter", "unittest", "pytest",
 ]
 

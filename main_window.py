@@ -89,6 +89,7 @@ class QtLogHandler(logging.Handler):
 
 class ModUpdaterApp(ToolsMixin, QMainWindow):
     PAGE_MODS_INDEX, PAGE_CATALOG_INDEX, PAGE_HISTORY_INDEX, PAGE_STATS_INDEX = PAGE_MODS, PAGE_CATALOG, PAGE_HISTORY, PAGE_STATS
+    PAGE_SETTINGS_INDEX = PAGE_SETTINGS
 
     def __init__(self):
         super().__init__()
@@ -165,6 +166,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
             self._merge_discovered(discover_instances())
         self._refresh_sidebar()
         QTimer.singleShot(0, lambda: self._load_profile(self.current_profile_name))
+        QTimer.singleShot(4000, self._offer_install)
 
     # ================================================================== Построение интерфейса
 
@@ -222,6 +224,8 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self.settings_page.export_requested.connect(self._export_settings)
         self.settings_page.import_requested.connect(self._import_settings)
         self.settings_page.prune_backups_requested.connect(lambda: self._prune_backups(manual=True))
+        self.settings_page.install_requested.connect(self._install_app)
+        self.settings_page.uninstall_requested.connect(self._uninstall_app)
         self.stack.addWidget(self.settings_page)
 
         self.toasts = ToastManager(root, t)
@@ -909,6 +913,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         elif page == PAGE_SETTINGS:
             self.settings_page.load(self.config_theme, {**self.settings, "view_mode": self._view_mode()})
             self.settings_page.set_backup_usage(self._backup_usage_text())
+            self._refresh_install_ui()
 
     def _refresh_history(self):
         if not self.mods_path:

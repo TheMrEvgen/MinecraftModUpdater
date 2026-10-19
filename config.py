@@ -19,6 +19,9 @@ CACHE_DIR = os.path.join(CONFIG_DIR, "cache")
 CACHE_FILE = os.path.join(CACHE_DIR, "mod_cache.db")
 ICON_CACHE_DIR = os.path.join(CACHE_DIR, "icons96")
 APP_VERSION = "3.0.0-beta"
+# Репозиторий на GitHub для «Сообщить об ошибке» (owner/repo). Пусто — кнопка не показывается.
+GITHUB_REPOSITORY = ""
+CURRENT_LOG: str = ""  # Путь к логу текущего запуска (для отчёта о сбое)
 LOG_DIR = os.path.join(CONFIG_DIR, "logs")
 
 DEFAULT_GAME_VERSION = "1.21.11"
@@ -183,6 +186,8 @@ def setup_file_logging(log_name: str, level=logging.DEBUG) -> str:
     root.addHandler(handler)
     # urllib3 слишком подробно пишет в DEBUG
     logging.getLogger("urllib3").setLevel(logging.INFO)
+    global CURRENT_LOG
+    CURRENT_LOG = log_path
     return log_path
 
 

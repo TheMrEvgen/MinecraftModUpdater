@@ -803,6 +803,99 @@ class ToolsMixin:
         if QProcess.startDetached(sys.executable, args):
             QApplication.instance().closeAllWindows()
 
+    # ================================================================== Установка и внешние ссылки
+
+    def _refresh_install_ui(self):
+        import installer
+        supported = installer.supported()
+        self.settings_page.set_install_state(supported, installer.state() if supported else None)
+
+    def _offer_install(self):
+        """Один раз предлагаем установить программу, если она запущена просто как .exe."""
+        import installer
+        if not installer.supported() or self.settings.get("install_offered") or installer.state().installed:
+            return
+        self.settings["install_offered"] = True
+        self.save_config()
+        self.toasts.show("Установите программу: ярлыки, открытие .mrpack двойным щелчком и ссылки modupdater://.",
+                         "info", "Подробнее", lambda: self._switch_page(self.PAGE_SETTINGS_INDEX), timeout=12000)
+
+    def _install_app(self, options: dict):
+        import installer
+        try:
+            done = installer.install(sys.executable, **options)
+        except Exception as e:
+            show_message(self, QMessageBox.Icon.Critical, "Установка не удалась", str(e))
+            return
+        self._refresh_install_ui()
+        state = installer.state()
+        text = "Готово:\n" + "\n".join(f"• {step}" for step in done)
+        if not state.running_installed:
+            if confirm(self, "Программа установлена", text + "\n\nЗапустить установленную копию и закрыть эту?",
+                       "Запустить", "Позже"):
+                self.save_config()
+                if QProcess.startDetached(state.exe, []):
+                    QApplication.instance().closeAllWindows()
+        else:
+            show_message(self, QMessageBox.Icon.Information, "Настройки установки применены", text)
+
+    def _uninstall_app(self):
+        import installer
+        if not confirm(self, "Удалить программу", "Удалить ярлыки, связь с .mrpack и ссылками и саму программу? "
+                       "Сборки, моды и бэкапы не затрагиваются, настройки сохранятся.", "Удалить", "Отмена"):
+            return
+        installer.uninstall(schedule_exe_removal=installer.state().running_installed)
+        show_message(self, QMessageBox.Icon.Information, "Программа удалена",
+                     "Ярлыки и записи удалены. Окно закроется — папка программы будет удалена следом.")
+        QApplication.instance().closeAllWindows()
+
+    def handle_external(self, args: List[str]):
+        """Файл .mrpack или ссылка modupdater://, переданные при запуске или второй копией программы."""
+        import urllib.parse
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        QApplication.alert(self)
+        for arg in args or []:
+            if arg == "--activate":
+                continue
+            if arg.lower().endswith(".mrpack") and os.path.isfile(arg):
+                self._switch_page(self.PAGE_MODS_INDEX)
+                self._import_mrpack(arg)
+                continue
+            if not arg.lower().startswith("modupdater:"):
+                continue
+            parsed = urllib.parse.urlparse(arg)
+            action = (parsed.netloc or parsed.path.strip("/").split("/")[0]).lower()
+            rest = parsed.path.strip("/") if parsed.netloc else "/".join(parsed.path.strip("/").split("/")[1:])
+            value = urllib.parse.unquote(rest)
+            query = urllib.parse.parse_qs(parsed.query)
+            if action == "import" and value:
+                self._switch_page(self.PAGE_MODS_INDEX)
+                self._import_text(value)
+            elif action == "mod" and value:  # modupdater://mod/sodium — найти в каталоге
+                self._switch_page(self.PAGE_CATALOG_INDEX)
+                self.catalog_page.search.setText(value)
+            elif action == "profile" and value in self.profiles:
+                self._switch_page(self.PAGE_MODS_INDEX)
+                self._on_profile_selected(value)
+                self._refresh_sidebar()
+            elif action == "mrpack" and query.get("url"):
+                self._open_remote_mrpack(query["url"][0])
+            else:
+                self.toasts.show(f"Неизвестная ссылка: {arg}", "warning")
+
+    def _open_remote_mrpack(self, url: str):
+        if not url.lower().startswith("https://"):
+            self.toasts.show("Сборку можно открыть только по адресу https://", "warning")
+            return
+        import tempfile
+        from mod_updater_logic import download_file
+        target = os.path.join(tempfile.gettempdir(), "modupdater-import.mrpack")
+        self._run_task(download_file, (url, target), lambda _: self._import_mrpack(target),
+                       lambda e: self.toasts.show(f"Не удалось скачать сборку: {e}", "error"), "Скачиваем сборку…")
+
     # ================================================================== Мелочи для меню
 
     def _abandoned(self, entry: dict) -> bool:
