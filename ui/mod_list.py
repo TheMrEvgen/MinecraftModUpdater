@@ -661,6 +661,12 @@ class ModDelegate(QStyledItemDelegate):
         t = self.tokens
         progress = entry.get("_progress")
         status = status_of(entry)
+        if status == ModStatus.DOWNLOADING and r.width() < 40:  # Узкий режим: только процент
+            p.setFont(self.font_chip)
+            p.setPen(qcolor(t["accent"]))
+            text = f"{int(progress * 100)}%" if progress is not None else "…"
+            p.drawText(QRect(r.right() - 44, r.top(), 46, r.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, text)
+            return
         if status == ModStatus.DOWNLOADING:
             track = QRectF(r.left(), r.center().y() - 3, r.width(), 6)
             p.setPen(Qt.PenStyle.NoPen)
