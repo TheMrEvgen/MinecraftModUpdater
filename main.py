@@ -36,11 +36,21 @@ def create_app():
     return app
 
 
+def apply_ui_scale() -> None:
+    """Масштаб интерфейса из настроек: задаётся до создания QApplication, поэтому меняется после перезапуска."""
+    import os
+    import config as app_config
+    scale = int(app_config.load_config()["settings"].get("ui_scale", 100) or 100)
+    if scale != 100 and "QT_SCALE_FACTOR" not in os.environ:
+        os.environ["QT_SCALE_FACTOR"] = str(scale / 100)
+
+
 def run_gui() -> int:
     import config as app_config
     from main_window import ModUpdaterApp
 
     app_config.setup_file_logging("mod_updater")
+    apply_ui_scale()
     logging.info("Запуск приложения Minecraft Mod Updater.")
     app = create_app()
     window = ModUpdaterApp()

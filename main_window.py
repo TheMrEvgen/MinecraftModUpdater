@@ -30,13 +30,16 @@ from scanner import (
     scan_local,
 )
 from taskbar import TaskbarProgress
-from theme import THEMES, apply_window_frame_theme, build_stylesheet, detect_system_theme
+from theme import apply_window_frame_theme, build_stylesheet, detect_system_theme, make_tokens
 from ui.catalog import CatalogPage
 from ui.details_panel import DetailsPanel
 from ui.dialogs import MigrationDialog, UpdateReviewDialog, ask_text
 from ui.palette import Command, CommandPalette
 from ui.mod_list import ModDelegate, ModFilterProxy, ModListModel, ModListView, entry_at, meta_at
+from main_window_tools import ToolsMixin
 from ui.pages import HistoryPage, LogPage, SettingsPage
+from ui.stats_page import StatsPage
+from ui.tools_dialogs import BisectBanner
 from ui.widgets import (
     ChipButton, DropOverlay, ElidedLabel, EmptyState, SearchBox, SelectionBar, Sidebar, StatCard, ToastManager,
     button, label, make_action, profile_subtitle, refresh_button_icons, style_segments,
@@ -61,7 +64,7 @@ from workers import (
 LOADER_TITLES = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge", "quilt": "Quilt"}
 # Что ставит кнопка «Обновить все»: обновления и недостающие обязательные зависимости
 BULK_STATUSES = (ModStatus.UPDATE_AVAILABLE, ModStatus.READY_TO_INSTALL, ModStatus.REQUIRED)
-PAGE_MODS, PAGE_CATALOG, PAGE_HISTORY, PAGE_LOG, PAGE_SETTINGS = range(5)
+PAGE_MODS, PAGE_CATALOG, PAGE_HISTORY, PAGE_STATS, PAGE_LOG, PAGE_SETTINGS = range(6)
 CONTENT_ICONS = {"mods": "package", "shaders": "sparkles", "resourcepacks": "image"}
 ANIMATION_MS = 170
 
@@ -84,7 +87,8 @@ class QtLogHandler(logging.Handler):
             pass
 
 
-class ModUpdaterApp(QMainWindow):
+class ModUpdaterApp(ToolsMixin, QMainWindow):
+    PAGE_MODS_INDEX, PAGE_CATALOG_INDEX, PAGE_HISTORY_INDEX, PAGE_STATS_INDEX = PAGE_MODS, PAGE_CATALOG, PAGE_HISTORY, PAGE_STATS
 
     def __init__(self):
         super().__init__()
@@ -101,7 +105,14 @@ class ModUpdaterApp(QMainWindow):
         self.hidden_instances: List[str] = cfg["hidden_instances"]
         self.window_cfg: dict = cfg["window"]
         self.mod_tags: Dict[str, List[str]] = cfg["mod_tags"]
-        self.tokens = THEMES[self._resolve_theme()]
+        self.mod_notes: Dict[str, str] = cfg["mod_notes"]
+        self.favorites: List[str] = cfg["favorites"]
+        self.last_seen: Dict[str, Dict[str, str]] = cfg["last_seen"]
+        self._seen_baseline = {k: dict(v) for k, v in self.last_seen.items()}  # Что было при прошлом запуске
+        self._undo: List[tuple] = []
+        self._undoing = False
+        self._minimal = False
+        self.tokens = make_tokens(self._resolve_theme(), self.settings.get("accent"))
 
         # Состояние текущей сборки
         self.content: ContentType = MODS
@@ -135,13 +146,19 @@ class ModUpdaterApp(QMainWindow):
         self.icon_loader = IconLoader(app_config.ICON_CACHE_DIR, self)
         self.icon_loader.icon_ready.connect(self._on_icon_ready)
         self._icon_pixmaps: Dict[str, QPixmap] = {}
+        # Скриншоты галереи: миниатюры и полный размер в отдельных папках кэша
+        cache_root = os.path.dirname(app_config.ICON_CACHE_DIR)
+        self.thumb_loader = IconLoader(os.path.join(cache_root, "gallery_thumbs"), self, size=336)
+        self.full_loader = IconLoader(os.path.join(cache_root, "gallery_full"), self, size=1600)
 
         self._build_ui()
         self.palette = CommandPalette(self.centralWidget(), self.tokens, self._palette_commands)
         self._setup_logging()
         self._setup_shortcuts()
+        self._setup_query_completer()
         self.apply_theme()
         self._apply_view_settings()
+        self._apply_minimal()
         self._restore_geometry()
 
         if self.settings.get("discover_launchers", True):
@@ -165,13 +182,17 @@ class ModUpdaterApp(QMainWindow):
         self.sidebar.profile_context_menu.connect(self._show_profile_menu)
         self.sidebar.add_profile_clicked.connect(self._show_add_profile_menu)
         self.sidebar.page_changed.connect(self._switch_page)
+        self.sidebar.profiles_reordered.connect(self._on_profiles_reordered)
         layout.addWidget(self.sidebar)
 
         self.stack = QStackedWidget()
         layout.addWidget(self.stack, 1)
         self.stack.addWidget(self._build_mods_page())
-        self.catalog_page = CatalogPage(t, self._run_task, self._icon_for_entry)
+        self.catalog_page = CatalogPage(t, self._run_task, self._icon_for_entry, self.thumb_loader, self.full_loader)
         self.catalog_page.install_requested.connect(self._install_from_catalog)
+        self.catalog_page.install_many_requested.connect(self._install_many_from_catalog)
+        self.catalog_page.install_version_requested.connect(self._install_catalog_version)
+        self.catalog_page.show_installed_requested.connect(self._show_installed_from_catalog)
         self.catalog_page.open_requested.connect(self._open_catalog_hit)
         self.stack.addWidget(self.catalog_page)
         self.history_page = HistoryPage(t)
@@ -182,6 +203,11 @@ class ModUpdaterApp(QMainWindow):
         self.history_page.open_backups_requested.connect(
             lambda: self.mods_path and self._open_path(backup_root(self.mods_path)))
         self.stack.addWidget(self.history_page)
+        self.stats_page = StatsPage(t)
+        self.stats_page.filter_requested.connect(self._stats_filter)
+        self.stats_page.entry_requested.connect(self._show_entry_in_list)
+        self.stats_page.replacement_requested.connect(self._find_replacement)
+        self.stack.addWidget(self.stats_page)
         self.log_page = LogPage(t)
         self.log_page.open_logs_requested.connect(lambda: self._open_path(app_config.LOG_DIR))
         self.stack.addWidget(self.log_page)
@@ -192,6 +218,9 @@ class ModUpdaterApp(QMainWindow):
         self.settings_page.discover_requested.connect(self._discover_now)
         self.settings_page.clear_cache_requested.connect(self._clear_cache)
         self.settings_page.open_data_requested.connect(lambda: self._open_path(app_config.CONFIG_DIR))
+        self.settings_page.export_requested.connect(self._export_settings)
+        self.settings_page.import_requested.connect(self._import_settings)
+        self.settings_page.prune_backups_requested.connect(lambda: self._prune_backups(manual=True))
         self.stack.addWidget(self.settings_page)
 
         self.toasts = ToastManager(root, t)
@@ -237,7 +266,18 @@ class ModUpdaterApp(QMainWindow):
         self.content_group.buttons()[0].setChecked(True)
         self.content_group.idClicked.connect(lambda i: self._set_content(CONTENT_TYPES[i]))
         tabs.addStretch()
-        layout.addLayout(tabs)
+        self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumHeight(32)
+        self.preset_combo.setToolTip("Наборы модов: переключение включает и выключает нужные моды")
+        self.preset_combo.activated.connect(lambda i: self.preset_combo.itemData(i) and self._apply_preset(self.preset_combo.itemData(i)))
+        self.preset_btn = button(" Наборы", None, "layers", t, "text_muted", "Сохранить или применить набор модов")
+        self.preset_btn.clicked.connect(self._show_preset_menu)
+        tabs.addWidget(self.preset_combo)
+        tabs.addWidget(self.preset_btn)
+        self.tabs_widget = QWidget()
+        self.tabs_widget.setLayout(tabs)
+        tabs.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.tabs_widget)
 
         chips = QHBoxLayout()
         chips.setSpacing(8)
@@ -258,7 +298,10 @@ class ModUpdaterApp(QMainWindow):
         chips.addWidget(self.path_label, 1)
         self.size_label = label("", "Faint")
         chips.addWidget(self.size_label)
-        layout.addLayout(chips)
+        self.chips_widget = QWidget()
+        self.chips_widget.setLayout(chips)
+        chips.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.chips_widget)
 
         # --- Прогресс фоновой операции ---
         progress_row = QVBoxLayout()
@@ -291,6 +334,13 @@ class ModUpdaterApp(QMainWindow):
         self.banner.hide()
         layout.addWidget(self.banner)
 
+        # --- Поиск проблемного мода (шаги) ---
+        self.bisect_banner = BisectBanner(t)
+        self.bisect_banner.answered.connect(self._on_bisect_answer)
+        self.bisect_banner.cancel_requested.connect(self._cancel_bisect)
+        self.bisect_banner.finish_requested.connect(self._finish_bisect)
+        layout.addWidget(self.bisect_banner)
+
         # --- Карточки-сводки (фильтры) ---
         cards = QHBoxLayout()
         cards.setSpacing(10)
@@ -314,7 +364,7 @@ class ModUpdaterApp(QMainWindow):
         # --- Поиск и сортировка ---
         toolbar = QHBoxLayout()
         toolbar.setSpacing(10)
-        self.search = SearchBox(t, "Поиск по названию, описанию или файлу  (Ctrl+F)")
+        self.search = SearchBox(t, "Поиск: название, файл, заметка или условие — tag:, side:client, is:fav, size>5mb")
         self.search.setMinimumHeight(36)
         self._search_timer = QTimer(self, singleShot=True, interval=150)
         self._search_timer.timeout.connect(lambda: self._apply_filter(query=self.search.text()))
@@ -380,6 +430,7 @@ class ModUpdaterApp(QMainWindow):
         self.selection_bar.disable_clicked.connect(lambda: self._toggle_disabled(
             [e for e in self._checked_entries() if e.get("filepath")]))
         self.selection_bar.clear_clicked.connect(lambda: self._set_all_checked(False))
+        self.selection_bar.more_clicked.connect(self._show_bulk_menu)
         self.list_holder.installEventFilter(self)
         body.addWidget(self.list_holder, 1)
 
@@ -396,6 +447,10 @@ class ModUpdaterApp(QMainWindow):
         self.details.pin_toggled.connect(self._toggle_pin)
         self.details.disable_toggled.connect(lambda e: self._toggle_disabled([e]))
         self.details.tags_menu_requested.connect(self._show_tags_menu)
+        self.details.favorite_toggled.connect(lambda e: self._toggle_favorite([e]))
+        self.details.note_changed.connect(self._set_note)
+        self.details.replacement_requested.connect(self._find_replacement)
+        self.details.attach_gallery(self.thumb_loader, self.full_loader)
         self.details.custom_tags = self.mod_tags
         self.proxy.custom_tags = self.mod_tags
         body.addWidget(self.details)
@@ -410,11 +465,9 @@ class ModUpdaterApp(QMainWindow):
         self.log_emitter.log_signal.connect(self.log_page.console.appendPlainText)
 
     def _setup_shortcuts(self):
-        QShortcut(QKeySequence("F5"), self, activated=self._on_check_clicked)
-        QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_search)
-        QShortcut(QKeySequence("Ctrl+K"), self, activated=self.palette.open)
-        QShortcut(QKeySequence("Ctrl+P"), self, activated=self.palette.open)
         QShortcut(QKeySequence("Escape"), self, activated=self._on_escape)
+        QShortcut(QKeySequence("Ctrl+P"), self, activated=self.palette.open)  # Привычная альтернатива Ctrl+K
+        self._setup_action_shortcuts()  # Переназначаемые (настройки → «Горячие клавиши»)
 
     # ================================================================== Тема и окно
 
@@ -422,11 +475,12 @@ class ModUpdaterApp(QMainWindow):
         return detect_system_theme() if self.config_theme == "system" else self.config_theme
 
     def apply_theme(self):
-        t = self.tokens = THEMES[self._resolve_theme()]
+        t = self.tokens = make_tokens(self._resolve_theme(), self.settings.get("accent"))
         QApplication.instance().setStyleSheet(build_stylesheet(t, self._theme_assets(t)))
         for widget in (self.sidebar, self.history_page, self.log_page, self.settings_page, self.details, self.search,
-                       self.drop_overlay, self.toasts, self.catalog_page, self.palette):
+                       self.drop_overlay, self.toasts, self.catalog_page, self.palette, self.stats_page):
             widget.set_tokens(t)
+        refresh_button_icons(self.bisect_banner, t)
         style_segments(self.content_group, t)
         for card in self.cards.values():
             card.set_tokens(t)
@@ -445,7 +499,7 @@ class ModUpdaterApp(QMainWindow):
         directory = os.path.join(os.path.dirname(app_config.ICON_CACHE_DIR), "ui_assets")
         try:
             os.makedirs(directory, exist_ok=True)
-            check = os.path.join(directory, f"check_{t['name']}.svg")
+            check = os.path.join(directory, f"check_{t['name']}_{t['accent_text'].lstrip('#')}.svg")
             chevron = os.path.join(directory, f"chevron_{t['name']}.svg")
             with open(check, "wb") as f:
                 f.write(icons.svg_bytes("check", t["accent_text"]))
@@ -495,7 +549,8 @@ class ModUpdaterApp(QMainWindow):
                 worker.stop()
         for worker in workers:
             worker.wait(10000)
-        self.icon_loader.shutdown()
+        for loader in (self.icon_loader, self.thumb_loader, self.full_loader):
+            loader.shutdown()
         self.window_cfg["geometry"] = bytes(self.saveGeometry().toBase64()).decode()
         self.save_config()
         logging.getLogger().removeHandler(self._gui_log_handler)
@@ -508,7 +563,8 @@ class ModUpdaterApp(QMainWindow):
             app_config.save_config({
                 "theme": self.config_theme, "current_profile": self.current_profile_name, "profiles": self.profiles,
                 "settings": self.settings, "hidden_instances": self.hidden_instances, "window": self.window_cfg,
-                "mod_tags": self.mod_tags,
+                "mod_tags": self.mod_tags, "mod_notes": self.mod_notes, "favorites": self.favorites,
+                "last_seen": self.last_seen,
             })
         except OSError as e:
             logging.error(f"Ошибка при сохранении конфигурации: {e}")
@@ -554,7 +610,8 @@ class ModUpdaterApp(QMainWindow):
         items = []
         for name, profile in self.profiles.items():
             items.append({"name": name, "subtitle": profile_subtitle(profile),
-                          "tooltip": profile.get("mods_path") or "Папка не указана"})
+                          "tooltip": profile.get("mods_path") or "Папка не указана", "group": profile.get("group") or "",
+                          "color": profile.get("color") or "", "icon": profile.get("icon") or ""})
         self.sidebar.set_profiles(items, self.current_profile_name)
 
     def _on_profile_selected(self, name: str):
@@ -626,7 +683,9 @@ class ModUpdaterApp(QMainWindow):
         profile = self._profile()
         self._resolve_versions(profile)
         self._start_loader_check()
+        self._restore_profile_view()
         self._load_content()
+        self._restore_bisect_banner()
 
     def _resolve_versions(self, profile: dict):
         """Определяет версию игры и загрузчик: из настроек сборки или по папке versions."""
@@ -723,7 +782,8 @@ class ModUpdaterApp(QMainWindow):
         return [(c.value, c.display_name) for c in UpdateChannel]
 
     def _add_profile(self):
-        dialog = ProfileDialog(self, "", app_config.default_profile(), self.profiles.keys(), self._channel_choices())
+        dialog = ProfileDialog(self, "", app_config.default_profile(), self.profiles.keys(), self._channel_choices(),
+                               self._profile_groups())
         if dialog.exec():
             name, profile = dialog.result_profile()
             self.profiles[name] = profile
@@ -737,7 +797,8 @@ class ModUpdaterApp(QMainWindow):
     def _edit_profile(self, old_name: str):
         if self._busy or old_name not in self.profiles:
             return
-        dialog = ProfileDialog(self, old_name, self.profiles[old_name], self.profiles.keys(), self._channel_choices())
+        dialog = ProfileDialog(self, old_name, self.profiles[old_name], self.profiles.keys(), self._channel_choices(),
+                               self._profile_groups())
         if not dialog.exec():
             return
         name, profile = dialog.result_profile()
@@ -757,6 +818,14 @@ class ModUpdaterApp(QMainWindow):
         menu.addAction(make_action(menu, t, "pencil", "Настройки сборки…", lambda: self._edit_profile(name)))
         menu.addAction(make_action(menu, t, "folder", "Открыть папку",
                                    lambda: self._open_path(self.profiles[name].get("mods_path", ""))))
+        menu.addAction(make_action(menu, t, "layers", "Группа…", lambda: self._set_profile_group(name)))
+        menu.addSeparator()
+        menu.addAction(make_action(menu, t, "copy", "Клонировать сборку…", lambda: self._clone_profile(name)))
+        others = [n for n in self.profiles if n != name]
+        if others:
+            compare = menu.addMenu(icons.icon("git_compare", t["text_muted"], 16), "Сравнить с…")
+            for other in others:
+                compare.addAction(other, lambda o=other: self._compare_profiles(name, o))
         menu.addSeparator()
         menu.addAction(make_action(menu, t, "x", "Убрать из списка", lambda: self._remove_profile(name), "danger"))
         menu.exec(pos)
@@ -785,11 +854,26 @@ class ModUpdaterApp(QMainWindow):
                          "success" if added else "info")
 
     def _on_settings_changed(self, settings: dict):
-        view_keys = ("view_mode", "compact_rows", "expand_dependencies", "group_by_status")
+        view_keys = ("view_mode", "compact_rows", "expand_dependencies", "group_by_status", "columns", "abandoned_warning")
         view_changed = any(self.settings.get(k) != settings.get(k) for k in view_keys if k in settings)
+        accent_changed = settings.get("accent") != self.settings.get("accent")
+        scale_changed = settings.get("ui_scale") != self.settings.get("ui_scale")
+        minimal_changed = settings.get("minimal_mode") != self.settings.get("minimal_mode")
+        shortcuts_changed = settings.get("shortcuts") != self.settings.get("shortcuts")
+        if self.settings.get("per_profile_view", True) and "view_mode" in settings:
+            self._profile()["view_mode"] = settings["view_mode"]  # Вид запоминается для текущей сборки
         self.settings.update(settings)
+        if accent_changed:
+            self.apply_theme()
         if view_changed:
             self._rebuild_view()
+        if minimal_changed:
+            self._apply_minimal()
+        if shortcuts_changed:
+            self._setup_action_shortcuts()
+        if scale_changed:
+            self.toasts.show(f"Масштаб {settings.get('ui_scale')}% применится после перезапуска.", "info",
+                             "Перезапустить", self._restart_app, timeout=10000)
 
     def _clear_cache(self):
         if self._busy:
@@ -817,12 +901,19 @@ class ModUpdaterApp(QMainWindow):
             self._refresh_history()
         elif page == PAGE_CATALOG:
             self._refresh_catalog_context()
+        elif page == PAGE_STATS:
+            self._refresh_stats()
+        elif page == PAGE_SETTINGS:
+            self.settings_page.load(self.config_theme, {**self.settings, "view_mode": self._view_mode()})
+            self.settings_page.set_backup_usage(self._backup_usage_text())
 
     def _refresh_history(self):
         if not self.mods_path:
             self.history_page.set_transactions([], [])
+            self.history_page.usage_label.setText("")
             return
         self.history_page.set_transactions(list_transactions(self.mods_path), list_snapshots(self.mods_path))
+        self.history_page.usage_label.setText(self._backup_usage_text())
 
     # ================================================================== Данные списка
 
@@ -841,6 +932,7 @@ class ModUpdaterApp(QMainWindow):
         pinned = self._profile().get("pinned") or {}
         for entry in iter_all_entries(mods_data):
             entry["_pinned"] = bool(entry.get("filepath")) and pin_key(entry) in pinned
+        self._apply_personal_flags(mods_data)
         rows, self._count_items = build_rows(mods_data, self._view_mode())
         self.model.set_rows(rows)
         items = self.model.items()
@@ -849,6 +941,7 @@ class ModUpdaterApp(QMainWindow):
         self._refresh_selection_ui()
         self._refresh_empty_state()
         self._refresh_actions()
+        self._refresh_presets()
         if selected_key is not None:
             match = next((e for e in items if entry_key(e) == selected_key), None)
             if match:
@@ -891,7 +984,7 @@ class ModUpdaterApp(QMainWindow):
         profile = self._profile()
         game_dir = profile.get("mods_path", "")
         has_items = bool(self.model.items())
-        self.cards_widget.setVisible(has_items)
+        self.cards_widget.setVisible(has_items and not self._minimal)
         self.toolbar_widget.setVisible(has_items)
         if self.proxy.rowCount() > 0:
             self.list_stack.setCurrentIndex(0)
@@ -968,7 +1061,21 @@ class ModUpdaterApp(QMainWindow):
 
     def _on_sort_changed(self, *_):
         self.proxy.set_sort_mode(self.sort_combo.currentData())
+        if self.settings.get("per_profile_view", True):
+            self._profile()["sort"] = self.sort_combo.currentData()
         self.view.relayout()
+
+    def _restore_profile_view(self):
+        """Вид и сортировка, сохранённые для этой сборки."""
+        if not self.settings.get("per_profile_view", True):
+            return
+        sort = self._profile().get("sort")
+        index = self.sort_combo.findData(sort) if sort else 0
+        if index >= 0 and index != self.sort_combo.currentIndex():
+            self.sort_combo.blockSignals(True)
+            self.sort_combo.setCurrentIndex(index)
+            self.sort_combo.blockSignals(False)
+            self.proxy.set_sort_mode(self.sort_combo.currentData())
 
     def _icon_for_entry(self, entry: dict) -> Optional[QPixmap]:
         pid = entry.get("project_id")
@@ -1069,6 +1176,8 @@ class ModUpdaterApp(QMainWindow):
 
     def _view_mode(self) -> str:
         mode = self.settings.get("view_mode", VIEW_FLAT)
+        if self.settings.get("per_profile_view", True):
+            mode = self._profile().get("view_mode") or mode
         return mode if mode in VIEW_MODES else VIEW_FLAT
 
     def _apply_view_settings(self):
@@ -1077,6 +1186,9 @@ class ModUpdaterApp(QMainWindow):
         self.delegate.tree = tree
         self.delegate.compact = bool(self.settings.get("compact_rows", False))
         self.delegate.groups = bool(self.settings.get("group_by_status", True))
+        self.delegate.columns = set(self.settings.get("columns") or ())
+        self.delegate.abandoned_hint = bool(self.settings.get("abandoned_warning", True))
+        self.details.show_abandoned = self.delegate.abandoned_hint
         # Умолчание раскрытия применяем только при смене настройки, чтобы не сбрасывать «Раскрыть все» из меню строки
         expand = bool(self.settings.get("expand_dependencies", False))
         if getattr(self, "_expand_setting", None) != expand:
@@ -1219,7 +1331,14 @@ class ModUpdaterApp(QMainWindow):
             menu.addAction(make_action(menu, t, "power", "Включить" if entry.get("disabled") else "Выключить (без удаления)",
                                        lambda: self._toggle_disabled([entry])))
         if entry.get("project_id") or entry.get("filepath"):
+            menu.addAction(make_action(menu, t, "star_filled" if entry.get("_favorite") else "star",
+                                       "Убрать из избранного" if entry.get("_favorite") else "В избранное",
+                                       lambda: self._toggle_favorite([entry]), "warning" if entry.get("_favorite") else "text_muted"))
+            menu.addAction(make_action(menu, t, "pencil", "Заметка…",
+                                       lambda: (self._select_entry(entry), self._edit_note_current())))
             menu.addAction(make_action(menu, t, "tag", "Метки…", lambda: self._show_tags_menu(entry, pos)))
+        if self._abandoned(entry):
+            menu.addAction(make_action(menu, t, "compass", "Найти замену в каталоге", lambda: self._find_replacement(entry)))
         if self._view_mode() == VIEW_TREE:
             menu.addSeparator()
             menu.addAction(make_action(menu, t, "chevron_down", "Раскрыть все зависимости", lambda: self._expand_all(True)))
@@ -1248,6 +1367,14 @@ class ModUpdaterApp(QMainWindow):
         snapshot = make_action(menu, t, "camera", "Создать снимок сборки", lambda: self._create_snapshot("manual"))
         snapshot.setEnabled(bool(self.mods_data) and not self.is_import_mode)
         menu.addAction(snapshot)
+        menu.addSeparator()
+        tools = menu.addMenu(icons.icon("shield", t["text_muted"], 16), "Если игра не запускается")
+        tools.addAction(make_action(tools, t, "bug", "Почему упала игра (разбор краша)…", self._show_crash_dialog))
+        bisect = make_action(tools, t, "scissors", "Найти проблемный мод перебором…", self._start_bisect)
+        bisect.setEnabled(has_data and not self._profile().get("bisect"))
+        tools.addAction(bisect)
+        tools.addAction(make_action(tools, t, "shield", "Проверить целостность файлов", self._check_integrity))
+        menu.addAction(make_action(menu, t, "bar_chart", "Статистика сборки", lambda: self._switch_page(PAGE_STATS)))
         menu.addSeparator()
         for icon_name, text, slot in (("share", "Поделиться списком…", self.share_mod_list),
                                       ("save", "Экспорт JSON для сервера…", self.export_server_json),
@@ -1344,9 +1471,14 @@ class ModUpdaterApp(QMainWindow):
         if not mods_data and self.mods_data:
             self.toasts.show("Не удалось проверить обновления. Проверьте подключение к интернету.", "error")
             return
+        fresh = self._mark_new_updates(mods_data)
         self._set_data(mods_data)
         self.sessions[self._skey()] = mods_data
         counts = category_counts(self._count_items)
+        if fresh:
+            names = ", ".join(e.get("name") for e in fresh[:3]) + (f" и ещё {len(fresh) - 3}" if len(fresh) > 3 else "")
+            self.toasts.show(f"С прошлого запуска вышли новые версии: {names}", "info", "Показать",
+                             lambda: (self._reset_filters(), self.search.setText("is:new")), timeout=10000)
         updates, problems = counts[CAT_UPDATES], counts[CAT_PROBLEMS]
         if updates:
             self.toasts.show(f"Доступно обновлений: {updates}", "info", "Обновить все", self.update_all, timeout=8000)
@@ -1522,6 +1654,8 @@ class ModUpdaterApp(QMainWindow):
             self.sessions[self._skey()] = self.mods_data
 
         if succeeded:
+            self._push_undo("обновление", lambda: self._rollback_dir(transaction.dir))
+            self._prune_backups()
             self.toasts.show(f"Готово: {succeeded} {self._plural(succeeded, 'мод', 'мода', 'модов')} обновлено",
                              "success", "Отменить", lambda: self._rollback_dir(transaction.dir), timeout=9000)
         if failed:
@@ -1630,6 +1764,7 @@ class ModUpdaterApp(QMainWindow):
         self._set_data(mods_data)
         self.sessions[self._skey()] = mods_data
         if removed:
+            self._push_undo("удаление", lambda: self._rollback_dir(transaction.dir))
             self.toasts.show(f"Удалено: {len(removed)}", "success", "Отменить",
                              lambda: self._rollback_dir(transaction.dir), timeout=9000)
         if errors:
@@ -1953,6 +2088,7 @@ class ModUpdaterApp(QMainWindow):
         if not key:
             return
         pinned = self._profile().setdefault("pinned", {})
+        self._push_undo("закрепление", lambda: self._toggle_pin(entry))
         if key in pinned:
             del pinned[key]
             self.toasts.show(f"«{entry.get('name')}» снова обновляется.", "info")
@@ -1985,6 +2121,7 @@ class ModUpdaterApp(QMainWindow):
                 same["_is_checked"] = False
             changed.append(entry)
         if changed:
+            self._push_undo("выключение" if disable else "включение", lambda: self._toggle_disabled(changed))
             self._set_data(self.mods_data)
             self.sessions[self._skey()] = self.mods_data
             what = f"«{changed[0].get('name')}»" if len(changed) == 1 else f"{len(changed)} модов"
@@ -2016,6 +2153,7 @@ class ModUpdaterApp(QMainWindow):
         tags = self.mod_tags.setdefault(pin_key(entry), [])
         if tag.lower() not in (t.lower() for t in tags):
             tags.append(tag)
+            self._push_undo(f"метка «{tag}»", lambda: self._remove_tag(entry, tag))
         self._after_tags_changed(entry)
 
     def _remove_tag(self, entry: dict, tag: str):
@@ -2239,6 +2377,21 @@ class ModUpdaterApp(QMainWindow):
             Command("Настройки сборки", self._edit_current_profile, "pencil"),
             Command("Добавить сборку", self._add_profile, "plus"),
             Command("Найти сборки в лаунчерах", self._discover_now, "box_search", keywords="prism modrinth curseforge"),
+            Command("Почему упала игра (разбор краша)", self._show_crash_dialog, "bug", keywords="краш вылет crash"),
+            Command("Найти проблемный мод перебором", self._start_bisect, "scissors", keywords="бисекция вылет краш"),
+            Command("Проверить целостность файлов", self._check_integrity, "shield", keywords="битые"),
+            Command("Отменить последнее действие", self._undo_last, "undo", hint="Ctrl+Z"),
+            Command("Клонировать сборку", lambda: self._clone_profile(self.current_profile_name), "copy"),
+            Command("Экспорт настроек", self._export_settings, "share", group="Данные"),
+            Command("Импорт настроек", self._import_settings, "import", group="Данные"),
+            Command("Очистить старые бэкапы", lambda: self._prune_backups(manual=True), "trash", group="Данные"),
+            Command("Показать избранные", lambda: (self._switch_page(PAGE_MODS), self.search.setText("is:fav")), "star",
+                    group="Фильтры"),
+            Command("Показать давно не обновлявшиеся", lambda: (self._switch_page(PAGE_MODS), self.search.setText("is:abandoned")),
+                    "alert", group="Фильтры"),
+            Command("Показать новые обновления", lambda: (self._switch_page(PAGE_MODS), self.search.setText("is:new")),
+                    "sparkles", group="Фильтры"),
+            Command("Режим «Минимум»: вкл/выкл", self._toggle_minimal, "list", group="Оформление"),
             Command("Тёмная тема", lambda: self._set_theme_from_palette("dark"), "moon", group="Оформление"),
             Command("Светлая тема", lambda: self._set_theme_from_palette("light"), "sun", group="Оформление"),
             Command("Тема как в системе", lambda: self._set_theme_from_palette("system"), "settings", group="Оформление"),
@@ -2254,6 +2407,8 @@ class ModUpdaterApp(QMainWindow):
         for name, profile in self.profiles.items():
             commands.append(Command(name, lambda n=name: self._open_profile_from_palette(n), "layers", group="Сборка",
                                     hint=profile_subtitle(profile)))
+        for name in self._presets():
+            commands.append(Command(f"Набор: {name}", lambda n=name: self._apply_preset(n), "layers", group="Наборы модов"))
         for entry in self._count_items:
             commands.append(Command(entry.get("name") or "?", lambda e=entry: self._palette_open_entry(e),
                                     CONTENT_ICONS[self.content.key], group=self.content.title_one.capitalize(),
@@ -2287,3 +2442,8 @@ class ModUpdaterApp(QMainWindow):
         self.settings_page.load(self.config_theme, self.settings)
         self._switch_page(PAGE_MODS)
         self._rebuild_view()
+
+    def _toggle_minimal(self):
+        self.settings["minimal_mode"] = not self.settings.get("minimal_mode", False)
+        self.settings_page.load(self.config_theme, self.settings)
+        self._apply_minimal()

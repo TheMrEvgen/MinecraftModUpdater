@@ -2,13 +2,15 @@
 from typing import Dict, List
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFontDatabase
+from PyQt6.QtGui import QColor, QFontDatabase
 from PyQt6.QtWidgets import (
-    QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QRadioButton,
-    QScrollArea, QComboBox, QVBoxLayout, QWidget,
+    QButtonGroup, QCheckBox, QColorDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
+    QRadioButton, QScrollArea, QComboBox, QVBoxLayout, QWidget,
 )
 
 import icons
+from theme import ACCENTS, DEFAULT_ACCENT
+from ui.shortcuts import ShortcutEditor
 from ui.widgets import EmptyState, button, label, refresh_button_icons
 from updater import KIND_LABELS, SNAPSHOT_REASONS
 from view_model import format_size
@@ -50,6 +52,8 @@ class HistoryPage(QWidget):
         head.addWidget(self.snapshot_btn, 0, Qt.AlignmentFlag.AlignTop)
         head.addWidget(self.open_btn, 0, Qt.AlignmentFlag.AlignTop)
         root.addLayout(head)
+        self.usage_label = label("", "Faint")
+        root.addWidget(self.usage_label)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -207,12 +211,20 @@ class LogPage(QWidget):
         refresh_button_icons(self, tokens)
 
 
+SCALES = (90, 100, 110, 125, 150)
+BACKUP_DAYS = ((7, "7 дней"), (14, "14 дней"), (30, "30 дней"), (90, "90 дней"), (0, "не удалять"))
+BACKUP_MB = ((256, "256 МБ"), (512, "512 МБ"), (1024, "1 ГБ"), (2048, "2 ГБ"), (0, "без ограничения"))
+
+
 class SettingsPage(QWidget):
     theme_changed = pyqtSignal(str)
     settings_changed = pyqtSignal(dict)
     discover_requested = pyqtSignal()
     clear_cache_requested = pyqtSignal()
     open_data_requested = pyqtSignal()
+    export_requested = pyqtSignal()
+    import_requested = pyqtSignal()
+    prune_backups_requested = pyqtSignal()
 
     def __init__(self, tokens: dict, parent=None):
         super().__init__(parent)
@@ -243,6 +255,46 @@ class SettingsPage(QWidget):
         theme_row.addStretch()
         self.theme_group.buttonClicked.connect(lambda b: not self._loading and self.theme_changed.emit(b.property("theme_key")))
         body.addLayout(theme_row)
+
+        body.addWidget(label("Акцентный цвет", "Muted"))
+        accent_row = QHBoxLayout()
+        accent_row.setSpacing(8)
+        self.accent_group = QButtonGroup(self)
+        self.accent_group.setExclusive(True)
+        for key, (title, dark, _light) in ACCENTS.items():
+            swatch = QPushButton()
+            swatch.setObjectName("Swatch")
+            swatch.setCheckable(True)
+            swatch.setFixedSize(30, 30)
+            swatch.setToolTip(title)
+            swatch.setCursor(Qt.CursorShape.PointingHandCursor)
+            swatch.setProperty("accent_key", key)
+            swatch.setStyleSheet(f"#Swatch {{ background: {dark}; }}")
+            self.accent_group.addButton(swatch)
+            accent_row.addWidget(swatch)
+        self.custom_accent = QPushButton("Свой цвет…")
+        self.custom_accent.setObjectName("GhostButton")
+        self.custom_accent.clicked.connect(self._pick_accent)
+        accent_row.addSpacing(6)
+        accent_row.addWidget(self.custom_accent)
+        accent_row.addStretch()
+        self.accent_group.buttonClicked.connect(lambda b: self._set_accent(b.property("accent_key")))
+        body.addLayout(accent_row)
+        self._accent = DEFAULT_ACCENT
+
+        row = QHBoxLayout()
+        row.addWidget(label("Масштаб интерфейса:"))
+        self.scale = QComboBox()
+        for value in SCALES:
+            self.scale.addItem(f"{value}%", value)
+        self.scale.currentIndexChanged.connect(self._emit)
+        row.addWidget(self.scale)
+        row.addWidget(label("применится после перезапуска", "Faint"))
+        row.addStretch()
+        body.addLayout(row)
+        self.minimal = QCheckBox("Режим «Минимум»: только список модов и большая кнопка «Обновить все»")
+        self.minimal.toggled.connect(self._emit)
+        body.addWidget(self.minimal)
         root.addWidget(card)
 
         # Список модов
@@ -273,8 +325,24 @@ class SettingsPage(QWidget):
         self.group_by_status.toggled.connect(self._emit)
         self.animations = QCheckBox("Анимации (плавное раскрытие зависимостей)")
         self.animations.toggled.connect(self._emit)
-        for widget in (self.expand_deps, self.compact_rows, self.details_on_select, self.group_by_status, self.animations):
+        self.per_profile = QCheckBox("Запоминать вид и сортировку отдельно для каждой сборки")
+        self.per_profile.toggled.connect(self._emit)
+        self.abandoned = QCheckBox("Помечать моды, которые автор не обновлял больше года")
+        self.abandoned.toggled.connect(self._emit)
+        for widget in (self.expand_deps, self.compact_rows, self.details_on_select, self.group_by_status, self.animations,
+                       self.per_profile, self.abandoned):
             body.addWidget(widget)
+        body.addWidget(label("Что показывать в строке мода:", "Muted"))
+        from ui.mod_list import COLUMNS
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(18)
+        self.column_boxes = {}
+        for i, (key, title) in enumerate(COLUMNS):
+            box = QCheckBox(title)
+            box.toggled.connect(self._emit)
+            self.column_boxes[key] = box
+            grid.addWidget(box, i // 3, i % 3)
+        body.addLayout(grid)
         root.addWidget(card)
 
         # Обновления
@@ -296,7 +364,7 @@ class SettingsPage(QWidget):
         root.addWidget(card)
 
         # Снимки
-        card, body = self._card("Снимки сборки")
+        card, body = self._card("Снимки и бэкапы")
         body.addWidget(label("Снимок сохраняет весь набор модов, чтобы вернуться к нему со страницы «История». "
                              "Файлы связываются жёсткими ссылками и почти не занимают места.", "Muted", wrap=True))
         self.auto_snapshot = QCheckBox("Делать снимок перед «Обновить все», заменой сборки и сменой версии игры")
@@ -309,6 +377,30 @@ class SettingsPage(QWidget):
         self.snapshots_keep.currentIndexChanged.connect(self._emit)
         row.addWidget(self.snapshots_keep)
         row.addStretch()
+        body.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(label("Удалять бэкапы операций старше:"))
+        self.backup_days = QComboBox()
+        for value, title in BACKUP_DAYS:
+            self.backup_days.addItem(title, value)
+        self.backup_days.currentIndexChanged.connect(self._emit)
+        row.addWidget(self.backup_days)
+        row.addSpacing(14)
+        row.addWidget(label("Не больше:"))
+        self.backup_mb = QComboBox()
+        for value, title in BACKUP_MB:
+            self.backup_mb.addItem(title, value)
+        self.backup_mb.currentIndexChanged.connect(self._emit)
+        row.addWidget(self.backup_mb)
+        row.addStretch()
+        body.addLayout(row)
+        row = QHBoxLayout()
+        self.backup_usage = label("", "Faint")
+        row.addWidget(self.backup_usage)
+        row.addStretch()
+        self.prune_btn = button("Очистить сейчас", None, "trash", tokens, "text")
+        self.prune_btn.clicked.connect(self.prune_backups_requested)
+        row.addWidget(self.prune_btn)
         body.addLayout(row)
         root.addWidget(card)
 
@@ -337,14 +429,27 @@ class SettingsPage(QWidget):
         row.addWidget(self.data_btn)
         row.addStretch()
         body.addLayout(row)
+        body.addWidget(label("Перенос на другой компьютер: сборки, настройки, метки, заметки, избранное и "
+                             "закреплённые версии в одном файле.", "Muted", wrap=True))
+        row = QHBoxLayout()
+        self.export_btn = button("Экспорт настроек…", None, "share", tokens, "text")
+        self.export_btn.clicked.connect(self.export_requested)
+        self.import_btn = button("Импорт настроек…", None, "import", tokens, "text")
+        self.import_btn.clicked.connect(self.import_requested)
+        row.addWidget(self.export_btn)
+        row.addWidget(self.import_btn)
+        row.addStretch()
+        body.addLayout(row)
         root.addWidget(card)
 
         # Горячие клавиши
         card, body = self._card("Горячие клавиши")
+        body.addWidget(label("Щёлкните по полю и нажмите новое сочетание. Крестик — убрать сочетание.", "Muted", wrap=True))
+        self.shortcut_editor = ShortcutEditor()
+        self.shortcut_editor.changed.connect(self._emit)
+        body.addWidget(self.shortcut_editor)
+        body.addWidget(label("Всегда работают:", "Muted"))
         shortcuts = label("<table cellspacing='4'>"
-                          "<tr><td><b>F5</b></td><td>&nbsp;&nbsp;проверить обновления</td></tr>"
-                          "<tr><td><b>Ctrl+K</b></td><td>&nbsp;&nbsp;быстрые команды: действия, сборки, моды</td></tr>"
-                          "<tr><td><b>Ctrl+F</b></td><td>&nbsp;&nbsp;поиск</td></tr>"
                           "<tr><td><b>Пробел</b></td><td>&nbsp;&nbsp;отметить мод</td></tr>"
                           "<tr><td><b>Enter</b></td><td>&nbsp;&nbsp;открыть панель мода</td></tr>"
                           "<tr><td><b>→ / ←</b></td><td>&nbsp;&nbsp;раскрыть / свернуть зависимости (дерево)</td></tr>"
@@ -390,7 +495,37 @@ class SettingsPage(QWidget):
         if self.snapshots_keep.findText(keep) < 0:
             self.snapshots_keep.addItem(keep)
         self.snapshots_keep.setCurrentText(keep)
+        self._accent = settings.get("accent") or DEFAULT_ACCENT
+        for b in self.accent_group.buttons():
+            b.setChecked(b.property("accent_key") == self._accent)
+        self.custom_accent.setText("Свой цвет ✓" if self._accent.startswith("#") else "Свой цвет…")
+        self.scale.setCurrentIndex(max(0, self.scale.findData(int(settings.get("ui_scale", 100)))))
+        self.minimal.setChecked(bool(settings.get("minimal_mode", False)))
+        self.per_profile.setChecked(bool(settings.get("per_profile_view", True)))
+        self.abandoned.setChecked(bool(settings.get("abandoned_warning", True)))
+        columns = set(settings.get("columns") or ())
+        for key, box in self.column_boxes.items():
+            box.setChecked(key in columns)
+        self.backup_days.setCurrentIndex(max(0, self.backup_days.findData(int(settings.get("backup_max_days", 30)))))
+        self.backup_mb.setCurrentIndex(max(0, self.backup_mb.findData(int(settings.get("backup_max_mb", 1024)))))
+        self.shortcut_editor.load(settings.get("shortcuts") or {})
         self._loading = False
+
+    def set_backup_usage(self, text: str):
+        self.backup_usage.setText(text)
+
+    def _set_accent(self, accent: str):
+        self._accent = accent
+        self.custom_accent.setText("Свой цвет ✓" if accent.startswith("#") else "Свой цвет…")
+        self._emit()
+
+    def _pick_accent(self):
+        start = QColor(self._accent) if self._accent.startswith("#") else QColor(ACCENTS[DEFAULT_ACCENT][1])
+        color = QColorDialog.getColor(start, self, "Акцентный цвет")
+        if color.isValid():
+            for b in self.accent_group.buttons():
+                b.setChecked(False)
+            self._set_accent(color.name())
 
     def _emit(self, *_):
         if not self._loading:
@@ -409,4 +544,13 @@ class SettingsPage(QWidget):
                 "auto_check": self.auto_check.isChecked(),
                 "discover_launchers": self.discover.isChecked(),
                 "parallel_downloads": int(self.parallel.currentText()),
+                "accent": self._accent,
+                "ui_scale": self.scale.currentData(),
+                "minimal_mode": self.minimal.isChecked(),
+                "per_profile_view": self.per_profile.isChecked(),
+                "abandoned_warning": self.abandoned.isChecked(),
+                "columns": [key for key, box in self.column_boxes.items() if box.isChecked()],
+                "backup_max_days": self.backup_days.currentData(),
+                "backup_max_mb": self.backup_mb.currentData(),
+                "shortcuts": dict(self.shortcut_editor._overrides),
             })

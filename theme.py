@@ -167,6 +167,12 @@ QListWidget::item:hover {{ background: {t['surface2']}; }}
 #ReviewList {{ background: {t['bg']}; padding: 4px; }}
 #ReviewList::item {{ padding: 4px 6px; border-radius: 8px; }}
 #ReviewList::item:selected {{ background: {rgba(t['accent'], 0.14)}; color: {t['text']}; }}
+#Swatch {{ border: 2px solid transparent; border-radius: 15px; }}
+#Swatch:hover {{ border-color: {t['border_strong']}; }}
+#Swatch:checked {{ border: 3px solid {t['text']}; }}
+#StatValue {{ font-size: 20pt; font-weight: 700; }}
+#Thumb {{ background: {t['surface3']}; border-radius: 10px; }}
+#WarningText {{ color: {t['warning']}; }}
 #Segment {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 9px; padding: 7px 14px;
             color: {t['text_muted']}; font-weight: 600; }}
 #Segment:hover {{ background: {t['surface2']}; color: {t['text']}; }}

@@ -260,7 +260,7 @@ def get_projects_info_from_ids(ids: Iterable[str]) -> Dict[str, Dict]:
     return projects_dict
 
 
-SEARCH_SORTS = ("relevance", "downloads", "updated", "newest")
+SEARCH_SORTS = ("relevance", "downloads", "follows", "updated", "newest")
 
 
 def search_projects(query: str, project_type: str = "mod", game_version: Optional[str] = None,

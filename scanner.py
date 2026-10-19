@@ -604,10 +604,12 @@ def entries_from_mrpack(index: Dict) -> List[Dict]:
 # --- Каталог: установка проекта вместе с обязательными зависимостями ---
 
 def resolve_project_install(project_id: str, game_version: str, loader: Optional[str], channel: UpdateChannel,
-                            installed_ids=(), content: ContentType = MODS, max_depth: int = 3) -> List[Dict]:
+                            installed_ids=(), content: ContentType = MODS, max_depth: int = 3,
+                            root_version: Optional[Dict] = None) -> List[Dict]:
     """
     Записи «к установке» для проекта из каталога и его обязательных зависимостей, которых ещё нет в сборке.
     Возвращает пустой список, если совместимой версии нет. Первая запись — сам проект.
+    root_version — конкретная версия проекта (выбранная в списке версий) вместо последней.
     """
     loaders = content.loaders(loader)
     entries: List[Dict] = []
@@ -619,7 +621,10 @@ def resolve_project_install(project_id: str, game_version: str, loader: Optional
         if pid in seen and pid != project_id:
             continue
         seen.add(pid)
-        version = get_latest_version(pid, game_version, loaders, None, channel.version_types)
+        if pid == project_id and root_version:
+            version = root_version
+        else:
+            version = get_latest_version(pid, game_version, loaders, None, channel.version_types)
         if not version:
             if pid == project_id:
                 return []
@@ -692,3 +697,19 @@ def check_target_version(entries: List[Dict], target_version: str, loader: Optio
             version = None
         result.append({"entry": entry, "version": version})
     return result
+
+
+def resolve_many_installs(project_ids: List[str], game_version: str, loader: Optional[str], channel: UpdateChannel,
+                          installed_ids=(), content: ContentType = MODS) -> tuple[List[Dict], List[str]]:
+    """Установка сразу нескольких проектов: общие зависимости не дублируются. Возвращает (записи, без версии)."""
+    entries: Dict[str, Dict] = {}
+    missing = []
+    for pid in project_ids:
+        if pid in entries:
+            continue
+        found = resolve_project_install(pid, game_version, loader, channel, set(installed_ids) | set(entries), content)
+        if not found:
+            missing.append(pid)
+        for entry in found:
+            entries.setdefault(entry["project_id"], entry)
+    return list(entries.values()), missing

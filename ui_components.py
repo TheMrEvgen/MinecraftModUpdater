@@ -297,12 +297,18 @@ class SyncDialog(QDialog):
         return self.url_input.text().strip()
 
 
+PROFILE_ICONS = (("", "Точка"), ("package", "Коробка"), ("layers", "Слои"), ("flame", "Огонь"),
+                 ("shield", "Щит"), ("star", "Звезда"), ("heart", "Сердце"), ("compass", "Компас"),
+                 ("code", "Код"), ("sparkles", "Искры"), ("globe", "Глобус"))
+
+
 class ProfileDialog(QDialog):
     """Создание и редактирование сборки: папка игры, версия, загрузчик, канал обновлений."""
 
     LOADERS = ["fabric", "neoforge", "forge", "quilt"]
 
-    def __init__(self, parent=None, name: str = "", profile: dict | None = None, existing_names=(), channels=()):
+    def __init__(self, parent=None, name: str = "", profile: dict | None = None, existing_names=(), channels=(),
+                 groups=()):
         super().__init__(parent)
         self.setWindowTitle("Изменить сборку" if name else "Новая сборка")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
@@ -354,6 +360,28 @@ class ProfileDialog(QDialog):
             self.channel_combo.addItem(title, value)
         self.channel_combo.setCurrentIndex(max(0, self.channel_combo.findData(self.profile.get("channel"))))
         form.addRow("Обновления", self.channel_combo)
+
+        # Оформление сборки в боковой панели: группа, цвет, значок
+        from theme import ACCENTS
+        self.group_combo = QComboBox()
+        self.group_combo.setEditable(True)
+        self.group_combo.addItem("")
+        self.group_combo.addItems(sorted(g for g in set(groups) if g))
+        self.group_combo.setCurrentText(self.profile.get("group") or "")
+        self.group_combo.lineEdit().setPlaceholderText("Без группы — например, «Серверы»")
+        form.addRow("Группа", self.group_combo)
+        self.color_combo = QComboBox()
+        self.color_combo.addItem("Как у темы", "")
+        for key, (title, dark, _light) in ACCENTS.items():
+            self.color_combo.addItem(title, dark)
+        index = self.color_combo.findData(self.profile.get("color") or "")
+        self.color_combo.setCurrentIndex(max(0, index))
+        form.addRow("Цвет", self.color_combo)
+        self.icon_combo = QComboBox()
+        for key, title in PROFILE_ICONS:
+            self.icon_combo.addItem(title, key)
+        self.icon_combo.setCurrentIndex(max(0, self.icon_combo.findData(self.profile.get("icon") or "")))
+        form.addRow("Значок", self.icon_combo)
         layout.addLayout(form)
 
         self.error_label = QLabel()
@@ -441,6 +469,9 @@ class ProfileDialog(QDialog):
             "game_version": self.version_combo.currentText().strip(),
             "loader": self.loader_combo.currentText(),
             "channel": self.channel_combo.currentData(),
+            "group": self.group_combo.currentText().strip(),
+            "color": self.color_combo.currentData() or "",
+            "icon": self.icon_combo.currentData() or "",
         })
         profile.setdefault("source", "manual")
         return self.name_edit.text().strip(), profile

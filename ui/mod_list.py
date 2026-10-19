@@ -14,9 +14,11 @@ from PyQt6.QtWidgets import QAbstractItemView, QListView, QStyle, QStyledItemDel
 import icons
 from enums import ModStatus
 from theme import qcolor
+from mod_updater_logic import format_date
+from query import Query, is_abandoned, parse_query
 from view_model import (
-    CAT_ALL, DEP_TYPE_LABELS, GROUP_TITLES, entry_key, entry_tags, group_of, matches_category, search_text,
-    status_of, status_sort_key, status_style, subtitle_for, update_date,
+    CAT_ALL, DEP_TYPE_LABELS, GROUP_TITLES, entry_key, entry_tags, format_size, group_of, matches_category,
+    side_tag, status_of, status_sort_key, status_style, subtitle_for, update_date,
 )
 
 ENTRY_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -24,6 +26,11 @@ ROW_HEIGHT = 62
 ROW_HEIGHT_COMPACT = 44
 TREE_INDENT = 30  # Сдвиг строки зависимости в режиме дерева
 HEADER_HEIGHT = 36  # Заголовок группы над первой строкой группы
+# Что можно показывать в строке мода (настройка «Колонки»)
+COLUMNS = (("description", "Описание"), ("versions", "Версии"), ("size", "Размер"), ("date", "Дата обновления"),
+           ("side", "Сторона (клиент/сервер)"), ("tags", "Метки"))
+DEFAULT_COLUMNS = ("description", "versions")
+SIDE_SHORT = {"side:client": "клиент", "side:server": "сервер", "side:both": "клиент + сервер", "side:any": "любая"}
 
 
 def _timestamp(iso: str) -> float:
@@ -118,6 +125,7 @@ class ModFilterProxy(QSortFilterProxyModel):
         super().__init__(parent)
         self.category = CAT_ALL
         self.query = ""
+        self._query: Query = Query()        # Разобранная строка поиска (см. query.py)
         self.tag: Optional[str] = None      # Фильтр по метке (ключ из view_model.entry_tags)
         self.custom_tags: Dict = {}         # Метки пользователя (для поиска и фильтра)
         self.sort_mode = self.SORT_STATUS
@@ -146,14 +154,14 @@ class ModFilterProxy(QSortFilterProxyModel):
 
     @property
     def filter_active(self) -> bool:
-        return self.category != CAT_ALL or bool(self.query) or bool(self.tag)
+        return self.category != CAT_ALL or not self._query.empty or bool(self.tag)
 
     def _matches(self, entry: Optional[Dict]) -> bool:
         if not entry or not matches_category(entry, self.category):
             return False
         if self.tag and self.tag not in {key for key, _ in entry_tags(entry, self.custom_tags)}:
             return False
-        return not self.query or all(word in search_text(entry, self.custom_tags) for word in self.query.split())
+        return self._query.matches(entry, self.custom_tags)
 
     def set_tag(self, tag: Optional[str]):
         self.tag = tag or None
@@ -201,7 +209,8 @@ class ModFilterProxy(QSortFilterProxyModel):
         if category is not None:
             self.category = category
         if query is not None:
-            self.query = query.strip().lower()
+            self.query = query.strip()
+            self._query = parse_query(self.query)
         self.invalidateFilter()
 
     def set_sort_mode(self, mode: str):
@@ -226,14 +235,15 @@ class ModFilterProxy(QSortFilterProxyModel):
         root = meta["parent_row"] if meta.get("depth") else row
         root_entry = model.entry(root)
         root_name = str(root_entry.get("name", "")).lower()
+        favorite = 0 if root_entry.get("_favorite") else 1  # Избранные — наверху (в своей группе)
         if self.sort_mode == self.SORT_STATUS:
-            root_key = (status_sort_key(root_entry), root_name)
+            root_key = (status_sort_key(root_entry), favorite, root_name)
         elif self.sort_mode == self.SORT_UPDATED:  # Сначала недавно обновлённые
-            root_key = (-_timestamp(update_date(root_entry)), root_name)
+            root_key = (favorite, -_timestamp(update_date(root_entry)), root_name)
         elif self.sort_mode == self.SORT_SIZE:  # Сначала самые большие
-            root_key = (-(root_entry.get("size") or root_entry.get("new_size") or 0), root_name)
+            root_key = (favorite, -(root_entry.get("size") or root_entry.get("new_size") or 0), root_name)
         else:
-            root_key = (0, root_name)
+            root_key = (favorite, 0, root_name)
         # Зависимости идут сразу под своим модом, по имени
         return root_key + (root, meta.get("depth", 0), str(model.entry(row).get("name", "")).lower())
 
@@ -257,6 +267,8 @@ class ModDelegate(QStyledItemDelegate):
         self.compact = False   # Компактные строки: одна строка вместо двух
         self.tree = False      # Режим дерева: место под стрелку раскрытия
         self.groups = False    # Заголовки групп («Обновления», «Актуальные»…)
+        self.columns = set(DEFAULT_COLUMNS)
+        self.abandoned_hint = True  # Пометка «давно не обновлялся»
         self.is_expanded: Callable[[Dict], bool] = lambda entry: False
         self.anim: Dict[object, float] = {}  # Раскрытие дерева: ключ мода -> доля высоты его зависимостей (0..1)
         base = view.font()
@@ -319,11 +331,17 @@ class ModDelegate(QStyledItemDelegate):
         lay["more"] = QRect(right - 30, cy - 15, 30, 30)
         lay["update"] = QRect(lay["more"].left() - 34, cy - 15, 30, 30)
         lay["status"] = QRect(lay["update"].left() - 150, cy - 12, 140, 24)
-        wide = rect.width() > 820
-        version_width = 250 if wide else 0
-        lay["versions"] = QRect(lay["status"].left() - version_width - 10, r.top(), version_width, r.height())
+        # Необязательные колонки: «Размер / дата / сторона» и «Версии» — только если хватает ширины
+        meta_on = bool(self.columns & {"size", "date", "side"}) and rect.width() > 900
+        meta_width = 120 if meta_on else 0
+        lay["meta"] = QRect(lay["status"].left() - meta_width - 10, r.top(), meta_width, r.height())
+        wide = rect.width() > 820 and "versions" in self.columns
+        version_width = (230 if meta_on else 250) if wide else 0
+        lay["versions"] = QRect(lay["meta"].left() - version_width - (10 if meta_on else 0), r.top(), version_width,
+                                r.height())
+        lay["meta_on"] = meta_on
         text_left = lay["icon"].right() + 12
-        text_right = (lay["versions"].left() if wide else lay["status"].left()) - 14
+        text_right = (lay["versions"].left() if wide else lay["meta"].left() if meta_on else lay["status"].left()) - 14
         lay["text"] = QRect(text_left, r.top(), max(40, text_right - text_left), r.height())
         lay["wide"] = wide
         return lay
@@ -388,6 +406,8 @@ class ModDelegate(QStyledItemDelegate):
         self._paint_texts(painter, lay, entry, meta.get("dep_type") if depth else None)
         if lay["wide"]:
             self._paint_versions(painter, lay["versions"], entry)
+        if lay["meta_on"]:
+            self._paint_meta(painter, lay["meta"], entry)
         painter.setOpacity(base_opacity)
         self._paint_status(painter, lay["status"], entry)
 
@@ -470,17 +490,9 @@ class ModDelegate(QStyledItemDelegate):
             self._paint_compact_texts(p, lay, entry, dep_type, name, fm)
             return
         name_rect = QRect(r.left(), r.top() + 11, r.width(), fm.height())
-        lock = 18 if entry.get("_pinned") else 0
-        elided = fm.elidedText(name, Qt.TextElideMode.ElideRight, r.width() - lock)
-        p.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
-        if lock:
-            x = r.left() + fm.horizontalAdvance(elided) + 6
-            p.drawPixmap(QRect(x, name_rect.center().y() - 6, 13, 13), icons.pixmap("lock", t["text_muted"], 13))
+        self._paint_name_line(p, name_rect, entry, name, fm)
 
-        subtitle, role = subtitle_for(entry)
-        if dep_type and not entry.get("_issues"):
-            kind = DEP_TYPE_LABELS.get(dep_type, "")
-            subtitle = f"{kind[:1].upper()}{kind[1:]} зависимость" + (f"  ·  {entry['description']}" if entry.get("description") else "")
+        subtitle, role = self._subtitle(entry, dep_type)
         if not lay["wide"] and entry.get("current_version"):
             subtitle = self._versions_text(entry) + "  ·  " + subtitle
         p.setFont(self.font_small)
@@ -490,20 +502,113 @@ class ModDelegate(QStyledItemDelegate):
         p.drawText(sub_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    fm_small.elidedText(subtitle, Qt.TextElideMode.ElideRight, r.width()))
 
+    def _badges(self, entry: Dict) -> List[tuple]:
+        """Значки после названия: (иконка или None, текст, цвет)."""
+        t = self.tokens
+        badges = []
+        if entry.get("_pinned"):
+            badges.append(("lock", "", t["text_muted"]))
+        if entry.get("_note"):
+            badges.append(("pencil", "", t["info"]))
+        if entry.get("_new"):
+            badges.append((None, "новое", t["accent"]))
+        if self.abandoned_hint and entry.get("filepath") and is_abandoned(entry):
+            badges.append((None, "давно не обновлялся", t["warning"]))
+        return badges
+
+    def _paint_name_line(self, p: QPainter, rect: QRect, entry: Dict, name: str, fm: QFontMetrics) -> int:
+        """Звезда избранного, название и значки. Возвращает ширину занятой части."""
+        t = self.tokens
+        x = rect.left()
+        if entry.get("_favorite"):
+            p.drawPixmap(QRect(x, rect.center().y() - 7, 14, 14), icons.pixmap("star_filled", t["warning"], 14))
+            x += 19
+        fm_chip = QFontMetrics(self.font_chip)
+        badges = self._badges(entry)
+        badges_width = sum((16 if icon else fm_chip.horizontalAdvance(text) + 14) + 6 for icon, text, _ in badges)
+        available = max(30, rect.right() - x - badges_width)
+        elided = fm.elidedText(name, Qt.TextElideMode.ElideRight, available)
+        p.setFont(self.font_name)
+        p.setPen(qcolor(t["text"]))
+        p.drawText(QRect(x, rect.top(), available, rect.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   elided)
+        x += fm.horizontalAdvance(elided) + 7
+        for icon_name, text, color in badges:
+            if icon_name:
+                p.drawPixmap(QRect(x, rect.center().y() - 6, 13, 13), icons.pixmap(icon_name, color, 13))
+                x += 19
+            else:
+                w = fm_chip.horizontalAdvance(text) + 14
+                chip = QRectF(x, rect.center().y() - 8, w, 16)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(qcolor(color, 0.14))
+                p.drawRoundedRect(chip, 8, 8)
+                p.setFont(self.font_chip)
+                p.setPen(qcolor(color))
+                p.drawText(chip, Qt.AlignmentFlag.AlignCenter, text)
+                x += w + 6
+        return x - rect.left()
+
+    def _subtitle(self, entry: Dict, dep_type: Optional[str]) -> tuple:
+        """Вторая строка: проблемы важнее всего, затем заметка, затем выбранные колонки (описание, метки)."""
+        text, role = subtitle_for(entry)
+        if role:  # Предупреждение (проблема, «нужен для…»)
+            return text, role
+        if entry.get("_note"):
+            return "✎ " + " ".join(str(entry["_note"]).split()), "info"
+        parts = []
+        if dep_type:
+            kind = DEP_TYPE_LABELS.get(dep_type, "")
+            parts.append(f"{kind[:1].upper()}{kind[1:]} зависимость")
+        if "description" in self.columns and entry.get("description"):
+            parts.append(" ".join(entry["description"].split()))
+        if "tags" in self.columns:
+            tags = [title for key, title in entry_tags(entry) if not key.startswith("side:")]
+            if tags:
+                parts.append("# " + ", ".join(tags[:4]))
+        if not parts:
+            path = entry.get("filepath") or entry.get("new_filename") or ""
+            parts.append(path.replace("\\", "/").rsplit("/", 1)[-1])
+        return "  ·  ".join(parts), None
+
+    def _paint_meta(self, p: QPainter, r: QRect, entry: Dict):
+        """Колонка «размер / дата / сторона» — до двух строк мелким шрифтом."""
+        t = self.tokens
+        lines = []
+        if "size" in self.columns and (entry.get("size") or entry.get("new_size")):
+            lines.append(format_size(entry.get("size") or entry.get("new_size")))
+        if "date" in self.columns:
+            date = format_date(update_date(entry))
+            if date:
+                lines.append(date)
+        if "side" in self.columns:
+            side = side_tag(entry)
+            if side:
+                lines.append(SIDE_SHORT.get(side[0], side[1]))
+        if not lines:
+            return
+        p.setFont(self.font_small)
+        p.setPen(qcolor(t["text_muted"]))
+        fm = QFontMetrics(self.font_small)
+        lines = lines[:2] if not self.compact else lines[:1]
+        top = r.center().y() - (fm.height() * len(lines) + 2 * (len(lines) - 1)) // 2
+        for i, line in enumerate(lines):
+            p.drawText(QRect(r.left(), top + i * (fm.height() + 2), r.width(), fm.height()),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       fm.elidedText(line, Qt.TextElideMode.ElideRight, r.width()))
+
     def _paint_compact_texts(self, p: QPainter, lay: dict, entry: Dict, dep_type: Optional[str], name: str,
                              fm: QFontMetrics):
         """Одна строка: название и короткая пометка рядом (тип зависимости, проблема, версии в узком окне)."""
         t = self.tokens
         r = lay["text"]
-        name_w = min(fm.horizontalAdvance(name), r.width())
-        p.drawText(QRect(r.left(), r.top(), r.width(), r.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   fm.elidedText(name, Qt.TextElideMode.ElideRight, r.width()))
-        if entry.get("_pinned") and r.width() - name_w > 24:
-            p.drawPixmap(QRect(r.left() + name_w + 6, r.center().y() - 6, 13, 13), icons.pixmap("lock", t["text_muted"], 13))
-            name_w += 20
+        name_w = min(self._paint_name_line(p, QRect(r.left(), r.top(), r.width() * 2 // 3, r.height()), entry, name, fm),
+                     r.width())
         note, role = (DEP_TYPE_LABELS.get(dep_type, ""), None) if dep_type else ("", None)
         if entry.get("_issues"):
             note, role = "⚠ " + entry["_issues"][0], "warning"
+        elif entry.get("_note"):
+            note, role = "✎ " + " ".join(str(entry["_note"]).split()), "info"
         if not lay["wide"] and entry.get("current_version"):
             note = self._versions_text(entry) + (f"  ·  {note}" if note else "")
         if note and r.width() - name_w > 40:

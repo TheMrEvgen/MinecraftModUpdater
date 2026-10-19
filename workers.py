@@ -306,8 +306,9 @@ class IconLoader(QObject):
     icon_ready = pyqtSignal(str, str)
     ICON_SIZE = 96
 
-    def __init__(self, cache_dir: str, parent=None):
+    def __init__(self, cache_dir: str, parent=None, size: int = ICON_SIZE):
         super().__init__(parent)
+        self.size = size
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
         self.pool = QThreadPool()
@@ -330,8 +331,17 @@ class IconLoader(QObject):
         if url and project_id not in self._pending:
             self._pending.add(project_id)
             path = os.path.join(self.cache_dir, f"{project_id}.png")
-            self.pool.start(_IconTask(project_id, url, path, self.ICON_SIZE, self._signals))
+            self.pool.start(_IconTask(project_id, url, path, self.size, self._signals))
         return None
+
+    def request_url(self, url: Optional[str]) -> Optional[str]:
+        """Картинка по адресу (скриншоты галереи): ключ кэша — хэш адреса. Сигнал icon_ready(ключ, путь)."""
+        return self.request(self.url_key(url), url) if url else None
+
+    @staticmethod
+    def url_key(url: str) -> str:
+        import hashlib
+        return hashlib.sha1(url.encode("utf-8")).hexdigest()
 
     def _on_loaded(self, project_id: str, path: str):
         self._pending.discard(project_id)

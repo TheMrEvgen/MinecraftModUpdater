@@ -2,7 +2,7 @@
 from typing import Callable, Dict, List, Optional
 
 from PyQt6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QFont, QFontMetrics, QPainter
+from PyQt6.QtGui import QAction, QFont, QFontMetrics, QPainter, QPainterPath, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QVBoxLayout,
@@ -43,6 +43,19 @@ def refresh_button_icons(root: QWidget, tokens: dict):
         name = btn.property("icon_name")
         if name:
             btn.setIcon(icons.icon(name, tokens[btn.property("icon_color_key") or "text"], 16))
+
+
+def rounded_pixmap(pm: QPixmap, size: int, radius: int) -> QPixmap:
+    result = QPixmap(pm.size())
+    result.fill(Qt.GlobalColor.transparent)
+    p = QPainter(result)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    path = QPainterPath()
+    path.addRoundedRect(0, 0, pm.width(), pm.height(), radius * pm.width() / size, radius * pm.width() / size)
+    p.setClipPath(path)
+    p.drawPixmap(0, 0, pm)
+    p.end()
+    return result
 
 
 def add_shadow(widget: QWidget, tokens: dict, blur: int = 28, alpha: float = 0.35):
@@ -286,6 +299,7 @@ class SelectionBar(QFrame):
     delete_clicked = pyqtSignal()
     disable_clicked = pyqtSignal()
     clear_clicked = pyqtSignal()
+    more_clicked = pyqtSignal(QPoint)
 
     def __init__(self, parent: QWidget, tokens: dict):
         super().__init__(parent)
@@ -301,11 +315,14 @@ class SelectionBar(QFrame):
         self.disable_btn = button("Выключить", None, "power", tokens, "text")
         self.delete_btn = button("Удалить", "DangerButton", "trash", tokens, "danger")
         self.clear_btn = button("Снять выделение", "GhostButton", "x", tokens, "text_muted")
+        self.more_btn = button("Ещё", None, "more", tokens, "text", "Закрепить, избранное, метка, набор")
+        self.more_btn.clicked.connect(lambda: self.more_clicked.emit(
+            self.more_btn.mapToGlobal(self.more_btn.rect().topLeft())))
         self.update_btn.clicked.connect(self.update_clicked)
         self.disable_btn.clicked.connect(self.disable_clicked)
         self.delete_btn.clicked.connect(self.delete_clicked)
         self.clear_btn.clicked.connect(self.clear_clicked)
-        for btn in (self.update_btn, self.disable_btn, self.delete_btn, self.clear_btn):
+        for btn in (self.update_btn, self.disable_btn, self.more_btn, self.delete_btn, self.clear_btn):
             layout.addWidget(btn)
         add_shadow(self, tokens, 36, 0.5)
         self.hide()
@@ -390,7 +407,16 @@ class ProfileDelegate(QStyledItemDelegate):
         self.tokens = tokens
 
     def sizeHint(self, option, index):
-        return QSize(option.rect.width(), 50)
+        data = index.data(PROFILE_ROLE) or {}
+        return QSize(option.rect.width(), 30 if data.get("header") else 50)
+
+    @staticmethod
+    def _header_font(base):
+        font = QFont(base)
+        font.setPointSizeF(max(base.pointSizeF() - 2, 7))
+        font.setWeight(QFont.Weight.DemiBold)
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 108)
+        return font
 
     def paint(self, p: QPainter, option, index):
         t = self.tokens
@@ -399,16 +425,27 @@ class ProfileDelegate(QStyledItemDelegate):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = option.rect.adjusted(6, 2, -6, -2)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver) and not data.get("header")
         if selected or hovered:
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(qcolor(t["accent"], 0.12) if selected else qcolor(t["surface2"]))
             p.drawRoundedRect(QRectF(r), 8, 8)
 
-        dot = QRectF(r.left() + 12, r.center().y() - 4, 8, 8)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(qcolor(t["accent"] if selected else t["border_strong"]))
-        p.drawEllipse(dot)
+        if data.get("header"):  # Заголовок группы сборок
+            p.setFont(self._header_font(option.font))
+            p.setPen(qcolor(t["text_faint"]))
+            p.drawText(r.adjusted(10, 0, -6, -2), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
+                       str(data.get("name", "")).upper())
+            p.restore()
+            return
+        color = data.get("color") or (t["accent"] if selected else t["border_strong"])
+        if data.get("icon"):
+            p.drawPixmap(QRect(r.left() + 8, r.center().y() - 8, 16, 16), icons.pixmap(data["icon"], color, 16))
+        else:
+            dot = QRectF(r.left() + 12, r.center().y() - 4, 8, 8)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(qcolor(color))
+            p.drawEllipse(dot)
 
         name_font = QFont(option.font)
         name_font.setWeight(QFont.Weight.DemiBold)
@@ -434,9 +471,10 @@ class Sidebar(QFrame):
     profile_context_menu = pyqtSignal(str, QPoint)
     add_profile_clicked = pyqtSignal()
     page_changed = pyqtSignal(int)
+    profiles_reordered = pyqtSignal(list)  # [(имя, группа)] в новом порядке
 
-    PAGES = (("package", "Моды"), ("compass", "Каталог"), ("history", "История"), ("terminal", "Журнал"),
-             ("settings", "Настройки"))
+    PAGES = (("package", "Моды"), ("compass", "Каталог"), ("history", "История"), ("bar_chart", "Статистика"),
+             ("terminal", "Журнал"), ("settings", "Настройки"))
 
     def __init__(self, tokens: dict, app_version: str, parent=None):
         super().__init__(parent)
@@ -483,6 +521,10 @@ class Sidebar(QFrame):
         self.profile_list.setItemDelegate(self.profile_delegate)
         self.profile_list.currentItemChanged.connect(self._on_current_changed)
         self.profile_list.customContextMenuRequested.connect(self._on_context_menu)
+        # Порядок и группы меняются перетаскиванием
+        self.profile_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.profile_list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.profile_list.model().rowsMoved.connect(lambda *_: QTimer.singleShot(0, self._emit_order))
         layout.addWidget(self.profile_list, 1)
 
         layout.addSpacing(8)
@@ -526,24 +568,45 @@ class Sidebar(QFrame):
         self._refresh_nav_icons()
 
     def set_profiles(self, profiles: List[Dict], current: str):
+        """Сборки без группы — сверху, затем группы (в порядке первого появления) с заголовками."""
         self.profile_list.blockSignals(True)
         self.profile_list.clear()
+        groups: Dict[str, List[Dict]] = {}
         for data in profiles:
-            item = QListWidgetItem(data["name"])
-            item.setData(PROFILE_ROLE, data)
-            item.setToolTip(data.get("tooltip", ""))
-            self.profile_list.addItem(item)
-            if data["name"] == current:
-                self.profile_list.setCurrentItem(item)
+            groups.setdefault(data.get("group") or "", []).append(data)
+        for group, items in sorted(groups.items(), key=lambda g: g[0] != ""):
+            if group:
+                header = QListWidgetItem(group)
+                header.setData(PROFILE_ROLE, {"name": group, "header": True})
+                header.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsDropEnabled)
+                self.profile_list.addItem(header)
+            for data in items:
+                item = QListWidgetItem(data["name"])
+                item.setData(PROFILE_ROLE, data)
+                item.setToolTip(data.get("tooltip", ""))
+                self.profile_list.addItem(item)
+                if data["name"] == current:
+                    self.profile_list.setCurrentItem(item)
         self.profile_list.blockSignals(False)
 
+    def _emit_order(self):
+        order, group = [], ""
+        for i in range(self.profile_list.count()):
+            data = self.profile_list.item(i).data(PROFILE_ROLE) or {}
+            if data.get("header"):
+                group = data.get("name", "")
+            else:
+                order.append((data.get("name"), group))
+        self.profiles_reordered.emit(order)
+
     def _on_current_changed(self, current, previous):
-        if current:
+        data = current.data(PROFILE_ROLE) if current else None
+        if current and not (data or {}).get("header"):
             self.profile_selected.emit(current.text())
 
     def _on_context_menu(self, pos):
         item = self.profile_list.itemAt(pos)
-        if item:
+        if item and not (item.data(PROFILE_ROLE) or {}).get("header"):
             self.profile_context_menu.emit(item.text(), self.profile_list.viewport().mapToGlobal(pos))
 
 

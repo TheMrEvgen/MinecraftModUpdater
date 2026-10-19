@@ -2,10 +2,10 @@
 import os
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QFontMetrics, QPainter, QPainterPath, QPixmap
+from PyQt6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QFont, QFontMetrics, QPainter, QPixmap
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QFormLayout, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QScrollArea,
+    QAbstractItemView, QFormLayout, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPlainTextEdit, QScrollArea,
     QSizePolicy, QStyle, QStyledItemDelegate, QTextBrowser, QVBoxLayout, QWidget,
 )
 
@@ -13,7 +13,8 @@ import icons
 from enums import ModStatus
 from mod_updater_logic import format_date
 from theme import qcolor, rgba
-from ui.widgets import button, label, refresh_button_icons
+from ui.widgets import button, label, refresh_button_icons, rounded_pixmap
+from query import days_since, is_abandoned
 from view_model import entry_tags, format_size, status_of, status_style
 
 
@@ -107,19 +108,6 @@ class VersionDelegate(QStyledItemDelegate):
         p.restore()
 
 
-def rounded_pixmap(pm: QPixmap, size: int, radius: int) -> QPixmap:
-    result = QPixmap(pm.size())
-    result.fill(Qt.GlobalColor.transparent)
-    p = QPainter(result)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    path = QPainterPath()
-    path.addRoundedRect(0, 0, pm.width(), pm.height(), radius * pm.width() / size, radius * pm.width() / size)
-    p.setClipPath(path)
-    p.drawPixmap(0, 0, pm)
-    p.end()
-    return result
-
-
 class DetailsPanel(QFrame):
     closed = pyqtSignal()
     install_requested = pyqtSignal(object)
@@ -132,6 +120,9 @@ class DetailsPanel(QFrame):
     pin_toggled = pyqtSignal(object)
     disable_toggled = pyqtSignal(object)
     tags_menu_requested = pyqtSignal(object, QPoint)
+    favorite_toggled = pyqtSignal(object)
+    note_changed = pyqtSignal(object, str)
+    replacement_requested = pyqtSignal(object)   # Найти замену давно не обновлявшемуся моду
 
     def __init__(self, tokens: dict, parent=None):
         super().__init__(parent)
@@ -141,6 +132,7 @@ class DetailsPanel(QFrame):
         self.entry: Optional[Dict] = None
         self._versions: List[Dict] = []
         self.custom_tags: Dict = {}  # Метки пользователя (ссылка на конфиг главного окна)
+        self.show_abandoned = True
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -156,6 +148,10 @@ class DetailsPanel(QFrame):
         self.layout_.setSpacing(12)
 
         top = QHBoxLayout()
+        self.favorite_btn = button("", "IconButton", "star", tokens, "text_muted", "В избранное")
+        self.favorite_btn.setFixedSize(30, 30)
+        self.favorite_btn.clicked.connect(lambda: self.entry and self.favorite_toggled.emit(self.entry))
+        top.addWidget(self.favorite_btn)
         top.addStretch()
         self.close_btn = button("", "IconButton", "x", tokens, "text_muted", "Закрыть (Esc)")
         self.close_btn.setFixedSize(30, 30)
@@ -228,6 +224,41 @@ class DetailsPanel(QFrame):
         self.tags_label.setTextFormat(Qt.TextFormat.RichText)
         self.layout_.addWidget(self.tags_label)
 
+        # Давно не обновлялся
+        self.abandoned_box = QFrame()
+        self.abandoned_box.setObjectName("Banner")
+        box = QHBoxLayout(self.abandoned_box)
+        box.setContentsMargins(12, 8, 8, 8)
+        self.abandoned_label = label("", None, wrap=True)
+        box.addWidget(self.abandoned_label, 1)
+        self.replace_btn = button("Найти замену", "GhostButton", "compass", tokens, "text")
+        self.replace_btn.clicked.connect(lambda: self.entry and self.replacement_requested.emit(self.entry))
+        box.addWidget(self.replace_btn)
+        self.layout_.addWidget(self.abandoned_box)
+
+        # Заметка (сохраняется сама через полсекунды после ввода)
+        self.note_title = label("Заметка", "SectionTitle")
+        self.note_edit = QPlainTextEdit()
+        self.note_edit.setPlaceholderText("Например: не обновлять до 1.21.4 — ломает мир")
+        self.note_edit.setFixedHeight(64)
+        self._note_timer = QTimer(self, singleShot=True, interval=500)
+        self._note_timer.timeout.connect(self._save_note)
+        self.note_edit.textChanged.connect(lambda: not self._loading_note and self._note_timer.start())
+        self._loading_note = False
+        self.layout_.addWidget(self.note_title)
+        self.layout_.addWidget(self.note_edit)
+
+        # Ссылки и галерея
+        from ui.gallery import LinksRow
+        self.links_title = label("Ссылки", "SectionTitle")
+        self.links = LinksRow(tokens)
+        self.layout_.addWidget(self.links_title)
+        self.layout_.addWidget(self.links)
+        self.gallery_title = label("Скриншоты", "SectionTitle")
+        self.gallery = None  # Создаётся в attach_gallery: нужны загрузчики картинок главного окна
+        self.layout_.addWidget(self.gallery_title)
+        self._gallery_index = self.layout_.count()
+
         self.info_card = QFrame()
         self.info_card.setObjectName("Card")
         self.info_form = QFormLayout(self.info_card)
@@ -277,8 +308,19 @@ class DetailsPanel(QFrame):
         self.layout_.addStretch()
         self._set_versions_visible(False)
 
+    def attach_gallery(self, thumb_loader, full_loader):
+        from ui.gallery import GalleryStrip
+        self.gallery = GalleryStrip(thumb_loader, full_loader)
+        self.layout_.insertWidget(self._gallery_index, self.gallery)
+        self.gallery.hide()
+
+    def _save_note(self):
+        if self.entry is not None:
+            self.note_changed.emit(self.entry, self.note_edit.toPlainText().strip())
+
     def set_tokens(self, tokens: dict):
         self.tokens = tokens
+        self.links.tokens = tokens
         self.versions_delegate.tokens = tokens
         self.versions_list.viewport().update()
         refresh_button_icons(self, tokens)
@@ -290,6 +332,9 @@ class DetailsPanel(QFrame):
     def set_entry(self, entry: Dict, icon_pm: Optional[QPixmap]):
         t = self.tokens
         same_entry = self.entry is entry
+        if not same_entry and self._note_timer.isActive():  # Не теряем заметку, набранную прямо перед переключением
+            self._note_timer.stop()
+            self._save_note()
         self.entry = entry
         status = status_of(entry)
 
@@ -343,6 +388,37 @@ class DetailsPanel(QFrame):
             chips.append(f"<span style='background:{t['surface3']}; color:{color};'>&nbsp;{title}&nbsp;</span>")
         self.tags_label.setText("&nbsp; ".join(chips))
         self.tags_label.setVisible(bool(chips))
+
+        favorite = bool(entry.get("_favorite"))
+        self.favorite_btn.setProperty("icon_name", "star_filled" if favorite else "star")
+        self.favorite_btn.setProperty("icon_color_key", "warning" if favorite else "text_muted")
+        self.favorite_btn.setIcon(icons.icon("star_filled" if favorite else "star", t["warning" if favorite else "text_muted"], 16))
+        self.favorite_btn.setToolTip("Убрать из избранного" if favorite else "В избранное")
+        self.favorite_btn.setVisible(bool(has_file or entry.get("project_id")))
+
+        age = days_since(entry.get("project_updated"))
+        abandoned = bool(entry.get("filepath")) and is_abandoned(entry)
+        if abandoned:
+            years = age / 365
+            when = f"{years:.1f} года".replace(".", ",") if years < 5 else "больше 5 лет"
+            self.abandoned_label.setText(f"Автор не обновлял мод {when}. Он может не работать с новыми версиями игры.")
+        self.abandoned_box.setVisible(abandoned and self.show_abandoned)
+
+        if not same_entry:
+            self._note_timer.stop()
+            self._loading_note = True
+            self.note_edit.setPlainText(entry.get("_note") or "")
+            self._loading_note = False
+        self.note_title.setVisible(has_file or bool(entry.get("project_id")))
+        self.note_edit.setVisible(has_file or bool(entry.get("project_id")))
+
+        links = entry.get("links") or []
+        self.links.set_links(links)
+        self.links_title.setVisible(bool(links))
+        gallery = entry.get("gallery") or []
+        if self.gallery is not None and not same_entry:
+            self.gallery.set_items(gallery)
+        self.gallery_title.setVisible(bool(gallery) and self.gallery is not None)
 
         self._fill_info(entry)
         self._fill_dependencies(entry)
