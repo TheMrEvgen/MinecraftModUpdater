@@ -89,3 +89,17 @@ def test_read_mrpack(tmp_path):
     bad.write_bytes(b"nope")
     with pytest.raises(ValueError):
         read_mrpack(str(bad))
+
+
+def test_entry_at_returns_original_dict_through_proxy():
+    """index.data() отдаёт копию dict — отметки должны меняться в самой записи модели."""
+    from ui.mod_list import ModFilterProxy, ModListModel, entry_at
+    model, proxy = ModListModel(), ModFilterProxy()
+    items = [{"name": "B", "status": "x"}, {"name": "A", "status": "x"}]
+    model.set_items(items)
+    proxy.setSourceModel(model)
+    proxy.set_sort_mode(ModFilterProxy.SORT_NAME)
+    entry = entry_at(proxy.index(0, 0))
+    assert entry is items[1]
+    entry["_is_checked"] = True
+    assert items[1]["_is_checked"] is True

@@ -25,7 +25,7 @@ from mod_updater_logic import format_date, get_latest_loader_version, select_pri
 from scanner import entries_from_mrpack, mrpack_game_info, read_mrpack
 from theme import THEMES, apply_window_frame_theme, build_stylesheet, detect_system_theme
 from ui.details_panel import DetailsPanel
-from ui.mod_list import ENTRY_ROLE, ModDelegate, ModFilterProxy, ModListModel, ModListView
+from ui.mod_list import ModDelegate, ModFilterProxy, ModListModel, ModListView, entry_at
 from ui.pages import HistoryPage, LogPage, SettingsPage
 from ui.widgets import (
     ChipButton, DropOverlay, ElidedLabel, EmptyState, SearchBox, SelectionBar, Sidebar, StatCard, ToastManager,
@@ -845,7 +845,7 @@ class ModUpdaterApp(QMainWindow):
     # ================================================================== Выделение и панель деталей
 
     def _visible_entries(self) -> List[dict]:
-        return [self.proxy.index(r, 0).data(ENTRY_ROLE) for r in range(self.proxy.rowCount())]
+        return [entry_at(self.proxy.index(r, 0)) for r in range(self.proxy.rowCount())]
 
     def _checked_entries(self) -> List[dict]:
         return [e for e in self.model.items() if e.get("_is_checked")]
@@ -891,14 +891,14 @@ class ModUpdaterApp(QMainWindow):
         self._refresh_selection_ui()
 
     def _toggle_current(self):
-        entry = self.view.currentIndex().data(ENTRY_ROLE)
+        entry = entry_at(self.view.currentIndex())
         if entry:
             entry["_is_checked"] = not entry.get("_is_checked")
             self.view.viewport().update()
             self._refresh_selection_ui()
 
     def _on_current_changed(self, current, previous):
-        entry = current.data(ENTRY_ROLE) if current.isValid() else None
+        entry = entry_at(current)
         if entry:
             self.details.set_entry(entry, self._icon_for_entry(entry))
             self.details.show()
@@ -909,7 +909,7 @@ class ModUpdaterApp(QMainWindow):
         key = entry_key(entry)
         for row in range(self.proxy.rowCount()):
             idx = self.proxy.index(row, 0)
-            if entry_key(idx.data(ENTRY_ROLE)) == key:
+            if entry_key(entry_at(idx)) == key:
                 self.view.selectionModel().setCurrentIndex(idx, QItemSelectionModel.SelectionFlag.ClearAndSelect)
                 self.view.scrollTo(idx)
                 return
@@ -1280,7 +1280,7 @@ class ModUpdaterApp(QMainWindow):
         if checked:
             self._delete_entries(checked)
         else:
-            entry = self.view.currentIndex().data(ENTRY_ROLE)
+            entry = entry_at(self.view.currentIndex())
             if entry and entry.get("filepath"):
                 self._delete_entries([entry])
 

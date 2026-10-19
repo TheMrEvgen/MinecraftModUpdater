@@ -35,13 +35,13 @@ def rounded_pixmap(pm: QPixmap, size: int, radius: int) -> QPixmap:
 
 class DetailsPanel(QFrame):
     closed = pyqtSignal()
-    install_requested = pyqtSignal(dict)
-    delete_requested = pyqtSignal(dict)
-    open_page_requested = pyqtSignal(dict)
-    open_file_requested = pyqtSignal(dict)
-    versions_requested = pyqtSignal(dict)
-    version_install_requested = pyqtSignal(dict, dict)
-    select_entry_requested = pyqtSignal(dict)
+    install_requested = pyqtSignal(object)
+    delete_requested = pyqtSignal(object)
+    open_page_requested = pyqtSignal(object)
+    open_file_requested = pyqtSignal(object)
+    versions_requested = pyqtSignal(object)
+    version_install_requested = pyqtSignal(object, object)
+    select_entry_requested = pyqtSignal(object)
 
     def __init__(self, tokens: dict, parent=None):
         super().__init__(parent)

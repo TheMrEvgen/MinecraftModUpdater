@@ -21,6 +21,19 @@ ENTRY_ROLE = Qt.ItemDataRole.UserRole + 1
 ROW_HEIGHT = 62
 
 
+def entry_at(index: QModelIndex) -> Optional[Dict]:
+    """
+    Запись мода по индексу (в том числе индексу прокси) — сам словарь, а не копия.
+    entry_at(index) возвращает копию: PyQt превращает dict в QVariantMap и обратно,
+    поэтому изменения (например, отметка _is_checked) через неё терялись бы.
+    """
+    model = index.model() if index.isValid() else None
+    while isinstance(model, QSortFilterProxyModel):
+        index = model.mapToSource(index)
+        model = index.model()
+    return model.entry(index.row()) if isinstance(model, ModListModel) else None
+
+
 class ModListModel(QAbstractListModel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -33,6 +46,9 @@ class ModListModel(QAbstractListModel):
 
     def items(self) -> List[Dict]:
         return self._items
+
+    def entry(self, row: int) -> Optional[Dict]:
+        return self._items[row] if 0 <= row < len(self._items) else None
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self._items)
@@ -82,13 +98,13 @@ class ModFilterProxy(QSortFilterProxyModel):
         self.sort(0)
 
     def filterAcceptsRow(self, source_row, source_parent):
-        entry = self.sourceModel().index(source_row, 0, source_parent).data(ENTRY_ROLE)
+        entry = self.sourceModel().entry(source_row)
         if not entry or not matches_category(entry, self.category):
             return False
         return not self.query or all(word in search_text(entry) for word in self.query.split())
 
     def lessThan(self, left, right):
-        a, b = left.data(ENTRY_ROLE), right.data(ENTRY_ROLE)
+        a, b = self.sourceModel().entry(left.row()), self.sourceModel().entry(right.row())
         name_a, name_b = str(a.get("name", "")).lower(), str(b.get("name", "")).lower()
         if self.sort_mode == self.SORT_STATUS:
             return (status_sort_key(a), name_a) < (status_sort_key(b), name_b)
@@ -97,9 +113,9 @@ class ModFilterProxy(QSortFilterProxyModel):
 
 class ModDelegate(QStyledItemDelegate):
     """Рисует строку мода: чекбокс, иконка, название + подпись, версии, статус, кнопки."""
-    check_toggled = pyqtSignal(dict)
-    update_clicked = pyqtSignal(dict)
-    menu_requested = pyqtSignal(dict, QPoint)
+    check_toggled = pyqtSignal(object)
+    update_clicked = pyqtSignal(object)
+    menu_requested = pyqtSignal(object, QPoint)
 
     def __init__(self, view: QListView, tokens: dict, icon_provider: Callable[[Dict], Optional[QPixmap]]):
         super().__init__(view)
@@ -148,7 +164,7 @@ class ModDelegate(QStyledItemDelegate):
     # --- Отрисовка ---
 
     def paint(self, painter: QPainter, option, index):
-        entry = index.data(ENTRY_ROLE)
+        entry = entry_at(index)
         if not entry:
             return
         t = self.tokens
@@ -327,7 +343,7 @@ class ModDelegate(QStyledItemDelegate):
     # --- Взаимодействие ---
 
     def editorEvent(self, event, model, option, index):
-        entry = index.data(ENTRY_ROLE)
+        entry = entry_at(index)
         if not entry:
             return False
         etype = event.type()
@@ -358,7 +374,7 @@ class ModDelegate(QStyledItemDelegate):
         return True  # Клики по элементам управления не меняют выделение строки
 
     def helpEvent(self, event, view, option, index):
-        entry = index.data(ENTRY_ROLE)
+        entry = entry_at(index)
         if not entry or event.type() != QEvent.Type.ToolTip:
             return super().helpEvent(event, view, option, index)
         pos = event.pos()
@@ -385,7 +401,7 @@ class ModDelegate(QStyledItemDelegate):
 
 class ModListView(QListView):
     """Список с плавной прокруткой и подсветкой строки под курсором."""
-    context_menu_requested = pyqtSignal(dict, QPoint)
+    context_menu_requested = pyqtSignal(object, QPoint)
     toggle_requested = pyqtSignal()
     delete_requested = pyqtSignal()
 
@@ -404,7 +420,7 @@ class ModListView(QListView):
 
     def contextMenuEvent(self, event):
         index = self.indexAt(event.pos())
-        entry = index.data(ENTRY_ROLE) if index.isValid() else None
+        entry = entry_at(index)
         if entry:
             self.setCurrentIndex(index)
             self.context_menu_requested.emit(entry, event.globalPos())
