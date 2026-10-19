@@ -43,6 +43,13 @@ def attach_console() -> None:
         pass
     if sys.stdout is None:  # Нет ни консоли, ни перенаправления — пишем в никуда, лог остаётся в файле
         sys.stdout = sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    # Вывод, перенаправленный в файл (например, из планировщика), пишем в UTF-8, а не в ANSI-кодировке
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure") and not stream.isatty():
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
 
 
 def build_parser() -> argparse.ArgumentParser:

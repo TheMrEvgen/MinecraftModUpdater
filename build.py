@@ -163,6 +163,10 @@ if __name__ == '__main__':
     import sys
     onedir_mode = '--onedir' in sys.argv
     create_version_file()
-    if build_executable(onedir_mode):
+    success = build_executable(onedir_mode)
+    if success:
         create_zip_archive(onedir_mode)
     cleanup()
+    if not success:
+        print("Подсказка: если ошибка «Отказано в доступе» — закройте запущенную программу и повторите сборку.")
+        sys.exit(1)  # build.bat должен увидеть ошибку, а не писать «Сборка завершена»
