@@ -7,7 +7,7 @@ import logging
 import os
 import time
 import xml.etree.ElementTree as ET  # type: ignore
-from typing import Callable, Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Union
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -69,6 +69,16 @@ class HashMismatchError(DownloadError):
 
 class DownloadCancelled(DownloadError):
     """Скачивание прервано пользователем."""
+
+
+Loaders = Union[str, List[str], None]
+
+
+def _loader_list(loader: Loaders) -> List[str]:
+    """Загрузчик для запросов: строка ('fabric') или список (у шейдеров — iris, optifine…)."""
+    if not loader:
+        return []
+    return [loader] if isinstance(loader, str) else list(loader)
 
 
 def _chunks(items: List, size: int) -> Iterable[List]:
@@ -175,7 +185,7 @@ def get_mods_info_from_hashes(hashes: List[str]) -> Dict[str, Dict]:
     return all_data
 
 
-def get_latest_versions_from_hashes(hashes: List[str], game_version: str, loader: str,
+def get_latest_versions_from_hashes(hashes: List[str], game_version: str, loader: Loaders,
                                     version_types: Optional[List[str]] = None) -> Dict[str, Dict]:
     """
     Последние совместимые версии сразу для всех установленных файлов (POST /version_files/update).
@@ -186,7 +196,7 @@ def get_latest_versions_from_hashes(hashes: List[str], game_version: str, loader
     url = f"{MODRINTH_API_BASE}/version_files/update"
     result: Dict[str, Dict] = {}
     for chunk in _chunks(hashes, HASH_CHUNK_SIZE):
-        payload = {"hashes": chunk, "algorithm": "sha1", "loaders": [loader], "game_versions": [game_version]}
+        payload = {"hashes": chunk, "algorithm": "sha1", "loaders": _loader_list(loader), "game_versions": [game_version]}
         if version_types:
             payload["version_types"] = version_types
         result.update(_post_json(url, payload, timeout=30))
@@ -203,15 +213,17 @@ def get_versions_by_ids(version_ids: List[str]) -> Dict[str, Dict]:
     return result
 
 
-def get_all_versions(project_id: str, game_version: str, loader: str) -> List[Dict]:
+def get_all_versions(project_id: str, game_version: str, loader: Loaders) -> List[Dict]:
     """Список всех версий мода для указанной версии игры и загрузчика (новые первыми)."""
     url = f"{MODRINTH_API_BASE}/project/{project_id}/version"
-    params = {"loaders": json.dumps([loader]), "game_versions": json.dumps([game_version])}
+    params = {"game_versions": json.dumps([game_version])}
+    if _loader_list(loader):
+        params["loaders"] = json.dumps(_loader_list(loader))
     logging.debug(f"Поиск версий для project_id={project_id}: game_version={game_version}, loader={loader}")
     return _get_json(url, params=params)
 
 
-def get_latest_version(project_id: str, game_version: str, loader: str, target_version: Optional[str] = None,
+def get_latest_version(project_id: str, game_version: str, loader: Loaders, target_version: Optional[str] = None,
                        version_types: Optional[List[str]] = None) -> Optional[Dict]:
     """Находит версию мода (точную или последнюю в выбранном канале) для версии игры и загрузчика."""
     versions = get_all_versions(project_id, game_version, loader)
@@ -246,6 +258,37 @@ def get_projects_info_from_ids(ids: Iterable[str]) -> Dict[str, Dict]:
             projects_dict[p['id']] = p
     logging.debug(f"Получена информация о {len(projects_dict)} проектах.")
     return projects_dict
+
+
+SEARCH_SORTS = ("relevance", "downloads", "updated", "newest")
+
+
+def search_projects(query: str, project_type: str = "mod", game_version: Optional[str] = None,
+                    loaders: Loaders = None, index: str = "relevance", offset: int = 0, limit: int = 20) -> Dict:
+    """
+    Поиск в каталоге Modrinth (GET /search). Возвращает {"hits": [...], "total_hits": N}.
+    Фильтры передаются facets: внутри списка — «или», между списками — «и».
+    """
+    facets = [[f"project_type:{project_type}"]]
+    if game_version:
+        facets.append([f"versions:{game_version}"])
+    loader_list = _loader_list(loaders)
+    if loader_list:
+        facets.append([f"categories:{loader}" for loader in loader_list])
+    params = {"query": query or "", "facets": json.dumps(facets), "index": index if index in SEARCH_SORTS else "relevance",
+              "offset": max(0, offset), "limit": max(1, min(limit, 100))}
+    return _get_json(f"{MODRINTH_API_BASE}/search", params=params)
+
+
+def get_game_versions(include_snapshots: bool = False) -> List[str]:
+    """Версии Minecraft (новые первыми) из справочника Modrinth."""
+    cache_key = f"game_versions:{include_snapshots}"
+    if cache_key not in SESSION_CACHE:
+        data = _get_json(f"{MODRINTH_API_BASE}/tag/game_version")
+        data.sort(key=lambda v: v.get("date") or "", reverse=True)
+        SESSION_CACHE[cache_key] = [v["version"] for v in data
+                                    if include_snapshots or v.get("version_type") == "release"]
+    return list(SESSION_CACHE[cache_key])  # type: ignore
 
 
 # --- Версии загрузчиков ---

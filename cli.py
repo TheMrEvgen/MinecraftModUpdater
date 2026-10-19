@@ -7,6 +7,9 @@ r"""
     "Minecraft Mod Updater.exe" --profile Server --update-all
     "Minecraft Mod Updater.exe" --profile Server --rollback
     "Minecraft Mod Updater.exe" --game-dir D:\server --loader fabric --game-version 1.21.1 --update-all
+    "Minecraft Mod Updater.exe" --profile Client --content shaders --update-all
+
+Закреплённые в программе версии и выключенные (*.disabled) моды не обновляются.
 
 Коды возврата: 0 — успех, 1 — часть модов не обновилась, 2 — ошибка параметров/конфигурации,
 3 — файлы модов заблокированы (игра или сервер запущены).
@@ -19,6 +22,7 @@ import sys
 from typing import List, Optional
 
 import config as app_config
+from content import CONTENT_TYPES, content_by_key
 from enums import ModStatus, UpdateChannel
 from game_detection import detect_game_versions
 
@@ -66,6 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loader", choices=["fabric", "forge", "neoforge", "quilt"], help="загрузчик")
     parser.add_argument("--no-deps", action="store_true", help="не устанавливать недостающие обязательные зависимости")
     parser.add_argument("--force", action="store_true", help="не проверять, запущена ли игра")
+    parser.add_argument("--content", choices=[c.key for c in CONTENT_TYPES], default="mods",
+                        help="что обновлять: моды, шейдеры или ресурспаки")
+    parser.add_argument("--no-snapshot", action="store_true", help="не сохранять снимок сборки перед обновлением")
     return parser
 
 
@@ -82,7 +89,8 @@ def _resolve_versions(profile: dict, args) -> tuple[Optional[str], Optional[str]
     return args.game_version or game_version, args.loader or loader
 
 
-def _collect_updates(mods_data: List[dict], include_deps: bool) -> List[dict]:
+def _collect_updates(mods_data: List[dict], include_deps: bool, pinned=()) -> List[dict]:
+    from view_model import pin_key
     statuses = {ModStatus.UPDATE_AVAILABLE, ModStatus.READY_TO_INSTALL}
     if include_deps:
         statuses.add(ModStatus.REQUIRED)
@@ -90,7 +98,8 @@ def _collect_updates(mods_data: List[dict], include_deps: bool) -> List[dict]:
     for mod in mods_data:
         for entry in [mod] + mod.get('dependencies', []):
             pid = entry.get('project_id')
-            if pid and pid not in result and entry.get('download_url') and entry.get('status') in statuses:
+            if (pid and pid not in result and entry.get('download_url') and entry.get('status') in statuses
+                    and not entry.get('disabled') and pin_key(entry) not in pinned):
                 result[pid] = entry
     return list(result.values())
 
@@ -118,15 +127,16 @@ def run(argv: List[str]) -> int:
         if not args.profile:
             profile_name = "(--game-dir)"
             profile["manual_mode"] = False
-    mods_path = os.path.join(profile.get("mods_path", ""), "mods")
+    content = content_by_key(args.content)
+    mods_path = content.path(profile.get("mods_path", ""))
     if not os.path.isdir(mods_path):
-        _print(f"Папка mods не найдена: {mods_path}")
+        _print(f"Папка {content.folder} не найдена: {mods_path}")
         return EXIT_USAGE
 
     # Импорты здесь, чтобы --list-profiles работал без сетевых зависимостей
     from scanner import scan_mods
-    from updater import (UpdateTransaction, describe_transaction, find_locked_files, get_last_transaction,
-                         install_mod, is_game_running, rollback_transaction)
+    from updater import (UpdateTransaction, create_snapshot, describe_transaction, find_locked_files,
+                         get_last_transaction, install_mod, is_game_running, prune_snapshots, rollback_transaction)
 
     if args.rollback:
         manifest = get_last_transaction(mods_path)
@@ -152,8 +162,12 @@ def run(argv: List[str]) -> int:
     _print(f"Профиль: {profile_name} | Minecraft {game_version} ({loader}) | канал: {channel.display_name}")
     _print(f"Папка: {mods_path}")
     mods_data = scan_mods(mods_path, game_version, loader, app_config.CACHE_FILE, channel,
-                          progress=lambda msg: logging.info(msg))
-    updates = _collect_updates(mods_data, include_deps=not args.no_deps)
+                          progress=lambda msg: logging.info(msg), content=content)
+    pinned = set(profile.get("pinned") or {})
+    updates = _collect_updates(mods_data, include_deps=not args.no_deps, pinned=pinned)
+    skipped = [m['name'] for m in mods_data if m.get('download_url') and (m.get('disabled') or m.get('project_id') in pinned)]
+    if skipped:
+        _print(f"Пропущены (закреплены или выключены): {', '.join(skipped)}")
     not_found = sum(1 for m in mods_data if m['status'] == ModStatus.NOT_FOUND)
     _print(f"Модов: {len(mods_data)}, не найдено на Modrinth: {not_found}, к установке/обновлению: {len(updates)}")
     for entry in updates:
@@ -168,6 +182,12 @@ def run(argv: List[str]) -> int:
         if locked or is_game_running(mods_path):
             _print("Файлы модов заблокированы — похоже, игра или сервер запущены. Остановите их или используйте --force.")
             return EXIT_LOCKED
+
+    settings = cfg.get("settings") or {}
+    if not args.no_snapshot and settings.get("auto_snapshot", True):
+        if create_snapshot(mods_path, "update_all", content):
+            prune_snapshots(mods_path, int(settings.get("snapshots_keep", 10)))
+            _print("Снимок сборки сохранён (вернуть можно на странице «История» в программе).")
 
     transaction = UpdateTransaction(mods_path, "update")
     failed = []

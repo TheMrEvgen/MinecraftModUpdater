@@ -22,6 +22,7 @@ except ImportError:
 
 import requests
 
+from content import MODS, ContentType, enabled_name, is_disabled
 from enums import ModStatus, UpdateChannel
 from mod_updater_logic import (
     format_date, get_file_hash, get_latest_version, get_latest_versions_from_hashes,
@@ -43,7 +44,7 @@ class ScanCancelled(Exception):
 
 def read_mod_metadata(filepath: str) -> tuple[str, str, Optional[str]]:
     """Читает метаданные (name, version, project_id) из jar-файла мода."""
-    filename = os.path.basename(filepath)
+    filename = enabled_name(os.path.basename(filepath))
     mod_name = os.path.splitext(filename)[0]
     mod_version = ""
     project_id = None
@@ -171,7 +172,8 @@ class ModCache:
 
     def put_project_infos(self, infos: Dict[str, Dict]):
         # Храним только поля, нужные интерфейсу: ответ /projects довольно объёмный
-        keys = ('id', 'slug', 'title', 'description', 'icon_url', 'client_side', 'server_side', 'project_type')
+        keys = ('id', 'slug', 'title', 'description', 'icon_url', 'client_side', 'server_side', 'project_type',
+                'categories')
         with self.conn:
             self.conn.executemany("INSERT OR REPLACE INTO project_info (project_id, data) VALUES (?, ?)",
                                   [(pid, json.dumps({k: info.get(k) for k in keys})) for pid, info in infos.items()])
@@ -183,26 +185,36 @@ class ModCache:
 
 
 def _index_file(path: str, size: int, mtime_ns: int) -> Dict:
-    name, version, project_hint = read_mod_metadata(path)
+    if enabled_name(path).lower().endswith('.jar'):
+        name, version, project_hint = read_mod_metadata(path)
+    else:  # Шейдеры и ресурспаки: метаданных нет, название — имя файла
+        name, version, project_hint = os.path.splitext(enabled_name(os.path.basename(path)))[0], "", None
     return {'path': path, 'size': size, 'mtime_ns': mtime_ns, 'sha1': get_file_hash(path),
             'name': name, 'version': version, 'project_hint': project_hint}
 
 
+def list_content_files(folder: str, content: ContentType = MODS) -> List[str]:
+    """Файлы контента в папке, включая выключенные (*.disabled)."""
+    if not os.path.isdir(folder):
+        return []
+    return sorted(os.path.join(folder, f) for f in os.listdir(folder)
+                  if content.matches(f) and os.path.isfile(os.path.join(folder, f)))
+
+
 def list_jar_files(mods_path: str) -> List[str]:
-    return sorted(os.path.join(mods_path, f) for f in os.listdir(mods_path)
-                  if f.lower().endswith('.jar') and os.path.isfile(os.path.join(mods_path, f)))
+    return list_content_files(mods_path, MODS)
 
 
 def index_local_files(mods_path: str, cache: Optional[ModCache] = None,
-                      is_cancelled: CancelCheck = lambda: False) -> List[Dict]:
+                      is_cancelled: CancelCheck = lambda: False, content: ContentType = MODS) -> List[Dict]:
     """
-    Возвращает список {path, sha1, name, version, project_hint} для всех jar в папке.
+    Возвращает список {path, sha1, name, version, project_hint} для всех файлов контента в папке.
     Хэш и метаданные пересчитываются только для новых или изменённых файлов.
     """
     cached = cache.get_file_index() if cache else {}
     result: List[Dict] = []
     to_index = []
-    for path in list_jar_files(mods_path):
+    for path in list_content_files(mods_path, content):
         try:
             st = os.stat(path)
         except OSError:
@@ -242,6 +254,7 @@ def make_local_entry(local: Dict, status: ModStatus = ModStatus.NOT_CHECKED) -> 
         "name": local['name'], "project_id": local.get('project_hint'), "current_version": local['version'],
         "filepath": local['path'], "sha1": local.get('sha1'), "status": status, "new_version": "",
         "new_version_date": "", "download_url": None, "new_filename": None, "new_hashes": None,
+        "size": local.get('size') or 0, "disabled": is_disabled(local['path']),
     }
 
 
@@ -255,6 +268,7 @@ def apply_install_info(entry: Dict, version_info: Optional[Dict]) -> bool:
     entry["download_url"] = primary_file['url']
     entry["new_filename"] = primary_file['filename']
     entry["new_hashes"] = primary_file.get('hashes')
+    entry["new_size"] = primary_file.get('size') or 0
     entry["_latest_info"] = version_info
     return True
 
@@ -269,9 +283,11 @@ def _apply_project_info(entry: Dict, project: Optional[Dict]):
     entry["client_side"] = project.get('client_side')
     entry["server_side"] = project.get('server_side')
     entry["slug"] = project.get('slug')
+    entry["categories"] = list(project.get('categories') or [])
+    entry["project_type"] = project.get('project_type')
 
 
-def scan_local(mods_path: str, cache_file: Optional[str]) -> List[Dict]:
+def scan_local(mods_path: str, cache_file: Optional[str], content: ContentType = MODS) -> List[Dict]:
     """
     Быстрое локальное сканирование без сети. Если мод уже проверялся раньше, данные о нём
     (название, иконка, описание, версия на Modrinth) берутся из кэша — интерфейс сразу
@@ -279,7 +295,7 @@ def scan_local(mods_path: str, cache_file: Optional[str]) -> List[Dict]:
     """
     cache = ModCache(cache_file) if cache_file else None
     try:
-        local_files = index_local_files(mods_path, cache)
+        local_files = index_local_files(mods_path, cache, content=content)
         entries = [make_local_entry(local) for local in local_files]
         if not cache:
             return entries
@@ -301,11 +317,12 @@ def scan_local(mods_path: str, cache_file: Optional[str]) -> List[Dict]:
 def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Optional[str],
               channel: UpdateChannel = UpdateChannel.RELEASE,
               progress: ProgressCallback = lambda msg: None,
-              is_cancelled: CancelCheck = lambda: False) -> List[Dict]:
+              is_cancelled: CancelCheck = lambda: False, content: ContentType = MODS) -> List[Dict]:
     """
     Полное сканирование: индексация файлов, определение модов на Modrinth, поиск обновлений
-    в выбранном канале и построение дерева зависимостей.
+    в выбранном канале и построение дерева зависимостей (для шейдеров и ресурспаков — без зависимостей).
     """
+    loaders = content.loaders(loader)
     def check_cancel():
         if is_cancelled():
             raise ScanCancelled()
@@ -313,7 +330,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
     cache = ModCache(cache_file) if cache_file else None
     try:
         progress("Индексация локальных файлов...")
-        local_files = index_local_files(mods_path, cache, is_cancelled)
+        local_files = index_local_files(mods_path, cache, is_cancelled, content)
         if not local_files:
             return []
         by_sha1 = {f['sha1']: f for f in local_files}
@@ -334,11 +351,21 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
         if not installed_infos:
             progress("Не удалось получить информацию о модах. Проверьте интернет-соединение.")
 
-        # project_id -> данные установленного файла
+        # project_id -> данные установленного файла. Если файлов одного проекта несколько (дубликаты),
+        # основным считается самый новый, остальные показываются отдельно с предупреждением
         installed: Dict[str, Dict] = {}
+        duplicates: Dict[str, List[Dict]] = {}
         for sha1, info in installed_infos.items():
             if sha1 in by_sha1 and info.get('project_id'):
-                installed[info['project_id']] = {'sha1': sha1, 'info': info, 'local': by_sha1[sha1]}
+                pid = info['project_id']
+                details = {'sha1': sha1, 'info': info, 'local': by_sha1[sha1]}
+                current = installed.get(pid)
+                if current and (current['info'].get('date_published') or '') >= (info.get('date_published') or ''):
+                    duplicates.setdefault(pid, []).append(details)
+                    continue
+                if current:
+                    duplicates.setdefault(pid, []).append(current)
+                installed[pid] = details
 
         # --- Последние версии одним пакетным запросом ---
         latest_by_project: Dict[str, Optional[Dict]] = {}
@@ -346,7 +373,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
             progress(f"Проверка обновлений для {len(installed)} модов...")
             try:
                 latest_by_hash = get_latest_versions_from_hashes(
-                    [d['sha1'] for d in installed.values()], game_version, loader, channel.version_types)
+                    [d['sha1'] for d in installed.values()], game_version, loaders, channel.version_types)
             except requests.RequestException as e:
                 logging.error(f"Не удалось получить последние версии: {e}")
                 latest_by_hash = {}
@@ -356,6 +383,8 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
 
         # --- Зависимости ---
         def deps_of(project_id: str) -> List[Dict]:
+            if not content.has_dependencies:
+                return []
             version = latest_by_project.get(project_id) or installed[project_id]['info']
             return [d for d in (version.get('dependencies') or []) if d.get('project_id')]
 
@@ -373,7 +402,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
         if missing_ids:
             progress(f"Поиск {len(missing_ids)} недостающих зависимостей...")
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                futures = {executor.submit(get_latest_version, pid, game_version, loader, None, channel.version_types): pid
+                futures = {executor.submit(get_latest_version, pid, game_version, loaders, None, channel.version_types): pid
                            for pid in missing_ids}
                 for future in concurrent.futures.as_completed(futures):
                     if is_cancelled():
@@ -388,7 +417,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
 
         # --- Информация о проектах: названия, иконки, стороны (клиент/сервер) ---
         projects_info: Dict[str, Dict] = {}
-        all_project_ids = set(installed) | dependency_ids
+        all_project_ids = set(installed) | dependency_ids | set(duplicates)
         if all_project_ids:
             progress(f"Запрос информации о {len(all_project_ids)} проектах...")
             try:
@@ -417,6 +446,8 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
             entry["current_version"] = details['info'].get('version_number', entry["current_version"])
             entry["installed_info"] = details['info']
             _apply_project_info(entry, projects_info.get(project_id))
+            if project_id in duplicates:
+                entry["duplicates"] = [os.path.basename(d['local']['path']) for d in duplicates[project_id]]
             latest = latest_by_project.get(project_id)
             if is_newer_version(latest, details['info']) and apply_install_info(entry, latest):
                 entry["status"] = ModStatus.UPDATE_AVAILABLE
@@ -461,6 +492,18 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
                 dependencies.append(dep_entry)
             entry["dependencies"] = dependencies
             mods_data.append(entry)
+
+        # --- Лишние копии одного мода ---
+        for project_id, extra in duplicates.items():
+            main_name = os.path.basename(installed[project_id]['local']['path'])
+            for details in extra:
+                entry = make_local_entry(details['local'], ModStatus.UP_TO_DATE)
+                entry["project_id"] = project_id
+                entry["current_version"] = details['info'].get('version_number', entry["current_version"])
+                entry["installed_info"] = details['info']
+                _apply_project_info(entry, projects_info.get(project_id))
+                entry["duplicate_of"] = main_name
+                mods_data.append(entry)
 
         # --- Моды, не найденные на Modrinth ---
         for local in local_files:

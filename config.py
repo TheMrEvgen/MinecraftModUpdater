@@ -45,6 +45,7 @@ def default_profile() -> dict:
         "channel": DEFAULT_CHANNEL.value,
         "source": "manual",
         "loader_version": "",
+        "pinned": {},  # Закреплённые версии: ключ мода (project_id или имя файла) -> версия
     }
 
 
@@ -57,12 +58,17 @@ def default_settings() -> dict:
         "expand_dependencies": False,  # В дереве зависимости раскрыты сразу
         "compact_rows": False,         # Строки в одну линию
         "details_on_select": True,     # Панель мода открывается при выборе строки
+        "group_by_status": True,       # Заголовки групп («Обновления», «Актуальные»…) при сортировке по важности
+        "changelog_before_update": True,  # Перед «Обновить все» показывать список изменений
+        "auto_snapshot": True,         # Снимок сборки перед массовыми изменениями
+        "snapshots_keep": 10,          # Сколько автоматических снимков хранить
+        "animations": True,
     }
 
 
 def default_config() -> dict:
     return {"theme": "system", "current_profile": "Default", "profiles": {"Default": default_profile()},
-            "settings": default_settings(), "hidden_instances": [], "window": {}}
+            "settings": default_settings(), "hidden_instances": [], "window": {}, "mod_tags": {}}
 
 
 def _normalize(config: dict) -> dict:
@@ -89,6 +95,8 @@ def _normalize(config: dict) -> dict:
         config["hidden_instances"] = []
     if not isinstance(config.get("window"), dict):
         config["window"] = {}
+    if not isinstance(config.get("mod_tags"), dict):  # Метки пользователя: ключ мода -> [метки]
+        config["mod_tags"] = {}
     return config
 
 

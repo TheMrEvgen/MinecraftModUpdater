@@ -14,6 +14,7 @@ import sys
 import threading
 from typing import Callable, Dict, Iterable, List, Optional
 
+from content import DISABLED_SUFFIX, MODS, ContentType, enabled_name, is_disabled
 from enums import ModStatus
 from mod_updater_logic import (
     DownloadCancelled, DownloadError, HashMismatchError, download_file, safe_filename,
@@ -21,6 +22,7 @@ from mod_updater_logic import (
 
 BACKUP_DIR_NAME = "ModUpdater_Backups"
 TRANSACTIONS_DIR_NAME = "transactions"
+SNAPSHOTS_DIR_NAME = "snapshots"
 MANIFEST_NAME = "manifest.json"
 
 KIND_LABELS = {
@@ -28,6 +30,16 @@ KIND_LABELS = {
     "delete": "удаление",
     "replace_all": "замена сборки",
     "add": "добавление файлов",
+    "restore": "восстановление снимка",
+    "migrate": "переход на другую версию игры",
+}
+
+SNAPSHOT_REASONS = {
+    "manual": "создан вручную",
+    "update_all": "перед обновлением всех модов",
+    "replace_all": "перед заменой сборки",
+    "migrate": "перед переходом на другую версию игры",
+    "restore": "перед восстановлением снимка",
 }
 
 
@@ -221,6 +233,19 @@ def find_locked_files(paths: Iterable[str]) -> List[str]:
     return locked
 
 
+def set_disabled(path: str, disabled: bool) -> str:
+    """Включает или выключает файл переименованием (*.disabled). Возвращает новый путь."""
+    if is_disabled(path) == disabled:
+        return path
+    folder, name = os.path.split(path)
+    target = os.path.join(folder, name + DISABLED_SUFFIX if disabled else enabled_name(name))
+    if os.path.exists(target):
+        raise FileExistsError(f"Файл {os.path.basename(target)} уже существует")
+    os.rename(path, target)
+    logging.info(f"Файл {name} {'выключен' if disabled else 'включён'}.")
+    return target
+
+
 def is_game_running(mods_path: str, sample_size: int = 5) -> bool:
     """Эвристика: если игра запущена, загруженные jar-файлы модов заблокированы."""
     if sys.platform != "win32" or not os.path.isdir(mods_path):
@@ -245,6 +270,8 @@ def install_mod(mod: Dict, mods_path: str, transaction: UpdateTransaction,
         logging.error(f"Некорректное имя файла для '{mod_name}': {e}")
         return ModStatus.DOWNLOAD_ERROR
 
+    if mod.get('disabled'):
+        new_filename += DISABLED_SUFFIX  # Обновление выключенного мода не включает его
     final_path = os.path.join(mods_path, new_filename)
     temp_path = final_path + ".part"
 
@@ -332,3 +359,102 @@ def add_files(paths: Iterable[str], mods_path: str, transaction: UpdateTransacti
             errors.append(f"{name}: {e}")
             logging.error(f"Не удалось добавить {source}: {e}")
     return added, errors
+
+
+# --- Снимки сборки ---
+# Снимок — полная копия набора файлов папки (моды целиком). Файлы связываются жёсткими ссылками,
+# если это возможно: копия почти не занимает места, пока исходный файл не удалён.
+
+def snapshots_root(folder: str) -> str:
+    return os.path.join(backup_root(folder), SNAPSHOTS_DIR_NAME)
+
+
+def _link_or_copy(source: str, target: str):
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy2(source, target)
+
+
+def _content_files(folder: str, content: ContentType) -> List[str]:
+    if not os.path.isdir(folder):
+        return []
+    return sorted(f for f in os.listdir(folder) if content.matches(f) and os.path.isfile(os.path.join(folder, f)))
+
+
+def create_snapshot(folder: str, reason: str = "manual", content: ContentType = MODS, title: str = "") -> Optional[Dict]:
+    """Сохраняет текущий набор файлов. Возвращает манифест или None, если сохранять нечего."""
+    files = _content_files(folder, content)
+    if not files:
+        return None
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    snap_dir = os.path.join(snapshots_root(folder), timestamp)
+    os.makedirs(snap_dir, exist_ok=True)
+    entries, total = [], 0
+    for name in files:
+        source = os.path.join(folder, name)
+        _link_or_copy(source, os.path.join(snap_dir, name))
+        size = os.path.getsize(source)
+        total += size
+        entries.append({"name": name, "size": size})
+    manifest = {"created": datetime.datetime.now().isoformat(timespec="seconds"), "reason": reason,
+                "title": title, "content": content.key, "files": entries, "total_size": total}
+    with open(os.path.join(snap_dir, MANIFEST_NAME), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    manifest["dir"] = snap_dir
+    logging.info(f"Создан снимок сборки ({len(entries)} файлов): {snap_dir}")
+    return manifest
+
+
+def list_snapshots(folder: str) -> List[Dict]:
+    """Снимки папки, новые первыми."""
+    root = snapshots_root(folder)
+    if not os.path.isdir(root):
+        return []
+    result = []
+    for name in sorted(os.listdir(root), reverse=True):
+        try:
+            with open(os.path.join(root, name, MANIFEST_NAME), "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        manifest["dir"] = os.path.join(root, name)
+        result.append(manifest)
+    return result
+
+
+def delete_snapshot(snapshot: Dict):
+    shutil.rmtree(snapshot["dir"], ignore_errors=True)
+
+
+def prune_snapshots(folder: str, keep: int):
+    """Удаляет старые автоматические снимки сверх лимита (созданные вручную не трогаются)."""
+    auto = [s for s in list_snapshots(folder) if s.get("reason") != "manual"]
+    for snapshot in auto[max(0, keep):]:
+        delete_snapshot(snapshot)
+
+
+def restore_snapshot(folder: str, snapshot: Dict, content: ContentType = MODS) -> tuple[UpdateTransaction, List[str]]:
+    """
+    Возвращает папку к состоянию снимка. Текущие файлы уходят в транзакцию «восстановление снимка»,
+    поэтому само восстановление тоже можно отменить на странице «История».
+    """
+    transaction = UpdateTransaction(folder, "restore")
+    errors = []
+    for name in _content_files(folder, content):
+        try:
+            transaction.backup_file(os.path.join(folder, name))
+        except OSError as e:
+            errors.append(f"{name}: {e}")
+    for item in snapshot.get("files", []):
+        name = safe_filename(item["name"])
+        source = os.path.join(snapshot["dir"], name)
+        target = os.path.join(folder, name)
+        try:
+            if os.path.exists(target):
+                continue
+            _link_or_copy(source, target)
+            transaction.record_installed(name)
+        except OSError as e:
+            errors.append(f"{name}: {e}")
+    return transaction, errors
