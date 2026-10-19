@@ -164,6 +164,16 @@ QListWidget {{ background: {t['surface']}; border: 1px solid {t['border']}; bord
 QListWidget::item:selected {{ background: {rgba(t['accent'], 0.14)}; color: {t['text']}; }}
 QListWidget::item:hover {{ background: {t['surface2']}; }}
 #VersionList {{ background: {t['bg']}; padding: 4px; }}
+#ReviewList {{ background: {t['bg']}; padding: 4px; }}
+#ReviewList::item {{ padding: 4px 6px; border-radius: 8px; }}
+#ReviewList::item:selected {{ background: {rgba(t['accent'], 0.14)}; color: {t['text']}; }}
+#Segment {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 9px; padding: 7px 14px;
+            color: {t['text_muted']}; font-weight: 600; }}
+#Segment:hover {{ background: {t['surface2']}; color: {t['text']}; }}
+#Segment:checked {{ background: {rgba(t['accent'], 0.12)}; border-color: {rgba(t['accent'], 0.45)}; color: {t['accent']}; }}
+#Palette {{ background: {t['surface']}; border: 1px solid {t['border_strong']}; border-radius: 14px; }}
+#PaletteInput {{ font-size: 12pt; padding: 10px 12px; border-radius: 10px; background: {t['bg']}; }}
+#PaletteList {{ background: transparent; border: none; }}
 #DetailsTitle {{ font-size: 14pt; font-weight: 700; }}
 #Card {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 12px; }}
 #Divider {{ background: {t['border']}; max-height: 1px; min-height: 1px; }}
@@ -241,5 +251,11 @@ def apply_window_frame_theme(widget, tokens: dict) -> None:
         color = QColor(tokens["sidebar"])
         colorref = ctypes.c_uint(color.red() | (color.green() << 8) | (color.blue() << 16))
         dwm.DwmSetWindowAttribute(hwnd, 35, ctypes.byref(colorref), ctypes.sizeof(colorref))  # DWMWA_CAPTION_COLOR
+        # Windows 10 перерисовывает заголовок только при смене активности окна: «переключаем» её вручную
+        user32 = ctypes.windll.user32
+        active = hwnd.value == user32.GetForegroundWindow()
+        user32.SendMessageW(hwnd, 0x0086, 0 if active else 1, 0)  # WM_NCACTIVATE
+        user32.SendMessageW(hwnd, 0x0086, 1 if active else 0, 0)
+        user32.RedrawWindow(hwnd, None, None, 0x0400 | 0x0001 | 0x0100)  # RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW
     except (OSError, AttributeError) as e:
         logging.debug(f"Не удалось настроить заголовок окна: {e}")

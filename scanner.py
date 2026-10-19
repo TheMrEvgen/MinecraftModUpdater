@@ -25,7 +25,7 @@ import requests
 from content import MODS, ContentType, enabled_name, is_disabled
 from enums import ModStatus, UpdateChannel
 from mod_updater_logic import (
-    format_date, get_file_hash, get_latest_version, get_latest_versions_from_hashes,
+    format_date, get_all_versions, get_file_hash, get_latest_version, get_latest_versions_from_hashes,
     get_mods_info_from_hashes, get_projects_info_from_ids, is_newer_version, select_primary_file,
 )
 
@@ -572,3 +572,96 @@ def entries_from_mrpack(index: Dict) -> List[Dict]:
         _apply_project_info(entry, projects.get(version.get("project_id")))
         entries.append(entry)
     return entries
+
+
+# --- Каталог: установка проекта вместе с обязательными зависимостями ---
+
+def resolve_project_install(project_id: str, game_version: str, loader: Optional[str], channel: UpdateChannel,
+                            installed_ids=(), content: ContentType = MODS, max_depth: int = 3) -> List[Dict]:
+    """
+    Записи «к установке» для проекта из каталога и его обязательных зависимостей, которых ещё нет в сборке.
+    Возвращает пустой список, если совместимой версии нет. Первая запись — сам проект.
+    """
+    loaders = content.loaders(loader)
+    entries: List[Dict] = []
+    seen = set(installed_ids)
+    queue = [(project_id, 0)]
+    versions: Dict[str, Dict] = {}
+    while queue:
+        pid, depth = queue.pop(0)
+        if pid in seen and pid != project_id:
+            continue
+        seen.add(pid)
+        version = get_latest_version(pid, game_version, loaders, None, channel.version_types)
+        if not version:
+            if pid == project_id:
+                return []
+            logging.warning(f"Для зависимости {pid} нет совместимой версии.")
+            continue
+        versions[pid] = version
+        if depth < max_depth and content.has_dependencies:
+            for dep in version.get('dependencies') or []:
+                if dep.get('dependency_type') == 'required' and dep.get('project_id') and dep['project_id'] not in seen:
+                    queue.append((dep['project_id'], depth + 1))
+    projects = get_projects_info_from_ids(versions)
+    for pid, version in versions.items():
+        entry = {"name": pid, "project_id": pid, "current_version": "", "filepath": None,
+                 "status": ModStatus.READY_TO_INSTALL, "installed_info": None}
+        _apply_project_info(entry, projects.get(pid))
+        if apply_install_info(entry, version):
+            entries.append(entry)
+    entries.sort(key=lambda e: e["project_id"] != project_id)
+    return entries
+
+
+# --- Список изменений между установленной и новой версией ---
+
+def collect_changelogs(entries: List[Dict], game_version: str, loader: Optional[str],
+                       content: ContentType = MODS) -> Dict[str, List[Dict]]:
+    """
+    project_id -> версии новее установленной (до предлагаемой включительно), новые первыми:
+    [{version_number, version_type, date, changelog}]. Сетевые ошибки по отдельным модам пропускаются.
+    """
+    loaders = content.loaders(loader)
+
+    def fetch(entry: Dict) -> List[Dict]:
+        installed = (entry.get("installed_info") or {}).get("date_published") or ""
+        latest = (entry.get("_latest_info") or {}).get("date_published") or "9999"
+        result = []
+        for v in get_all_versions(entry["project_id"], game_version, loaders):
+            date = v.get("date_published") or ""
+            if installed < date <= latest:
+                result.append({"version_number": v.get("version_number"), "version_type": v.get("version_type"),
+                               "date": format_date(date), "changelog": v.get("changelog") or ""})
+        return result
+
+    result: Dict[str, List[Dict]] = {}
+    targets = [e for e in entries if e.get("project_id")]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(fetch, e): e["project_id"] for e in targets}
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                result[futures[future]] = future.result()
+            except Exception as e:
+                logging.warning(f"Не удалось загрузить список изменений {futures[future]}: {e}")
+    return result
+
+
+# --- Переход на другую версию Minecraft ---
+
+def check_target_version(entries: List[Dict], target_version: str, loader: Optional[str], channel: UpdateChannel,
+                         content: ContentType = MODS) -> List[Dict]:
+    """
+    Для каждого установленного мода — есть ли версия под target_version.
+    Возвращает [{entry, version}] (version = None, если версии нет или мод не с Modrinth).
+    """
+    with_hash = [e for e in entries if e.get("sha1") and e.get("project_id")]
+    latest = get_latest_versions_from_hashes([e["sha1"] for e in with_hash], target_version,
+                                             content.loaders(loader), channel.version_types) if with_hash else {}
+    result = []
+    for entry in entries:
+        version = latest.get(entry.get("sha1")) if entry.get("sha1") else None
+        if version and target_version not in (version.get("game_versions") or [target_version]):
+            version = None
+        result.append({"entry": entry, "version": version})
+    return result

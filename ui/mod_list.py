@@ -2,6 +2,7 @@
 Список модов: модель, фильтр/сортировка и делегат, рисующий строку целиком.
 Один делегат вместо виджетов в каждой ячейке: список остаётся быстрым на сотнях модов.
 """
+import datetime
 from typing import Callable, Dict, List, Optional
 
 from PyQt6.QtCore import (
@@ -14,14 +15,22 @@ import icons
 from enums import ModStatus
 from theme import qcolor
 from view_model import (
-    CAT_ALL, DEP_TYPE_LABELS, entry_key, matches_category, search_text, status_of, status_sort_key, status_style,
-    subtitle_for,
+    CAT_ALL, DEP_TYPE_LABELS, GROUP_TITLES, entry_key, entry_tags, group_of, matches_category, search_text,
+    status_of, status_sort_key, status_style, subtitle_for, update_date,
 )
 
 ENTRY_ROLE = Qt.ItemDataRole.UserRole + 1
 ROW_HEIGHT = 62
 ROW_HEIGHT_COMPACT = 44
 TREE_INDENT = 30  # Сдвиг строки зависимости в режиме дерева
+HEADER_HEIGHT = 36  # Заголовок группы над первой строкой группы
+
+
+def _timestamp(iso: str) -> float:
+    try:
+        return datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp() if iso else 0.0
+    except ValueError:
+        return 0.0
 
 
 def entry_at(index: QModelIndex) -> Optional[Dict]:
@@ -103,13 +112,18 @@ class ModListModel(QAbstractListModel):
 
 
 class ModFilterProxy(QSortFilterProxyModel):
-    SORT_NAME, SORT_STATUS = "name", "status"
+    SORT_NAME, SORT_STATUS, SORT_UPDATED, SORT_SIZE = "name", "status", "updated", "size"
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.category = CAT_ALL
         self.query = ""
+        self.tag: Optional[str] = None      # Фильтр по метке (ключ из view_model.entry_tags)
+        self.custom_tags: Dict = {}         # Метки пользователя (для поиска и фильтра)
         self.sort_mode = self.SORT_STATUS
+        self._group_counts: Optional[Dict[str, int]] = None
+        for signal in (self.layoutChanged, self.modelReset, self.rowsInserted, self.rowsRemoved):
+            signal.connect(self._clear_group_cache)
         self.expand_all = False   # Режим дерева: по умолчанию раскрыты все или ни один
         self.toggled: set = set()  # Ключи модов, раскрытых/свёрнутых вручную вопреки умолчанию
         self.setDynamicSortFilter(False)
@@ -132,12 +146,50 @@ class ModFilterProxy(QSortFilterProxyModel):
 
     @property
     def filter_active(self) -> bool:
-        return self.category != CAT_ALL or bool(self.query)
+        return self.category != CAT_ALL or bool(self.query) or bool(self.tag)
 
     def _matches(self, entry: Optional[Dict]) -> bool:
         if not entry or not matches_category(entry, self.category):
             return False
-        return not self.query or all(word in search_text(entry) for word in self.query.split())
+        if self.tag and self.tag not in {key for key, _ in entry_tags(entry, self.custom_tags)}:
+            return False
+        return not self.query or all(word in search_text(entry, self.custom_tags) for word in self.query.split())
+
+    def set_tag(self, tag: Optional[str]):
+        self.tag = tag or None
+        self.invalidateFilter()
+
+    # --- Группы ---
+
+    def _clear_group_cache(self, *_):
+        self._group_counts = None
+
+    def group_counts(self) -> Dict[str, int]:
+        """Число видимых модов (верхний уровень) в каждой группе."""
+        if self._group_counts is None:
+            counts: Dict[str, int] = {}
+            for row in range(self.rowCount()):
+                index = self.index(row, 0)
+                if not meta_at(index).get("depth"):
+                    key = group_of(entry_at(index))
+                    counts[key] = counts.get(key, 0) + 1
+            self._group_counts = counts
+        return self._group_counts
+
+    def header_for(self, row: int) -> Optional[str]:
+        """Группа, заголовок которой рисуется над строкой (только при сортировке по важности)."""
+        if self.sort_mode != self.SORT_STATUS:
+            return None
+        index = self.index(row, 0)
+        if meta_at(index).get("depth"):
+            return None
+        group = group_of(entry_at(index))
+        prev = row - 1
+        while prev >= 0 and meta_at(self.index(prev, 0)).get("depth"):
+            prev -= 1
+        if prev >= 0 and group_of(entry_at(self.index(prev, 0))) == group:
+            return None
+        return group
 
     def _parent_visible(self, row: int, meta: Dict) -> bool:
         model = self.sourceModel()
@@ -174,7 +226,14 @@ class ModFilterProxy(QSortFilterProxyModel):
         root = meta["parent_row"] if meta.get("depth") else row
         root_entry = model.entry(root)
         root_name = str(root_entry.get("name", "")).lower()
-        root_key = (status_sort_key(root_entry), root_name) if self.sort_mode == self.SORT_STATUS else (0, root_name)
+        if self.sort_mode == self.SORT_STATUS:
+            root_key = (status_sort_key(root_entry), root_name)
+        elif self.sort_mode == self.SORT_UPDATED:  # Сначала недавно обновлённые
+            root_key = (-_timestamp(update_date(root_entry)), root_name)
+        elif self.sort_mode == self.SORT_SIZE:  # Сначала самые большие
+            root_key = (-(root_entry.get("size") or root_entry.get("new_size") or 0), root_name)
+        else:
+            root_key = (0, root_name)
         # Зависимости идут сразу под своим модом, по имени
         return root_key + (root, meta.get("depth", 0), str(model.entry(row).get("name", "")).lower())
 
@@ -197,7 +256,9 @@ class ModDelegate(QStyledItemDelegate):
         self._mouse = QPoint(-1, -1)
         self.compact = False   # Компактные строки: одна строка вместо двух
         self.tree = False      # Режим дерева: место под стрелку раскрытия
+        self.groups = False    # Заголовки групп («Обновления», «Актуальные»…)
         self.is_expanded: Callable[[Dict], bool] = lambda entry: False
+        self.anim: Dict[object, float] = {}  # Раскрытие дерева: ключ мода -> доля высоты его зависимостей (0..1)
         base = view.font()
         self.font_name = QFont(base)
         self.font_name.setPointSizeF(base.pointSizeF() + 0.5)
@@ -209,12 +270,37 @@ class ModDelegate(QStyledItemDelegate):
         self.font_version = QFont(base)
         self.font_version_bold = QFont(base)
         self.font_version_bold.setWeight(QFont.Weight.DemiBold)
+        self.font_header = QFont(base)
+        self.font_header.setPointSizeF(max(base.pointSizeF() - 1, 7.5))
+        self.font_header.setWeight(QFont.Weight.Bold)
+        self.font_header.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 106)
 
     def set_tokens(self, tokens: dict):
         self.tokens = tokens
 
+    # --- Высота строки: заголовок группы и анимация раскрытия ---
+
+    def _header(self, index) -> Optional[str]:
+        proxy = index.model()
+        if not self.groups or not isinstance(proxy, ModFilterProxy):
+            return None
+        return proxy.header_for(index.row())
+
+    def _anim_factor(self, index) -> float:
+        meta = meta_at(index)
+        if not (self.tree and meta.get("depth") and self.anim):
+            return 1.0
+        source = index.model().sourceModel() if isinstance(index.model(), ModFilterProxy) else None
+        parent = source.entry(meta["parent_row"]) if source else None
+        return self.anim.get(entry_key(parent), 1.0) if parent else 1.0
+
+    def _content_rect(self, rect: QRect, index) -> QRect:
+        return rect.adjusted(0, HEADER_HEIGHT, 0, 0) if self._header(index) else rect
+
     def sizeHint(self, option, index):
-        return QSize(option.rect.width(), ROW_HEIGHT_COMPACT if self.compact else ROW_HEIGHT)
+        base = ROW_HEIGHT_COMPACT if self.compact else ROW_HEIGHT
+        height = int(base * self._anim_factor(index))
+        return QSize(option.rect.width(), height + (HEADER_HEIGHT if self._header(index) else 0))
 
     # --- Геометрия ---
 
@@ -253,9 +339,18 @@ class ModDelegate(QStyledItemDelegate):
         depth = meta.get("depth", 0) if self.tree else 0
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = option.rect
+        header = self._header(index)
+        if header:
+            self._paint_header(painter, option.rect, header, index)
+        rect = self._content_rect(option.rect, index)
+        factor = self._anim_factor(index)
+        if factor < 1.0:  # Строка раскрывается: проявляется вместе с ростом высоты
+            painter.setClipRect(option.rect)
+            painter.setOpacity(factor)
+            rect = QRect(rect.left(), rect.top() - int((1 - factor) * rect.height()), rect.width(),
+                         ROW_HEIGHT_COMPACT if self.compact else ROW_HEIGHT)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver) and rect.contains(self._mouse)
         lay = self._layout(rect, depth)
 
         # Фон строки
@@ -286,21 +381,42 @@ class ModDelegate(QStyledItemDelegate):
                 painter.drawLine(x, rect.top(), x, cy if meta.get("last") else rect.bottom() + 1)
                 painter.drawLine(x, cy, lay["check"].left() - 8, cy)
         self._paint_checkbox(painter, lay["check"], bool(entry.get("_is_checked")), hovered)
+        base_opacity = painter.opacity()
+        if entry.get("disabled"):  # Выключенный мод — приглушённым
+            painter.setOpacity(base_opacity * 0.45)
         self._paint_icon(painter, lay["icon"], entry)
         self._paint_texts(painter, lay, entry, meta.get("dep_type") if depth else None)
         if lay["wide"]:
             self._paint_versions(painter, lay["versions"], entry)
+        painter.setOpacity(base_opacity)
         self._paint_status(painter, lay["status"], entry)
 
         status = status_of(entry)
         busy = status in (ModStatus.DOWNLOADING, ModStatus.FINISHING)
-        if entry.get("download_url") and not busy:
+        if entry.get("download_url") and not busy and not entry.get("_pinned"):
             self._paint_round_button(painter, lay["update"], "download", accent=True,
                                      hot=lay["update"].contains(self._mouse) and hovered)
         if hovered or selected:
             self._paint_round_button(painter, lay["more"], "more", accent=False,
                                      hot=lay["more"].contains(self._mouse) and hovered)
         painter.restore()
+
+    def _paint_header(self, p: QPainter, rect: QRect, group: str, index):
+        t = self.tokens
+        r = QRect(rect.left() + 18, rect.top() + 10, rect.width() - 36, HEADER_HEIGHT - 12)
+        title = GROUP_TITLES.get(group, group).upper()
+        count = index.model().group_counts().get(group, 0) if isinstance(index.model(), ModFilterProxy) else 0
+        p.setFont(self.font_header)
+        fm = QFontMetrics(self.font_header)
+        color = {"problems": "warning", "updates": "accent", "install": "info"}.get(group, "text_faint")
+        p.setPen(qcolor(t[color]))
+        p.drawText(r, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
+        x = r.left() + fm.horizontalAdvance(title) + 8
+        p.setPen(qcolor(t["text_faint"]))
+        p.drawText(QRect(x, r.top(), 60, r.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, str(count))
+        line_x = x + fm.horizontalAdvance(str(count)) + 12
+        p.setPen(QPen(qcolor(t["border"]), 1))
+        p.drawLine(line_x, r.center().y() + 1, r.right(), r.center().y() + 1)
 
     def _paint_expander(self, p: QPainter, r: QRect, expanded: bool, hot: bool):
         t = self.tokens
@@ -354,8 +470,12 @@ class ModDelegate(QStyledItemDelegate):
             self._paint_compact_texts(p, lay, entry, dep_type, name, fm)
             return
         name_rect = QRect(r.left(), r.top() + 11, r.width(), fm.height())
-        p.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   fm.elidedText(name, Qt.TextElideMode.ElideRight, r.width()))
+        lock = 18 if entry.get("_pinned") else 0
+        elided = fm.elidedText(name, Qt.TextElideMode.ElideRight, r.width() - lock)
+        p.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
+        if lock:
+            x = r.left() + fm.horizontalAdvance(elided) + 6
+            p.drawPixmap(QRect(x, name_rect.center().y() - 6, 13, 13), icons.pixmap("lock", t["text_muted"], 13))
 
         subtitle, role = subtitle_for(entry)
         if dep_type and not entry.get("_issues"):
@@ -378,6 +498,9 @@ class ModDelegate(QStyledItemDelegate):
         name_w = min(fm.horizontalAdvance(name), r.width())
         p.drawText(QRect(r.left(), r.top(), r.width(), r.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    fm.elidedText(name, Qt.TextElideMode.ElideRight, r.width()))
+        if entry.get("_pinned") and r.width() - name_w > 24:
+            p.drawPixmap(QRect(r.left() + name_w + 6, r.center().y() - 6, 13, 13), icons.pixmap("lock", t["text_muted"], 13))
+            name_w += 20
         note, role = (DEP_TYPE_LABELS.get(dep_type, ""), None) if dep_type else ("", None)
         if entry.get("_issues"):
             note, role = "⚠ " + entry["_issues"][0], "warning"
@@ -489,13 +612,13 @@ class ModDelegate(QStyledItemDelegate):
             return False
         pos = event.position().toPoint()
         meta = meta_at(index)
-        lay = self._layout(option.rect, meta.get("depth", 0) if self.tree else 0)
+        lay = self._layout(self._content_rect(option.rect, index), meta.get("depth", 0) if self.tree else 0)
         if self.tree and meta.get("children") and lay["expander"].contains(pos):
             if etype == QEvent.Type.MouseButtonRelease:
                 self.expand_toggled.emit(entry)
             return True
         hit_check = lay["check"].adjusted(-8, -12, 8, 12).contains(pos)
-        hit_update = bool(entry.get("download_url")) and lay["update"].contains(pos)
+        hit_update = bool(entry.get("download_url")) and not entry.get("_pinned") and lay["update"].contains(pos)
         hit_more = lay["more"].contains(pos)
         if not (hit_check or hit_update or hit_more):
             return False
@@ -516,11 +639,11 @@ class ModDelegate(QStyledItemDelegate):
             return super().helpEvent(event, view, option, index)
         pos = event.pos()
         meta = meta_at(index)
-        lay = self._layout(option.rect, meta.get("depth", 0) if self.tree else 0)
+        lay = self._layout(self._content_rect(option.rect, index), meta.get("depth", 0) if self.tree else 0)
         tip = None
         if self.tree and meta.get("children") and lay["expander"].contains(pos):
             tip = f"Зависимости: {len(meta['children'])}"
-        elif entry.get("download_url") and lay["update"].contains(pos):
+        elif entry.get("download_url") and not entry.get("_pinned") and lay["update"].contains(pos):
             verb = "Установить" if not entry.get("filepath") else "Обновить до"
             tip = f"{verb} {entry.get('new_version') or ''}".strip()
         elif lay["more"].contains(pos):
@@ -551,7 +674,7 @@ class ModListView(QListView):
         super().__init__(parent)
         self.setObjectName("ModList")
         self.setMouseTracking(True)
-        self.setUniformItemSizes(True)
+        self.setUniformItemSizes(False)  # Высота строк разная: заголовки групп и анимация раскрытия
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.verticalScrollBar().setSingleStep(18)
@@ -559,6 +682,10 @@ class ModListView(QListView):
         self.setSpacing(0)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
         self.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
+    def relayout(self):
+        """Пересчитать высоты строк (после смены вида или кадра анимации)."""
+        self.scheduleDelayedItemsLayout()
 
     def contextMenuEvent(self, event):
         index = self.indexAt(event.pos())

@@ -2,7 +2,7 @@
 import os
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import QRect, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QFontMetrics, QPainter, QPainterPath, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QFormLayout, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QScrollArea,
@@ -14,7 +14,12 @@ from enums import ModStatus
 from mod_updater_logic import format_date
 from theme import qcolor, rgba
 from ui.widgets import button, label, refresh_button_icons
-from view_model import status_of, status_style
+from view_model import entry_tags, format_size, status_of, status_style
+
+
+def demote_headings(markdown: str) -> str:
+    from ui.dialogs import demote_headings as demote  # dialogs импортирует widgets — избегаем цикла при загрузке
+    return demote(markdown)
 
 SIDE_LABELS = {"required": "нужен", "optional": "необязателен", "unsupported": "не поддерживается"}
 VERSION_TYPES = {"release": "релиз", "beta": "бета", "alpha": "альфа"}
@@ -124,6 +129,9 @@ class DetailsPanel(QFrame):
     versions_requested = pyqtSignal(object)
     version_install_requested = pyqtSignal(object, object)
     select_entry_requested = pyqtSignal(object)
+    pin_toggled = pyqtSignal(object)
+    disable_toggled = pyqtSignal(object)
+    tags_menu_requested = pyqtSignal(object, QPoint)
 
     def __init__(self, tokens: dict, parent=None):
         super().__init__(parent)
@@ -132,6 +140,7 @@ class DetailsPanel(QFrame):
         self.tokens = tokens
         self.entry: Optional[Dict] = None
         self._versions: List[Dict] = []
+        self.custom_tags: Dict = {}  # Метки пользователя (ссылка на конфиг главного окна)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -199,6 +208,25 @@ class DetailsPanel(QFrame):
         actions.addWidget(self.file_btn)
         actions.addWidget(self.delete_btn)
         self.layout_.addLayout(actions)
+
+        extra = QHBoxLayout()
+        extra.setSpacing(8)
+        self.pin_btn = button("Закрепить", None, "lock", tokens, "text", "Не обновлять этот мод (в том числе в «Обновить все»)")
+        self.pin_btn.clicked.connect(lambda: self.entry and self.pin_toggled.emit(self.entry))
+        self.disable_btn = button("Выключить", None, "power", tokens, "text", "Выключить мод без удаления (*.disabled)")
+        self.disable_btn.clicked.connect(lambda: self.entry and self.disable_toggled.emit(self.entry))
+        self.tags_btn = button("Метки", None, "tag", tokens, "text", "Добавить или убрать свои метки")
+        self.tags_btn.clicked.connect(lambda: self.entry and self.tags_menu_requested.emit(
+            self.entry, self.tags_btn.mapToGlobal(self.tags_btn.rect().bottomLeft())))
+        for b in (self.pin_btn, self.disable_btn, self.tags_btn):
+            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            extra.addWidget(b)
+        self.layout_.addLayout(extra)
+
+        self.tags_label = QLabel()
+        self.tags_label.setWordWrap(True)
+        self.tags_label.setTextFormat(Qt.TextFormat.RichText)
+        self.layout_.addWidget(self.tags_label)
 
         self.info_card = QFrame()
         self.info_card.setObjectName("Card")
@@ -298,6 +326,23 @@ class DetailsPanel(QFrame):
         self.page_btn.setVisible(bool(entry.get("project_id")))
         self.file_btn.setVisible(bool(entry.get("filepath")))
         self.delete_btn.setVisible(bool(entry.get("filepath")))
+        has_file = bool(entry.get("filepath"))
+        self.pin_btn.setVisible(has_file)
+        pinned = bool(entry.get("_pinned"))
+        self.pin_btn.setText("Открепить" if pinned else "Закрепить")
+        self.pin_btn.setProperty("icon_name", "unlock" if pinned else "lock")
+        self.pin_btn.setIcon(icons.icon("unlock" if pinned else "lock", t["text"], 16))
+        self.disable_btn.setVisible(has_file)
+        disabled = bool(entry.get("disabled"))
+        self.disable_btn.setText("Включить" if disabled else "Выключить")
+        self.tags_btn.setVisible(bool(entry.get("project_id") or has_file))
+        tags = entry_tags(entry, self.custom_tags)
+        chips = []
+        for key, title in tags:
+            color = t["accent"] if key.startswith("user:") else t["text_muted"]
+            chips.append(f"<span style='background:{t['surface3']}; color:{color};'>&nbsp;{title}&nbsp;</span>")
+        self.tags_label.setText("&nbsp; ".join(chips))
+        self.tags_label.setVisible(bool(chips))
 
         self._fill_info(entry)
         self._fill_dependencies(entry)
@@ -307,7 +352,7 @@ class DetailsPanel(QFrame):
         self.changelog_title.setVisible(bool(changelog))
         self.changelog.setVisible(bool(changelog))
         if changelog:
-            self.changelog.setMarkdown(changelog[:20000])
+            self.changelog.setMarkdown(demote_headings(changelog[:20000]))
 
         self.versions_header_widget.setVisible(bool(entry.get("project_id")))
         if not same_entry:
@@ -330,6 +375,16 @@ class DetailsPanel(QFrame):
                  f"сервер — {SIDE_LABELS.get(entry.get('server_side'), '?')}"]
         if entry.get("client_side") or entry.get("server_side"):
             rows.append(("Сторона", "\n".join(sides)))
+        size = entry.get("size") or 0
+        if size:
+            new_size = entry.get("new_size") or 0
+            rows.append(("Размер", format_size(size) + (f"  →  {format_size(new_size)}" if new_size and entry.get("new_version") else "")))
+        elif entry.get("new_size"):
+            rows.append(("Размер", format_size(entry["new_size"])))
+        if entry.get("_pinned"):
+            rows.append(("Закреплён", "обновления не предлагаются"))
+        if entry.get("disabled"):
+            rows.append(("Выключен", "файл переименован в *.disabled — игра его не загружает"))
         if entry.get("project_id"):
             rows.append(("ID проекта", entry["project_id"]))
         for key, value in rows:

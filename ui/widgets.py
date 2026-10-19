@@ -184,6 +184,7 @@ class Toast(QFrame):
                  action: Optional[Callable], timeout: int):
         super().__init__(parent)
         self.setObjectName("Toast")
+        self.text = text
         self.setFixedWidth(380)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 12, 10, 12)
@@ -248,6 +249,8 @@ class ToastManager(QObject):
 
     def show(self, text: str, kind: str = "info", action_text: Optional[str] = None,
              action: Optional[Callable] = None, timeout: int = 5000):
+        for old in [t for t in self.toasts if t.text == text]:  # Одинаковые уведомления не копятся
+            old.dismiss()
         toast = Toast(self.host, self.tokens, text, kind, action_text, action, timeout)
         toast.closed.connect(self._remove)
         self.toasts.append(toast)
@@ -281,6 +284,7 @@ class ToastManager(QObject):
 class SelectionBar(QFrame):
     update_clicked = pyqtSignal()
     delete_clicked = pyqtSignal()
+    disable_clicked = pyqtSignal()
     clear_clicked = pyqtSignal()
 
     def __init__(self, parent: QWidget, tokens: dict):
@@ -294,22 +298,26 @@ class SelectionBar(QFrame):
         layout.addWidget(self.count_label)
         layout.addSpacing(10)
         self.update_btn = button("Обновить", "PrimaryButton", "download", tokens, "accent_text")
+        self.disable_btn = button("Выключить", None, "power", tokens, "text")
         self.delete_btn = button("Удалить", "DangerButton", "trash", tokens, "danger")
         self.clear_btn = button("Снять выделение", "GhostButton", "x", tokens, "text_muted")
         self.update_btn.clicked.connect(self.update_clicked)
+        self.disable_btn.clicked.connect(self.disable_clicked)
         self.delete_btn.clicked.connect(self.delete_clicked)
         self.clear_btn.clicked.connect(self.clear_clicked)
-        for btn in (self.update_btn, self.delete_btn, self.clear_btn):
+        for btn in (self.update_btn, self.disable_btn, self.delete_btn, self.clear_btn):
             layout.addWidget(btn)
         add_shadow(self, tokens, 36, 0.5)
         self.hide()
 
-    def set_state(self, checked: int, updatable: int, deletable: int, install_mode: bool):
+    def set_state(self, checked: int, updatable: int, deletable: int, install_mode: bool, all_disabled: bool = False):
         self.count_label.setText(f"Выбрано: {checked}")
         verb = "Установить" if install_mode else "Обновить"
         self.update_btn.setText(f"{verb} ({updatable})" if updatable else verb)
         self.update_btn.setEnabled(updatable > 0)
         self.delete_btn.setVisible(deletable > 0)
+        self.disable_btn.setVisible(deletable > 0)
+        self.disable_btn.setText("Включить" if all_disabled else "Выключить")
         self.adjustSize()
 
 
@@ -427,7 +435,8 @@ class Sidebar(QFrame):
     add_profile_clicked = pyqtSignal()
     page_changed = pyqtSignal(int)
 
-    PAGES = (("package", "Моды"), ("history", "История"), ("terminal", "Журнал"), ("settings", "Настройки"))
+    PAGES = (("package", "Моды"), ("compass", "Каталог"), ("history", "История"), ("terminal", "Журнал"),
+             ("settings", "Настройки"))
 
     def __init__(self, tokens: dict, app_version: str, parent=None):
         super().__init__(parent)
@@ -547,6 +556,14 @@ def profile_subtitle(profile: Dict) -> str:
     if source not in ("manual", None):
         parts.append(SOURCE_LABELS.get(source, source).split()[0])
     return " · ".join(parts)
+
+
+def style_segments(group: QButtonGroup, tokens: dict):
+    """Перекрашивает иконки вкладок-сегментов: у выбранной — акцентный цвет."""
+    for btn in group.buttons():
+        name = btn.property("icon_name")
+        if name:
+            btn.setIcon(icons.icon(name, tokens["accent"] if btn.isChecked() else tokens["text_muted"], 16))
 
 
 def make_action(parent, tokens: dict, icon_name: str, text: str, slot: Callable, color_key: str = "text_muted") -> QAction:

@@ -10,9 +10,11 @@ from PyQt6.QtWidgets import (
 
 import icons
 from ui.widgets import EmptyState, button, label, refresh_button_icons
-from updater import KIND_LABELS
+from updater import KIND_LABELS, SNAPSHOT_REASONS
+from view_model import format_size
 
-KIND_ICONS = {"update": "download", "delete": "trash", "replace_all": "layers", "add": "plus"}
+KIND_ICONS = {"update": "download", "delete": "trash", "replace_all": "layers", "add": "plus", "restore": "camera",
+              "migrate": "trending_up"}
 
 
 def page_header(title: str, subtitle: str) -> QVBoxLayout:
@@ -24,8 +26,11 @@ def page_header(title: str, subtitle: str) -> QVBoxLayout:
 
 
 class HistoryPage(QWidget):
-    rollback_requested = pyqtSignal(dict)
+    rollback_requested = pyqtSignal(object)
     open_backups_requested = pyqtSignal()
+    snapshot_create_requested = pyqtSignal()
+    snapshot_restore_requested = pyqtSignal(object)
+    snapshot_delete_requested = pyqtSignal(object)
 
     def __init__(self, tokens: dict, parent=None):
         super().__init__(parent)
@@ -36,10 +41,13 @@ class HistoryPage(QWidget):
         root.setSpacing(18)
         head = QHBoxLayout()
         head.addLayout(page_header("История изменений",
-                                   "Каждое обновление, установка и удаление сохраняет прежние файлы. "
-                                   "Любую операцию можно вернуть."), 1)
+                                   "Снимки сохраняют весь набор модов целиком, а каждая операция — заменённые файлы. "
+                                   "К любому снимку и любую операцию можно вернуть."), 1)
+        self.snapshot_btn = button("Создать снимок", "PrimaryButton", "camera", tokens, "accent_text")
+        self.snapshot_btn.clicked.connect(self.snapshot_create_requested)
         self.open_btn = button("Папка бэкапов", None, "folder", tokens, "text")
         self.open_btn.clicked.connect(self.open_backups_requested)
+        head.addWidget(self.snapshot_btn, 0, Qt.AlignmentFlag.AlignTop)
         head.addWidget(self.open_btn, 0, Qt.AlignmentFlag.AlignTop)
         root.addLayout(head)
 
@@ -56,21 +64,65 @@ class HistoryPage(QWidget):
         self.tokens = tokens
         refresh_button_icons(self, tokens)
 
-    def set_transactions(self, transactions: List[Dict]):
+    def set_transactions(self, transactions: List[Dict], snapshots: List[Dict] = ()):
         while self.list_layout.count():
             item = self.list_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        if not transactions:
+        if not transactions and not snapshots:
             empty = EmptyState()
             empty.set_content(self.tokens, "history", "Пока пусто",
-                              "Здесь появятся обновления, установки и удаления модов этой сборки.")
+                              "Здесь появятся снимки сборки, обновления, установки и удаления модов.")
             self.list_layout.addWidget(empty)
             self.list_layout.addStretch()
             return
+        if snapshots:
+            self.list_layout.addWidget(label("СНИМКИ СБОРКИ", "SectionLabel"))
+            for snapshot in snapshots:
+                self.list_layout.addWidget(self._snapshot_card(snapshot))
+            self.list_layout.addSpacing(10)
+        if transactions:
+            self.list_layout.addWidget(label("ОПЕРАЦИИ", "SectionLabel"))
         for i, manifest in enumerate(transactions):
             self.list_layout.addWidget(self._card(manifest, latest=(i == 0)))
         self.list_layout.addStretch()
+
+    def _snapshot_card(self, snapshot: Dict) -> QFrame:
+        t = self.tokens
+        card = QFrame()
+        card.setObjectName("Card")
+        lay = QHBoxLayout(card)
+        lay.setContentsMargins(16, 12, 14, 12)
+        lay.setSpacing(14)
+        icon_label = QLabel()
+        icon_label.setFixedSize(40, 40)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_label.setPixmap(icons.pixmap("camera", t["info"], 20))
+        icon_label.setStyleSheet(f"background: {t['surface2']}; border-radius: 10px;")
+        lay.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignTop)
+        text = QVBoxLayout()
+        text.setSpacing(3)
+        reason = snapshot.get("title") or SNAPSHOT_REASONS.get(snapshot.get("reason"), snapshot.get("reason", ""))
+        files = snapshot.get("files") or []
+        title_label = label(f"<b>Снимок: {len(files)} файлов</b>"
+                            f"   <span style='color:{t['text_faint']}'>{format_size(snapshot.get('total_size') or 0)}</span>")
+        title_label.setTextFormat(Qt.TextFormat.RichText)
+        text.addWidget(title_label)
+        text.addWidget(label(f"{snapshot.get('created', '').replace('T', '  ')}   ·   {reason}", "Faint"))
+        names = [f.get("name") for f in files]
+        files_label = label(", ".join(names[:4]) + (f" и ещё {len(names) - 4}" if len(names) > 4 else ""), "Muted", wrap=True)
+        files_label.setToolTip("\n".join(names))
+        text.addWidget(files_label)
+        lay.addLayout(text, 1)
+        restore = button("Восстановить", None, "undo", t, "text")
+        restore.setToolTip("Вернуть папку к этому набору модов (текущие файлы уйдут в бэкап — это тоже можно отменить)")
+        restore.clicked.connect(lambda: self.snapshot_restore_requested.emit(snapshot))
+        delete = button("", "IconButton", "trash", t, "text_muted", "Удалить снимок")
+        delete.setFixedSize(34, 34)
+        delete.clicked.connect(lambda: self.snapshot_delete_requested.emit(snapshot))
+        lay.addWidget(restore, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(delete, 0, Qt.AlignmentFlag.AlignVCenter)
+        return card
 
     def _card(self, manifest: Dict, latest: bool) -> QFrame:
         t = self.tokens
@@ -217,7 +269,11 @@ class SettingsPage(QWidget):
         self.details_on_select = QCheckBox("Открывать панель мода сбоку при выборе строки "
                                            "(иначе — двойной щелчок, Enter или «Подробнее» в меню)")
         self.details_on_select.toggled.connect(self._emit)
-        for widget in (self.expand_deps, self.compact_rows, self.details_on_select):
+        self.group_by_status = QCheckBox("Заголовки групп («Обновления», «Актуальные»…) при сортировке «Сначала важные»")
+        self.group_by_status.toggled.connect(self._emit)
+        self.animations = QCheckBox("Анимации (плавное раскрытие зависимостей)")
+        self.animations.toggled.connect(self._emit)
+        for widget in (self.expand_deps, self.compact_rows, self.details_on_select, self.group_by_status, self.animations):
             body.addWidget(widget)
         root.addWidget(card)
 
@@ -226,12 +282,32 @@ class SettingsPage(QWidget):
         self.auto_check = QCheckBox("Проверять обновления автоматически при открытии сборки")
         self.auto_check.toggled.connect(self._emit)
         body.addWidget(self.auto_check)
+        self.changelog_before = QCheckBox("Показывать список изменений перед «Обновить все»")
+        self.changelog_before.toggled.connect(self._emit)
+        body.addWidget(self.changelog_before)
         row = QHBoxLayout()
         row.addWidget(label("Одновременных загрузок:"))
         self.parallel = QComboBox()
         self.parallel.addItems([str(i) for i in range(1, 7)])
         self.parallel.currentIndexChanged.connect(self._emit)
         row.addWidget(self.parallel)
+        row.addStretch()
+        body.addLayout(row)
+        root.addWidget(card)
+
+        # Снимки
+        card, body = self._card("Снимки сборки")
+        body.addWidget(label("Снимок сохраняет весь набор модов, чтобы вернуться к нему со страницы «История». "
+                             "Файлы связываются жёсткими ссылками и почти не занимают места.", "Muted", wrap=True))
+        self.auto_snapshot = QCheckBox("Делать снимок перед «Обновить все», заменой сборки и сменой версии игры")
+        self.auto_snapshot.toggled.connect(self._emit)
+        body.addWidget(self.auto_snapshot)
+        row = QHBoxLayout()
+        row.addWidget(label("Хранить автоматических снимков:"))
+        self.snapshots_keep = QComboBox()
+        self.snapshots_keep.addItems(["3", "5", "10", "20", "50"])
+        self.snapshots_keep.currentIndexChanged.connect(self._emit)
+        row.addWidget(self.snapshots_keep)
         row.addStretch()
         body.addLayout(row)
         root.addWidget(card)
@@ -267,6 +343,7 @@ class SettingsPage(QWidget):
         card, body = self._card("Горячие клавиши")
         shortcuts = label("<table cellspacing='4'>"
                           "<tr><td><b>F5</b></td><td>&nbsp;&nbsp;проверить обновления</td></tr>"
+                          "<tr><td><b>Ctrl+K</b></td><td>&nbsp;&nbsp;быстрые команды: действия, сборки, моды</td></tr>"
                           "<tr><td><b>Ctrl+F</b></td><td>&nbsp;&nbsp;поиск</td></tr>"
                           "<tr><td><b>Пробел</b></td><td>&nbsp;&nbsp;отметить мод</td></tr>"
                           "<tr><td><b>Enter</b></td><td>&nbsp;&nbsp;открыть панель мода</td></tr>"
@@ -305,6 +382,14 @@ class SettingsPage(QWidget):
         self.expand_deps.setChecked(bool(settings.get("expand_dependencies", False)))
         self.compact_rows.setChecked(bool(settings.get("compact_rows", False)))
         self.details_on_select.setChecked(bool(settings.get("details_on_select", True)))
+        self.group_by_status.setChecked(bool(settings.get("group_by_status", True)))
+        self.animations.setChecked(bool(settings.get("animations", True)))
+        self.changelog_before.setChecked(bool(settings.get("changelog_before_update", True)))
+        self.auto_snapshot.setChecked(bool(settings.get("auto_snapshot", True)))
+        keep = str(int(settings.get("snapshots_keep", 10)))
+        if self.snapshots_keep.findText(keep) < 0:
+            self.snapshots_keep.addItem(keep)
+        self.snapshots_keep.setCurrentText(keep)
         self._loading = False
 
     def _emit(self, *_):
@@ -316,6 +401,11 @@ class SettingsPage(QWidget):
                 "expand_dependencies": self.expand_deps.isChecked(),
                 "compact_rows": self.compact_rows.isChecked(),
                 "details_on_select": self.details_on_select.isChecked(),
+                "group_by_status": self.group_by_status.isChecked(),
+                "animations": self.animations.isChecked(),
+                "changelog_before_update": self.changelog_before.isChecked(),
+                "auto_snapshot": self.auto_snapshot.isChecked(),
+                "snapshots_keep": int(self.snapshots_keep.currentText()),
                 "auto_check": self.auto_check.isChecked(),
                 "discover_launchers": self.discover.isChecked(),
                 "parallel_downloads": int(self.parallel.currentText()),

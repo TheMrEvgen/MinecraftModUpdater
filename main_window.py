@@ -5,7 +5,9 @@ import shutil
 import webbrowser
 from typing import Callable, Dict, Iterator, List, Optional
 
-from PyQt6.QtCore import QByteArray, QEvent, QItemSelectionModel, Qt, QTimer, QUrl, pyqtSignal, QObject
+from PyQt6.QtCore import (
+    QByteArray, QEasingCurve, QEvent, QItemSelectionModel, QObject, Qt, QTimer, QUrl, QVariantAnimation, pyqtSignal,
+)
 from PyQt6.QtGui import QDesktopServices, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
@@ -14,6 +16,7 @@ from PyQt6.QtWidgets import (
 
 import config as app_config
 import icons
+from content import CONTENT_TYPES, DISABLED_SUFFIX, MODS, ContentType
 from enums import ModStatus, UpdateChannel
 from exporters import (
     build_mrpack_index, build_share_data, decode_share_string, encode_share_string, parse_share_data,
@@ -22,23 +25,32 @@ from exporters import (
 from game_detection import detect_game_versions, extract_loader_version
 from launchers import discover_instances
 from mod_updater_logic import format_date, get_latest_loader_version, select_primary_file
-from scanner import entries_from_mrpack, mrpack_game_info, read_mrpack
+from scanner import (
+    apply_install_info, collect_changelogs, entries_from_mrpack, mrpack_game_info, read_mrpack, resolve_project_install,
+    scan_local,
+)
+from taskbar import TaskbarProgress
 from theme import THEMES, apply_window_frame_theme, build_stylesheet, detect_system_theme
+from ui.catalog import CatalogPage
 from ui.details_panel import DetailsPanel
+from ui.dialogs import MigrationDialog, UpdateReviewDialog, ask_text
+from ui.palette import Command, CommandPalette
 from ui.mod_list import ModDelegate, ModFilterProxy, ModListModel, ModListView, entry_at, meta_at
 from ui.pages import HistoryPage, LogPage, SettingsPage
 from ui.widgets import (
     ChipButton, DropOverlay, ElidedLabel, EmptyState, SearchBox, SelectionBar, Sidebar, StatCard, ToastManager,
-    button, label, make_action, profile_subtitle, refresh_button_icons,
+    button, label, make_action, profile_subtitle, refresh_button_icons, style_segments,
 )
 from ui_components import ImportDialog, ProfileDialog, ShareDialog, SyncDialog, ask_choice, confirm, show_message
 from updater import (
-    UpdateTransaction, add_files, backup_root, find_locked_files, is_game_running, list_transactions,
-    move_all_to_backup, remove_mods, rollback_transaction,
+    UpdateTransaction, add_files, backup_root, create_snapshot, delete_snapshot, find_locked_files, is_game_running,
+    list_snapshots, list_transactions, move_all_to_backup, prune_snapshots, remove_mods, restore_snapshot,
+    rollback_transaction, set_disabled,
 )
 from view_model import (
-    CAT_ALL, CAT_INSTALL, CAT_NOT_FOUND, CAT_PROBLEMS, CAT_UPDATES, VIEW_FLAT, VIEW_MODES, VIEW_TREE,
-    build_rows, category_counts, entry_key, iter_all_entries, status_of,
+    CAT_ALL, CAT_DISABLED, CAT_INSTALL, CAT_NOT_FOUND, CAT_PROBLEMS, CAT_UPDATES, VIEW_FLAT, VIEW_MODES, VIEW_TREE,
+    build_rows, category_counts, collect_tags, entry_key, format_size, is_updatable, iter_all_entries, pin_key,
+    status_of,
 )
 
 from workers import (
@@ -49,7 +61,9 @@ from workers import (
 LOADER_TITLES = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge", "quilt": "Quilt"}
 # Что ставит кнопка «Обновить все»: обновления и недостающие обязательные зависимости
 BULK_STATUSES = (ModStatus.UPDATE_AVAILABLE, ModStatus.READY_TO_INSTALL, ModStatus.REQUIRED)
-PAGE_MODS, PAGE_HISTORY, PAGE_LOG, PAGE_SETTINGS = range(4)
+PAGE_MODS, PAGE_CATALOG, PAGE_HISTORY, PAGE_LOG, PAGE_SETTINGS = range(5)
+CONTENT_ICONS = {"mods": "package", "shaders": "sparkles", "resourcepacks": "image"}
+ANIMATION_MS = 170
 
 
 class LogEmitter(QObject):
@@ -86,10 +100,12 @@ class ModUpdaterApp(QMainWindow):
         self.settings: dict = cfg["settings"]
         self.hidden_instances: List[str] = cfg["hidden_instances"]
         self.window_cfg: dict = cfg["window"]
+        self.mod_tags: Dict[str, List[str]] = cfg["mod_tags"]
         self.tokens = THEMES[self._resolve_theme()]
 
         # Состояние текущей сборки
-        self.mods_path = ""
+        self.content: ContentType = MODS
+        self.mods_path = ""  # Папка текущего типа контента (mods, shaderpacks или resourcepacks)
         self.game_version = ""
         self.loader = ""
         self.current_loader_version: Optional[str] = None
@@ -98,8 +114,13 @@ class ModUpdaterApp(QMainWindow):
         self._count_items: List[dict] = []  # Записи для карточек-сводок (без повторов дерева)
         self.is_import_mode = False
         self.import_title = ""
-        self.sessions: Dict[str, List[dict]] = {}
-        self._loaded_profile: Optional[str] = None
+        self.sessions: Dict[tuple, List[dict]] = {}  # (сборка, тип контента) -> последний список
+        self._loaded_key: Optional[tuple] = None
+        self._update_folder = ""
+        self._catalog_installing: List[str] = []
+        self._catalog_content: ContentType = MODS
+        self._animations: Dict[object, QVariantAnimation] = {}
+        self.taskbar: Optional[TaskbarProgress] = None
         self._busy: Optional[str] = None  # 'local' | 'scan' | 'update' | 'import' | 'task'
         self._silent_scan = False
         self._update_done = 0
@@ -116,6 +137,7 @@ class ModUpdaterApp(QMainWindow):
         self._icon_pixmaps: Dict[str, QPixmap] = {}
 
         self._build_ui()
+        self.palette = CommandPalette(self.centralWidget(), self.tokens, self._palette_commands)
         self._setup_logging()
         self._setup_shortcuts()
         self.apply_theme()
@@ -148,8 +170,15 @@ class ModUpdaterApp(QMainWindow):
         self.stack = QStackedWidget()
         layout.addWidget(self.stack, 1)
         self.stack.addWidget(self._build_mods_page())
+        self.catalog_page = CatalogPage(t, self._run_task, self._icon_for_entry)
+        self.catalog_page.install_requested.connect(self._install_from_catalog)
+        self.catalog_page.open_requested.connect(self._open_catalog_hit)
+        self.stack.addWidget(self.catalog_page)
         self.history_page = HistoryPage(t)
         self.history_page.rollback_requested.connect(self._rollback_from_history)
+        self.history_page.snapshot_create_requested.connect(lambda: self._create_snapshot("manual"))
+        self.history_page.snapshot_restore_requested.connect(self._restore_snapshot)
+        self.history_page.snapshot_delete_requested.connect(self._delete_snapshot)
         self.history_page.open_backups_requested.connect(
             lambda: self.mods_path and self._open_path(backup_root(self.mods_path)))
         self.stack.addWidget(self.history_page)
@@ -197,6 +226,19 @@ class ModUpdaterApp(QMainWindow):
             header.addWidget(widget)
         layout.addLayout(header)
 
+        tabs = QHBoxLayout()
+        tabs.setSpacing(6)
+        self.content_group = QButtonGroup(self)
+        for i, content in enumerate(CONTENT_TYPES):
+            tab = button(f" {content.title}", "Segment", CONTENT_ICONS[content.key], t, "text_muted")
+            tab.setCheckable(True)
+            self.content_group.addButton(tab, i)
+            tabs.addWidget(tab)
+        self.content_group.buttons()[0].setChecked(True)
+        self.content_group.idClicked.connect(lambda i: self._set_content(CONTENT_TYPES[i]))
+        tabs.addStretch()
+        layout.addLayout(tabs)
+
         chips = QHBoxLayout()
         chips.setSpacing(8)
         self.game_chip = ChipButton()
@@ -214,6 +256,8 @@ class ModUpdaterApp(QMainWindow):
         self.path_label.setObjectName("PathLabel")
         self.path_label.clicked.connect(lambda: self._open_path(self.mods_path or self._profile().get("mods_path", "")))
         chips.addWidget(self.path_label, 1)
+        self.size_label = label("", "Faint")
+        chips.addWidget(self.size_label)
         layout.addLayout(chips)
 
         # --- Прогресс фоновой операции ---
@@ -255,7 +299,7 @@ class ModUpdaterApp(QMainWindow):
         self.cards: Dict[str, StatCard] = {}
         for category, title, color in ((CAT_ALL, "Все моды", "text"), (CAT_UPDATES, "Обновления", "accent"),
                                        (CAT_INSTALL, "К установке", "info"), (CAT_PROBLEMS, "Проблемы", "warning"),
-                                       (CAT_NOT_FOUND, "Нет на Modrinth", "text_muted")):
+                                       (CAT_NOT_FOUND, "Нет на Modrinth", "text_muted"), (CAT_DISABLED, "Выключены", "text_muted")):
             card = StatCard(title, category, color, t)
             card.clicked.connect(lambda _=False, c=category: self._set_category(c))
             self.card_group.addButton(card)
@@ -281,9 +325,16 @@ class ModUpdaterApp(QMainWindow):
         self.select_all.clicked.connect(self._on_select_all_clicked)
         toolbar.addWidget(self.select_all)
         self.sort_combo = QComboBox()
+        self.tag_combo = QComboBox()
+        self.tag_combo.setMinimumHeight(36)
+        self.tag_combo.setToolTip("Фильтр по метке: категории Modrinth, сторона (клиент/сервер) и ваши метки")
+        self.tag_combo.currentIndexChanged.connect(self._on_tag_selected)
+        toolbar.addWidget(self.tag_combo)
         self.sort_combo.addItem("Сначала важные", ModFilterProxy.SORT_STATUS)
         self.sort_combo.addItem("По названию", ModFilterProxy.SORT_NAME)
-        self.sort_combo.currentIndexChanged.connect(lambda: self.proxy.set_sort_mode(self.sort_combo.currentData()))
+        self.sort_combo.addItem("Недавно обновлённые", ModFilterProxy.SORT_UPDATED)
+        self.sort_combo.addItem("По размеру", ModFilterProxy.SORT_SIZE)
+        self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         self.sort_combo.setMinimumHeight(36)
         toolbar.addWidget(self.sort_combo)
         self.toolbar_widget = QWidget()
@@ -326,6 +377,8 @@ class ModUpdaterApp(QMainWindow):
         self.selection_bar = SelectionBar(self.list_holder, t)
         self.selection_bar.update_clicked.connect(self._update_checked)
         self.selection_bar.delete_clicked.connect(self._delete_checked)
+        self.selection_bar.disable_clicked.connect(lambda: self._toggle_disabled(
+            [e for e in self._checked_entries() if e.get("filepath")]))
         self.selection_bar.clear_clicked.connect(lambda: self._set_all_checked(False))
         self.list_holder.installEventFilter(self)
         body.addWidget(self.list_holder, 1)
@@ -340,6 +393,11 @@ class ModUpdaterApp(QMainWindow):
         self.details.versions_requested.connect(self._load_versions)
         self.details.version_install_requested.connect(self._install_specific_version)
         self.details.select_entry_requested.connect(self._select_entry)
+        self.details.pin_toggled.connect(self._toggle_pin)
+        self.details.disable_toggled.connect(lambda e: self._toggle_disabled([e]))
+        self.details.tags_menu_requested.connect(self._show_tags_menu)
+        self.details.custom_tags = self.mod_tags
+        self.proxy.custom_tags = self.mod_tags
         body.addWidget(self.details)
         layout.addLayout(body, 1)
         return page
@@ -354,6 +412,8 @@ class ModUpdaterApp(QMainWindow):
     def _setup_shortcuts(self):
         QShortcut(QKeySequence("F5"), self, activated=self._on_check_clicked)
         QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_search)
+        QShortcut(QKeySequence("Ctrl+K"), self, activated=self.palette.open)
+        QShortcut(QKeySequence("Ctrl+P"), self, activated=self.palette.open)
         QShortcut(QKeySequence("Escape"), self, activated=self._on_escape)
 
     # ================================================================== Тема и окно
@@ -365,8 +425,9 @@ class ModUpdaterApp(QMainWindow):
         t = self.tokens = THEMES[self._resolve_theme()]
         QApplication.instance().setStyleSheet(build_stylesheet(t, self._theme_assets(t)))
         for widget in (self.sidebar, self.history_page, self.log_page, self.settings_page, self.details, self.search,
-                       self.drop_overlay, self.toasts):
+                       self.drop_overlay, self.toasts, self.catalog_page, self.palette):
             widget.set_tokens(t)
+        style_segments(self.content_group, t)
         for card in self.cards.values():
             card.set_tokens(t)
         self.delegate.set_tokens(t)
@@ -402,6 +463,8 @@ class ModUpdaterApp(QMainWindow):
     def showEvent(self, event):
         super().showEvent(event)
         apply_window_frame_theme(self, self.tokens)
+        if self.taskbar is None:
+            self.taskbar = TaskbarProgress(int(self.winId()))
 
     def _restore_geometry(self):
         geometry = self.window_cfg.get("geometry")
@@ -416,6 +479,8 @@ class ModUpdaterApp(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.drop_overlay.setGeometry(self.centralWidget().rect().adjusted(260, 12, -12, -12))
+        if self.palette.isVisible():
+            self.palette.open()
 
     def closeEvent(self, event):
         workers = [w for w in (self.scan_worker, self.import_worker, self.local_scan_worker, self.update_worker,
@@ -443,6 +508,7 @@ class ModUpdaterApp(QMainWindow):
             app_config.save_config({
                 "theme": self.config_theme, "current_profile": self.current_profile_name, "profiles": self.profiles,
                 "settings": self.settings, "hidden_instances": self.hidden_instances, "window": self.window_cfg,
+                "mod_tags": self.mod_tags,
             })
         except OSError as e:
             logging.error(f"Ошибка при сохранении конфигурации: {e}")
@@ -500,13 +566,56 @@ class ModUpdaterApp(QMainWindow):
             return
         self._load_profile(name)
 
+    def _skey(self, profile: Optional[str] = None, content: Optional[ContentType] = None) -> tuple:
+        return profile or self.current_profile_name, (content or self.content).key
+
+    def _drop_sessions(self, profile: str):
+        for key in [k for k in self.sessions if k[0] == profile]:
+            del self.sessions[key]
+
+    def _remember_session(self):
+        """Запоминает список текущей вкладки, чтобы при возврате не сканировать заново."""
+        if self._loaded_key and not self.is_import_mode and self._busy is None:
+            self.sessions[self._loaded_key] = self.mods_data
+
+    def _set_content(self, content: ContentType):
+        if content is self.content:
+            return
+        if self._busy:
+            self.toasts.show("Дождитесь окончания текущей операции.", "warning")
+            self.content_group.buttons()[CONTENT_TYPES.index(self.content)].setChecked(True)
+            return
+        if self.is_import_mode:
+            self._exit_import_mode()
+        self._remember_session()
+        self.content = content
+        self.content_group.buttons()[CONTENT_TYPES.index(content)].setChecked(True)
+        style_segments(self.content_group, self.tokens)
+        self._close_details()
+        self._load_content()
+
+    def _load_content(self):
+        """Показывает текущий тип контента: из памяти или с локальным сканированием папки."""
+        game_dir = self._profile().get("mods_path", "")
+        self.mods_path = self.content.path(game_dir)
+        self._loaded_key = self._skey()
+        self._update_header()
+        self.cards[CAT_ALL].title = f"Все {self.content.title.lower()}"
+        self.cards[CAT_ALL].update()
+        if not game_dir or not os.path.isdir(game_dir):
+            self._set_data([])
+            return
+        cached = self.sessions.get(self._loaded_key)
+        if cached is not None:
+            self._set_data(cached)
+        else:
+            self._set_data([])
+            self.start_local_scan()
+
     def _load_profile(self, name: str):
         if name not in self.profiles:
             name = next(iter(self.profiles))
-        # Запоминаем список предыдущей сборки, чтобы при возврате не сканировать заново
-        if self._loaded_profile and self._loaded_profile != name and not self.is_import_mode and self._busy is None:
-            self.sessions[self._loaded_profile] = self.mods_data
-        self._loaded_profile = name
+        self._remember_session()
         self.current_profile_name = name
         self.is_import_mode = False
         self.banner.hide()
@@ -515,21 +624,9 @@ class ModUpdaterApp(QMainWindow):
         self.stack.setCurrentIndex(PAGE_MODS)
 
         profile = self._profile()
-        game_dir = profile.get("mods_path", "")
-        self.mods_path = os.path.join(game_dir, "mods") if game_dir else ""
         self._resolve_versions(profile)
-        self._update_header()
         self._start_loader_check()
-
-        if not game_dir or not os.path.isdir(game_dir):
-            self._set_data([])
-            return
-        cached = self.sessions.get(name)
-        if cached is not None:
-            self._set_data(cached)
-        else:
-            self._set_data([])
-            self.start_local_scan()
+        self._load_content()
 
     def _resolve_versions(self, profile: dict):
         """Определяет версию игры и загрузчик: из настроек сборки или по папке versions."""
@@ -647,7 +744,7 @@ class ModUpdaterApp(QMainWindow):
         if profile.get("mods_path") != self.profiles[old_name].get("mods_path"):
             profile["source"] = "manual"
         self.profiles = {(name if k == old_name else k): (profile if k == old_name else v) for k, v in self.profiles.items()}
-        self.sessions.pop(old_name, None)
+        self._drop_sessions(old_name)
         if self.current_profile_name == old_name:
             self.current_profile_name = name
             self._refresh_sidebar()
@@ -674,7 +771,7 @@ class ModUpdaterApp(QMainWindow):
         profile = self.profiles.pop(name)
         if profile.get("source", "manual") != "manual" and profile.get("mods_path"):
             self.hidden_instances.append(profile["mods_path"])  # Не добавлять снова при автопоиске
-        self.sessions.pop(name, None)
+        self._drop_sessions(name)
         if name == self.current_profile_name:
             self.current_profile_name = next(iter(self.profiles))
             self._load_profile(self.current_profile_name)
@@ -688,7 +785,7 @@ class ModUpdaterApp(QMainWindow):
                          "success" if added else "info")
 
     def _on_settings_changed(self, settings: dict):
-        view_keys = ("view_mode", "compact_rows", "expand_dependencies")
+        view_keys = ("view_mode", "compact_rows", "expand_dependencies", "group_by_status")
         view_changed = any(self.settings.get(k) != settings.get(k) for k in view_keys if k in settings)
         self.settings.update(settings)
         if view_changed:
@@ -714,12 +811,18 @@ class ModUpdaterApp(QMainWindow):
     # ================================================================== Страницы
 
     def _switch_page(self, page: int):
+        self.sidebar.set_page(page)
         self.stack.setCurrentIndex(page)
         if page == PAGE_HISTORY:
             self._refresh_history()
+        elif page == PAGE_CATALOG:
+            self._refresh_catalog_context()
 
     def _refresh_history(self):
-        self.history_page.set_transactions(list_transactions(self.mods_path) if self.mods_path else [])
+        if not self.mods_path:
+            self.history_page.set_transactions([], [])
+            return
+        self.history_page.set_transactions(list_transactions(self.mods_path), list_snapshots(self.mods_path))
 
     # ================================================================== Данные списка
 
@@ -735,6 +838,9 @@ class ModUpdaterApp(QMainWindow):
         selected_key = entry_key(self.details.entry) if keep_selection and self.details.entry else None
         self.mods_data = mods_data
         self._apply_view_settings()
+        pinned = self._profile().get("pinned") or {}
+        for entry in iter_all_entries(mods_data):
+            entry["_pinned"] = bool(entry.get("filepath")) and pin_key(entry) in pinned
         rows, self._count_items = build_rows(mods_data, self._view_mode())
         self.model.set_rows(rows)
         items = self.model.items()
@@ -760,6 +866,12 @@ class ModUpdaterApp(QMainWindow):
             visible = {CAT_ALL, CAT_UPDATES, CAT_PROBLEMS, CAT_NOT_FOUND}
             if counts.get(CAT_INSTALL):
                 visible.add(CAT_INSTALL)
+            if counts.get(CAT_DISABLED):
+                visible.add(CAT_DISABLED)
+        installed = [e for e in self._count_items if e.get("filepath")]
+        total = sum(e.get("size") or 0 for e in installed)
+        self.size_label.setText(f"{len(installed)} файлов  ·  {format_size(total)}" if installed else "")
+        self._refresh_tag_combo()
         for category, card in self.cards.items():
             card.setVisible(category in visible)
         if not self.cards[self.proxy.category].isVisible():
@@ -811,6 +923,7 @@ class ModUpdaterApp(QMainWindow):
 
     def _reset_filters(self):
         self.search.clear()
+        self.tag_combo.setCurrentIndex(0)
         self._set_category(CAT_ALL)
 
     def _refresh_actions(self):
@@ -830,7 +943,32 @@ class ModUpdaterApp(QMainWindow):
         self.selection_bar.update_btn.setEnabled(not busy and self.selection_bar.update_btn.isEnabled())
 
     def _bulk_candidates(self) -> List[dict]:
-        return [e for e in self.model.items() if e.get("download_url") and status_of(e) in BULK_STATUSES]
+        return [e for e in self.model.items() if is_updatable(e) and status_of(e) in BULK_STATUSES]
+
+    def _refresh_tag_combo(self):
+        current = self.tag_combo.currentData()
+        tags = collect_tags(self._count_items, self.mod_tags)
+        self.tag_combo.blockSignals(True)
+        self.tag_combo.clear()
+        self.tag_combo.addItem("Все метки", None)
+        for key, title, count in tags:
+            self.tag_combo.addItem(f"{title}  ({count})", key)
+        index = self.tag_combo.findData(current)
+        self.tag_combo.setCurrentIndex(max(0, index))
+        self.tag_combo.blockSignals(False)
+        self.tag_combo.setVisible(len(tags) > 0)
+        if current and index < 0:
+            self._on_tag_selected()
+
+    def _on_tag_selected(self, *_):
+        self.proxy.set_tag(self.tag_combo.currentData())
+        self.proxy.sort(0)
+        self._refresh_empty_state()
+        self._refresh_selection_ui()
+
+    def _on_sort_changed(self, *_):
+        self.proxy.set_sort_mode(self.sort_combo.currentData())
+        self.view.relayout()
 
     def _icon_for_entry(self, entry: dict) -> Optional[QPixmap]:
         pid = entry.get("project_id")
@@ -875,8 +1013,10 @@ class ModUpdaterApp(QMainWindow):
         self.select_all.setEnabled(bool(visible))
         self.select_all.blockSignals(False)
         if checked:
+            files = [e for e in checked if e.get("filepath")]
             self.selection_bar.set_state(len(checked), sum(1 for e in checked if e.get("download_url")),
-                                         sum(1 for e in checked if e.get("filepath")), self.is_import_mode)
+                                         len(files), self.is_import_mode,
+                                         all_disabled=bool(files) and all(e.get("disabled") for e in files))
             self.selection_bar.update_btn.setEnabled(self._busy is None and any(e.get("download_url") for e in checked))
             self.selection_bar.show()
             self.selection_bar.raise_()
@@ -936,6 +1076,7 @@ class ModUpdaterApp(QMainWindow):
         tree = self._view_mode() == VIEW_TREE
         self.delegate.tree = tree
         self.delegate.compact = bool(self.settings.get("compact_rows", False))
+        self.delegate.groups = bool(self.settings.get("group_by_status", True))
         # Умолчание раскрытия применяем только при смене настройки, чтобы не сбрасывать «Раскрыть все» из меню строки
         expand = bool(self.settings.get("expand_dependencies", False))
         if getattr(self, "_expand_setting", None) != expand:
@@ -945,7 +1086,7 @@ class ModUpdaterApp(QMainWindow):
     def _rebuild_view(self):
         """Перестраивает список под новые настройки вида, сохраняя открытый мод."""
         self._set_data(self.mods_data)
-        self.view.doItemsLayout()  # Высота строк могла измениться (компактный режим)
+        self.view.relayout()  # Высота строк могла измениться (компактный режим, заголовки групп)
         self.view.viewport().update()
 
     def _expand_all(self, expanded: bool):
@@ -953,8 +1094,42 @@ class ModUpdaterApp(QMainWindow):
         self._after_tree_change()
 
     def _set_expanded(self, entry: dict, expanded: bool):
-        self.proxy.set_expanded(entry, expanded)
-        self._after_tree_change()
+        if not self.settings.get("animations", True) or not self.isVisible():
+            self.proxy.set_expanded(entry, expanded)
+            self._after_tree_change()
+            return
+        # Плавное раскрытие: зависимости появляются с нулевой высотой и «вырастают» (сворачивание — наоборот)
+        key = entry_key(entry)
+        previous = self._animations.pop(key, None)
+        if previous:
+            previous.stop()
+        start = self.delegate.anim.get(key, 0.0 if expanded else 1.0)
+        if expanded:
+            self.delegate.anim[key] = start
+            self.proxy.set_expanded(entry, True)
+            self._after_tree_change()
+        animation = QVariantAnimation(self)
+        animation.setDuration(ANIMATION_MS)
+        animation.setStartValue(float(start))
+        animation.setEndValue(1.0 if expanded else 0.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic if expanded else QEasingCurve.Type.InCubic)
+
+        def step(value):
+            self.delegate.anim[key] = float(value)
+            self.view.relayout()
+
+        def done():
+            self._animations.pop(key, None)
+            self.delegate.anim.pop(key, None)
+            if not expanded:
+                self.proxy.set_expanded(entry, False)
+                self._after_tree_change()
+            self.view.relayout()
+
+        animation.valueChanged.connect(step)
+        animation.finished.connect(done)
+        self._animations[key] = animation
+        animation.start()
 
     def _expand_current(self, expand: bool):
         index = self.view.currentIndex()
@@ -997,7 +1172,7 @@ class ModUpdaterApp(QMainWindow):
                     self._select_entry(entry)
                     return
         # Мод скрыт фильтром — показываем все
-        if self.proxy.category != CAT_ALL or self.proxy.query:
+        if self.proxy.category != CAT_ALL or self.proxy.query or self.proxy.tag:
             self._reset_filters()
             self._select_entry(entry)
 
@@ -1035,6 +1210,16 @@ class ModUpdaterApp(QMainWindow):
             menu.addAction(make_action(menu, t, "history", "Выбрать другую версию…",
                                        lambda: (self._select_entry(entry), self._load_versions(entry))))
             menu.addAction(make_action(menu, t, "external", "Открыть на Modrinth", lambda: self._open_mod_page(entry)))
+        if entry.get("filepath") and not self.is_import_mode:
+            menu.addSeparator()
+            pinned = bool(entry.get("_pinned"))
+            menu.addAction(make_action(menu, t, "unlock" if pinned else "lock",
+                                       "Разрешить обновления" if pinned else "Не обновлять этот мод (закрепить)",
+                                       lambda: self._toggle_pin(entry)))
+            menu.addAction(make_action(menu, t, "power", "Включить" if entry.get("disabled") else "Выключить (без удаления)",
+                                       lambda: self._toggle_disabled([entry])))
+        if entry.get("project_id") or entry.get("filepath"):
+            menu.addAction(make_action(menu, t, "tag", "Метки…", lambda: self._show_tags_menu(entry, pos)))
         if self._view_mode() == VIEW_TREE:
             menu.addSeparator()
             menu.addAction(make_action(menu, t, "chevron_down", "Раскрыть все зависимости", lambda: self._expand_all(True)))
@@ -1056,7 +1241,14 @@ class ModUpdaterApp(QMainWindow):
         menu.addAction(make_action(menu, t, "package", "Открыть .mrpack…", self.import_mrpack_dialog))
         menu.addAction(make_action(menu, t, "globe", "Синхронизация по URL…", self.sync_from_url))
         menu.addSeparator()
-        has_data = bool(self.mods_data) and not self.is_import_mode
+        has_data = bool(self.mods_data) and not self.is_import_mode and self.content is MODS
+        migrate = make_action(menu, t, "trending_up", "Перейти на другую версию Minecraft…", self.migrate_game_version)
+        migrate.setEnabled(has_data)
+        menu.addAction(migrate)
+        snapshot = make_action(menu, t, "camera", "Создать снимок сборки", lambda: self._create_snapshot("manual"))
+        snapshot.setEnabled(bool(self.mods_data) and not self.is_import_mode)
+        menu.addAction(snapshot)
+        menu.addSeparator()
         for icon_name, text, slot in (("share", "Поделиться списком…", self.share_mod_list),
                                       ("save", "Экспорт JSON для сервера…", self.export_server_json),
                                       ("package", "Экспорт в .mrpack…", self.export_mrpack)):
@@ -1064,7 +1256,8 @@ class ModUpdaterApp(QMainWindow):
             action.setEnabled(has_data)
             menu.addAction(action)
         menu.addSeparator()
-        menu.addAction(make_action(menu, t, "folder", "Открыть папку mods", lambda: self._open_path(self.mods_path)))
+        menu.addAction(make_action(menu, t, "folder", f"Открыть папку {self.content.folder}",
+                                   lambda: self._open_path(self.mods_path)))
         menu.addAction(make_action(menu, t, "refresh", "Перечитать папку", self._reread_folder))
         menu.exec(self.more_btn.mapToGlobal(self.more_btn.rect().bottomRight()) - self._menu_offset(menu))
 
@@ -1074,7 +1267,7 @@ class ModUpdaterApp(QMainWindow):
         return QPoint(menu.sizeHint().width(), 0)
 
     def _reread_folder(self):
-        self.sessions.pop(self.current_profile_name, None)
+        self.sessions.pop(self._skey(), None)
         self.start_local_scan()
 
     # ================================================================== Фоновые операции
@@ -1086,6 +1279,11 @@ class ModUpdaterApp(QMainWindow):
         if not determinate:
             self.slim_progress.setRange(0, 0)
         self.sidebar.profile_list.setEnabled(kind is None)
+        if self.taskbar:
+            if kind is None:
+                self.taskbar.clear()
+            elif not determinate:
+                self.taskbar.busy()
         self._refresh_actions()
         self._refresh_selection_ui()
 
@@ -1095,9 +1293,9 @@ class ModUpdaterApp(QMainWindow):
         if not os.path.isdir(self.mods_path):
             self._set_data([])
             return
-        self._set_busy("local", "Читаем папку mods…")
+        self._set_busy("local", f"Читаем папку {self.content.folder}…")
         self._refresh_empty_state()
-        self.local_scan_worker = LocalScanWorker(self.mods_path, app_config.CACHE_FILE)
+        self.local_scan_worker = LocalScanWorker(self.mods_path, app_config.CACHE_FILE, self.content)
         self.local_scan_worker.finished.connect(self._on_local_scan_finished)
         self.local_scan_worker.start()
 
@@ -1107,7 +1305,7 @@ class ModUpdaterApp(QMainWindow):
         if mods_data is None:
             return
         self._set_data(mods_data)
-        self.sessions[self.current_profile_name] = mods_data
+        self.sessions[self._skey()] = mods_data
         if mods_data and self.settings.get("auto_check", True):
             self.start_scan(silent=True)
 
@@ -1131,7 +1329,8 @@ class ModUpdaterApp(QMainWindow):
         channel = self._channel()
         logging.info(f"Проверка обновлений: Minecraft {self.game_version} ({self.loader}), канал {channel.value}")
         self._set_busy("scan", "Проверяем обновления…")
-        self.scan_worker = ScanWorker(self.mods_path, self.game_version, self.loader, app_config.CACHE_FILE, channel)
+        self.scan_worker = ScanWorker(self.mods_path, self.game_version, self.loader, app_config.CACHE_FILE, channel,
+                                      self.content)
         self.scan_worker.finished.connect(self._on_scan_finished)
         self.scan_worker.progress.connect(self.status_label.setText)
         self.scan_worker.start()
@@ -1146,7 +1345,7 @@ class ModUpdaterApp(QMainWindow):
             self.toasts.show("Не удалось проверить обновления. Проверьте подключение к интернету.", "error")
             return
         self._set_data(mods_data)
-        self.sessions[self.current_profile_name] = mods_data
+        self.sessions[self._skey()] = mods_data
         counts = category_counts(self._count_items)
         updates, problems = counts[CAT_UPDATES], counts[CAT_PROBLEMS]
         if updates:
@@ -1157,11 +1356,11 @@ class ModUpdaterApp(QMainWindow):
             self.toasts.show(f"Найдены проблемы с зависимостями: {problems}", "warning", "Показать",
                              lambda: self._set_category(CAT_PROBLEMS), timeout=8000)
 
-    def _run_task(self, func, args, on_success: Callable, on_failure: Callable, busy_text: str):
-        """Разовая блокирующая операция в фоне (сетевой запрос и т.п.)."""
+    def _run_task(self, func, args, on_success: Callable, on_failure: Callable, busy_text: Optional[str]):
+        """Разовая блокирующая операция в фоне. busy_text=None — не блокировать интерфейс (поиск в каталоге)."""
         worker = TaskWorker(func, *args)
         self._task_workers.append(worker)
-        previous_busy = self._busy
+        previous_busy = self._busy if busy_text is not None else "background"
         if previous_busy is None:
             self._set_busy("task", busy_text)
 
@@ -1178,7 +1377,23 @@ class ModUpdaterApp(QMainWindow):
     # ================================================================== Обновление и установка
 
     def update_all(self):
-        self.start_update(self._bulk_candidates())
+        entries = self._bulk_candidates()
+        if not entries or self._busy:
+            return
+        if self.settings.get("changelog_before_update", True) and not self.is_import_mode:
+            game_version, loader, content = self.game_version, self.loader, self.content
+            dialog = UpdateReviewDialog(
+                self, self.tokens, entries, self._icon_for_entry,
+                lambda callback: self._run_task(collect_changelogs, (entries, game_version, loader, content),
+                                                callback, lambda e: callback({}), None))
+            if not dialog.exec():
+                return
+            entries = dialog.selected_entries()
+            if not entries:
+                return
+        if not self.is_import_mode:
+            self._auto_snapshot("update_all")
+        self.start_update(entries)
 
     def _update_checked(self):
         self.start_update([e for e in self._checked_entries() if e.get("download_url")])
@@ -1200,10 +1415,13 @@ class ModUpdaterApp(QMainWindow):
             if choice != 0:
                 return False
 
-    def start_update(self, entries: List[dict], transaction: Optional[UpdateTransaction] = None):
+    def start_update(self, entries: List[dict], transaction: Optional[UpdateTransaction] = None,
+                     folder: Optional[str] = None):
+        """Скачивает и ставит entries в folder (по умолчанию — папка текущей вкладки)."""
         if self._busy:
             self.toasts.show("Дождитесь окончания текущей операции.", "warning")
             return
+        folder = folder or self.mods_path
         unique: Dict[object, dict] = {}
         for entry in entries:
             if entry.get("download_url") and entry_key(entry) not in unique:
@@ -1211,10 +1429,10 @@ class ModUpdaterApp(QMainWindow):
         entries = list(unique.values())
         if not entries:
             return
-        if not self.mods_path:
+        if not folder:
             show_message(self, QMessageBox.Icon.Warning, "Нет папки игры", "Сначала укажите папку игры в настройках сборки.")
             return
-        os.makedirs(self.mods_path, exist_ok=True)
+        os.makedirs(folder, exist_ok=True)
         if self.is_import_mode and transaction is None:
             proceed, transaction = self._ask_import_install_method()
             if not proceed:
@@ -1226,7 +1444,10 @@ class ModUpdaterApp(QMainWindow):
         self.slim_progress.setRange(0, len(entries))
         self.slim_progress.setValue(0)
         self._set_busy("update", f"Обновление: 0 из {len(entries)}", determinate=True)
-        self.update_worker = UpdateWorker(entries, self.mods_path, transaction,
+        if self.taskbar:
+            self.taskbar.set_value(0, len(entries))
+        self._update_folder = folder
+        self.update_worker = UpdateWorker(entries, folder, transaction,
                                           max_workers=self.settings.get("parallel_downloads", 3))
         self.update_worker.progress.connect(self._on_update_progress)
         self.update_worker.download_progress.connect(self._on_download_progress)
@@ -1248,10 +1469,13 @@ class ModUpdaterApp(QMainWindow):
             entry.pop("_progress", None)
             if success:
                 new_filename = source.get("new_filename")
+                if new_filename and entry.get("disabled"):
+                    new_filename += DISABLED_SUFFIX
                 entry.update({
                     "current_version": source.get("new_version", ""), "new_version": "", "new_version_date": "",
                     "download_url": None, "new_filename": None, "new_hashes": None, "installed": True,
-                    "filepath": os.path.join(self.mods_path, new_filename) if new_filename else entry.get("filepath"),
+                    "filepath": os.path.join(self._update_folder, new_filename) if new_filename else entry.get("filepath"),
+                    "size": source.get("new_size") or entry.get("size"), "new_size": 0,
                     "installed_info": source.get("_latest_info") or entry.get("installed_info"),
                     "_is_checked": False,
                 })
@@ -1260,6 +1484,8 @@ class ModUpdaterApp(QMainWindow):
             total = len(self.update_worker.mods_to_update)
             self.slim_progress.setValue(self._update_done)
             self.status_label.setText(f"Обновление: {self._update_done} из {total}")
+            if self.taskbar:
+                self.taskbar.set_value(self._update_done, total, error=status.is_error)
         self._refresh_project(source.get("project_id"))
         if self.details.entry and entry_key(self.details.entry) == entry_key(source):
             self.details.set_entry(self.details.entry, self._icon_for_entry(self.details.entry))
@@ -1282,15 +1508,18 @@ class ModUpdaterApp(QMainWindow):
         failed = [worker.mods_to_update[i] for i, s in results.items() if s.is_error]
         succeeded = sum(1 for s in results.values() if s in (ModStatus.UPDATED, ModStatus.INSTALLED))
         transaction = worker.transaction
+        if self._catalog_installing:
+            self._finish_catalog_install(worker)
+            return
 
         if self.is_import_mode and succeeded:
             self.is_import_mode = False
             self.banner.hide()
-            self.sessions.pop(self.current_profile_name, None)
+            self.sessions.pop(self._skey(), None)
             self.start_local_scan()
         else:
             self._set_data(self.mods_data)  # Пересчёт проблем и счётчиков
-            self.sessions[self.current_profile_name] = self.mods_data
+            self.sessions[self._skey()] = self.mods_data
 
         if succeeded:
             self.toasts.show(f"Готово: {succeeded} {self._plural(succeeded, 'мод', 'мода', 'модов')} обновлено",
@@ -1325,12 +1554,13 @@ class ModUpdaterApp(QMainWindow):
         if choice == 1:
             # Объединение: если мод из сборки уже установлен, новая версия заменяет старый файл, а не ложится рядом
             installed = {e["project_id"]: e["filepath"]
-                         for e in iter_all_entries(self.sessions.get(self.current_profile_name) or [])
+                         for e in iter_all_entries(self.sessions.get(self._skey(content=MODS)) or [])
                          if e.get("project_id") and e.get("filepath") and os.path.exists(e["filepath"])}
             for entry in self.model.items():
                 if not entry.get("filepath") and entry.get("project_id") in installed:
                     entry["filepath"] = installed[entry["project_id"]]
         if choice == 0:
+            self._auto_snapshot("replace_all")
             try:
                 move_all_to_backup(self.mods_path, transaction)
             except Exception as e:
@@ -1398,7 +1628,7 @@ class ModUpdaterApp(QMainWindow):
             if mod.get("dependencies"):
                 mod["dependencies"] = [d for d in mod["dependencies"] if keep(d)]
         self._set_data(mods_data)
-        self.sessions[self.current_profile_name] = mods_data
+        self.sessions[self._skey()] = mods_data
         if removed:
             self.toasts.show(f"Удалено: {len(removed)}", "success", "Отменить",
                              lambda: self._rollback_dir(transaction.dir), timeout=9000)
@@ -1406,11 +1636,13 @@ class ModUpdaterApp(QMainWindow):
             show_message(self, QMessageBox.Icon.Critical, "Ошибка удаления", "\n".join(errors[:10]))
 
     def _rollback_dir(self, tx_dir: str):
-        manifest = next((m for m in list_transactions(self.mods_path) if os.path.normcase(m["dir"]) == os.path.normcase(tx_dir)), None)
+        # <папка>/ModUpdater_Backups/transactions/<время>: операция могла быть в другой папке (установка из каталога)
+        folder = os.path.dirname(os.path.dirname(os.path.dirname(tx_dir)))
+        manifest = next((m for m in list_transactions(folder) if os.path.normcase(m["dir"]) == os.path.normcase(tx_dir)), None)
         if not manifest:
             self.toasts.show("Эта операция уже отменена.", "info")
             return
-        self._do_rollback(manifest)
+        self._do_rollback(manifest, folder)
 
     def _rollback_from_history(self, manifest: dict):
         transactions = list_transactions(self.mods_path)
@@ -1421,23 +1653,25 @@ class ModUpdaterApp(QMainWindow):
                    + warning, "Вернуть", "Отмена"):
             self._do_rollback(manifest)
 
-    def _do_rollback(self, manifest: dict):
+    def _do_rollback(self, manifest: dict, folder: Optional[str] = None):
         if self._busy:
             self.toasts.show("Дождитесь окончания текущей операции.", "warning")
             return
-        paths = [os.path.join(self.mods_path, f) for f in manifest.get("installed", [])]
+        folder = folder or self.mods_path
+        paths = [os.path.join(folder, f) for f in manifest.get("installed", [])]
         if not self._confirm_game_not_running(paths):
             return
-        errors = rollback_transaction(self.mods_path, manifest)
+        errors = rollback_transaction(folder, manifest)
         if errors:
             show_message(self, QMessageBox.Icon.Warning, "Откат выполнен частично", "\n".join(errors[:10]))
         else:
             self.toasts.show("Изменения отменены.", "success")
         self.is_import_mode = False
         self.banner.hide()
-        self.sessions.pop(self.current_profile_name, None)
+        self._invalidate_folder(folder)
         self._refresh_history()
-        self.start_local_scan()
+        if os.path.normcase(folder) == os.path.normcase(self.mods_path):
+            self.start_local_scan()
 
     # ================================================================== Импорт
 
@@ -1537,7 +1771,7 @@ class ModUpdaterApp(QMainWindow):
             self.toasts.show("В сборке не найдено модов для установки.", "warning")
             return
         if self.mods_data and not self.is_import_mode:
-            self.sessions[self.current_profile_name] = self.mods_data
+            self.sessions[self._skey()] = self.mods_data
         self.is_import_mode = True
         title = f"«{name}»" if name else "из списка"
         text = f"<b>Импорт сборки {title}</b> — {len(entries)} модов, Minecraft {game_version or '?'} ({loader or '?'})."
@@ -1553,7 +1787,7 @@ class ModUpdaterApp(QMainWindow):
     def _exit_import_mode(self):
         self.is_import_mode = False
         self.banner.hide()
-        cached = self.sessions.get(self.current_profile_name)
+        cached = self.sessions.get(self._skey(content=MODS))
         if cached is not None:
             self._set_data(cached)
         else:
@@ -1631,7 +1865,7 @@ class ModUpdaterApp(QMainWindow):
 
     def dragEnterEvent(self, event):
         files = self._dropped_files(event.mimeData())
-        ok = any(f.lower().endswith((".jar", ".mrpack")) for f in files) or (not files and event.mimeData().hasText())
+        ok = any(f.lower().endswith((".jar", ".mrpack", ".zip")) for f in files) or (not files and event.mimeData().hasText())
         if ok and not self._busy:
             event.acceptProposedAction()
             self.drop_overlay.setGeometry(self.centralWidget().rect().adjusted(262, 12, -12, -12))
@@ -1651,10 +1885,19 @@ class ModUpdaterApp(QMainWindow):
         self.stack.setCurrentIndex(PAGE_MODS)
         packs = [f for f in files if f.lower().endswith(".mrpack")]
         jars = [f for f in files if f.lower().endswith(".jar")]
+        zips = [f for f in files if f.lower().endswith(".zip")]
         if packs:
             self._import_mrpack(packs[0])
         elif jars:
+            if self.content is not MODS:
+                self._set_content(MODS)
             self._add_jars(jars)
+        elif zips:
+            if self.content is MODS:
+                self.toasts.show("Архивы .zip — это шейдеры или ресурспаки: откройте нужную вкладку и перетащите снова.",
+                                 "info", timeout=7000)
+                return
+            self._add_jars(zips)
         elif event.mimeData().hasText():
             self._import_text(event.mimeData().text())
 
@@ -1665,9 +1908,9 @@ class ModUpdaterApp(QMainWindow):
         transaction = UpdateTransaction(self.mods_path, "add")
         added, errors = add_files(paths, self.mods_path, transaction)
         if added:
-            self.toasts.show(f"Добавлено модов: {len(added)}", "success", "Отменить",
+            self.toasts.show(f"Добавлено файлов: {len(added)}", "success", "Отменить",
                              lambda: self._rollback_dir(transaction.dir), timeout=9000)
-            self.sessions.pop(self.current_profile_name, None)
+            self.sessions.pop(self._skey(), None)
             self.start_local_scan()
         if errors:
             show_message(self, QMessageBox.Icon.Warning, "Не все файлы добавлены", "\n".join(errors[:10]))
@@ -1692,4 +1935,355 @@ class ModUpdaterApp(QMainWindow):
 
     def _open_mod_page(self, entry: dict):
         if entry.get("project_id"):
-            webbrowser.open(f"https://modrinth.com/mod/{entry.get('slug') or entry['project_id']}")
+            kind = {"shader": "shader", "resourcepack": "resourcepack"}.get(entry.get("project_type"), "mod")
+            webbrowser.open(f"https://modrinth.com/{kind}/{entry.get('slug') or entry['project_id']}")
+
+    def _open_catalog_hit(self, hit: Optional[dict]):
+        if hit:
+            webbrowser.open(f"https://modrinth.com/{hit.get('project_type', 'mod')}/{hit.get('slug') or hit.get('project_id')}")
+
+    # ================================================================== Закрепление, выключение, метки
+
+    def _same_file_entries(self, path: str) -> List[dict]:
+        norm = os.path.normcase(os.path.normpath(path))
+        return [e for e in self._all_entries() if e.get("filepath") and os.path.normcase(os.path.normpath(e["filepath"])) == norm]
+
+    def _toggle_pin(self, entry: dict):
+        key = pin_key(entry)
+        if not key:
+            return
+        pinned = self._profile().setdefault("pinned", {})
+        if key in pinned:
+            del pinned[key]
+            self.toasts.show(f"«{entry.get('name')}» снова обновляется.", "info")
+        else:
+            pinned[key] = entry.get("current_version") or ""
+            self.toasts.show(f"«{entry.get('name')}» закреплён: обновления для него не предлагаются.", "success",
+                             "Отменить", lambda: self._toggle_pin(entry))
+        self._set_data(self.mods_data)
+        self.save_config()
+
+    def _toggle_disabled(self, entries: List[dict]):
+        entries = [e for e in entries if e.get("filepath")]
+        if not entries or self._busy:
+            return
+        disable = not all(e.get("disabled") for e in entries)
+        if not self._confirm_game_not_running([e["filepath"] for e in entries]):
+            return
+        changed, errors = [], []
+        for entry in entries:
+            if bool(entry.get("disabled")) == disable:
+                continue
+            old_path = entry["filepath"]
+            try:
+                new_path = set_disabled(old_path, disable)
+            except OSError as e:
+                errors.append(f"{entry.get('name')}: {e}")
+                continue
+            for same in self._same_file_entries(old_path):
+                same["filepath"], same["disabled"] = new_path, disable
+                same["_is_checked"] = False
+            changed.append(entry)
+        if changed:
+            self._set_data(self.mods_data)
+            self.sessions[self._skey()] = self.mods_data
+            what = f"«{changed[0].get('name')}»" if len(changed) == 1 else f"{len(changed)} модов"
+            self.toasts.show(f"{'Выключено' if disable else 'Включено'}: {what}", "success", "Отменить",
+                             lambda: self._toggle_disabled(changed), timeout=8000)
+        if errors:
+            show_message(self, QMessageBox.Icon.Warning, "Не удалось переименовать", "\n".join(errors[:10]))
+
+    def _show_tags_menu(self, entry: dict, pos):
+        key = pin_key(entry)
+        if not key:
+            return
+        t = self.tokens
+        menu = QMenu(self)
+        menu.addAction(make_action(menu, t, "plus", "Добавить метку…", lambda: self._add_tag(entry)))
+        own = self.mod_tags.get(key, [])
+        if own:
+            menu.addSeparator()
+        for tag in own:
+            menu.addAction(make_action(menu, t, "x", f"Убрать «{tag}»", lambda _=False, tg=tag: self._remove_tag(entry, tg)))
+        menu.exec(pos)
+
+    def _add_tag(self, entry: dict):
+        existing = sorted({tag for tags in self.mod_tags.values() for tag in tags})
+        hint = "Например: интерфейс, для сервера, графика" + (f"\nУже есть: {', '.join(existing[:8])}" if existing else "")
+        tag = ask_text(self, "Новая метка", hint, "Название метки")
+        if not tag:
+            return
+        tags = self.mod_tags.setdefault(pin_key(entry), [])
+        if tag.lower() not in (t.lower() for t in tags):
+            tags.append(tag)
+        self._after_tags_changed(entry)
+
+    def _remove_tag(self, entry: dict, tag: str):
+        key = pin_key(entry)
+        tags = [t for t in self.mod_tags.get(key, []) if t != tag]
+        if tags:
+            self.mod_tags[key] = tags
+        else:
+            self.mod_tags.pop(key, None)
+        self._after_tags_changed(entry)
+
+    def _after_tags_changed(self, entry: dict):
+        self._refresh_tag_combo()
+        self.proxy.invalidateFilter()
+        self._refresh_empty_state()
+        if self.details.entry is entry:
+            self.details.set_entry(entry, self._icon_for_entry(entry))
+        self.save_config()
+
+    # ================================================================== Снимки сборки
+
+    def _auto_snapshot(self, reason: str):
+        if self.settings.get("auto_snapshot", True) and self.mods_path:
+            self._create_snapshot(reason, quiet=True)
+
+    def _create_snapshot(self, reason: str = "manual", quiet: bool = False):
+        if not self.mods_path or not os.path.isdir(self.mods_path):
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            snapshot = create_snapshot(self.mods_path, reason, self.content)
+            if reason != "manual":
+                prune_snapshots(self.mods_path, int(self.settings.get("snapshots_keep", 10)))
+        except OSError as e:
+            logging.error(f"Не удалось создать снимок: {e}")
+            snapshot = None
+            if not quiet:
+                show_message(self, QMessageBox.Icon.Warning, "Снимок не создан", str(e))
+        finally:
+            QApplication.restoreOverrideCursor()
+        if snapshot and not quiet:
+            self.toasts.show(f"Снимок сохранён: {len(snapshot['files'])} файлов", "success", "История",
+                             lambda: self._switch_page(PAGE_HISTORY))
+        if self.stack.currentIndex() == PAGE_HISTORY:
+            self._refresh_history()
+
+    def _restore_snapshot(self, snapshot: dict):
+        if self._busy:
+            self.toasts.show("Дождитесь окончания текущей операции.", "warning")
+            return
+        count = len(snapshot.get("files") or [])
+        if not confirm(self, "Восстановить снимок",
+                       f"Вернуть папку {self.content.folder} к снимку от {snapshot.get('created', '').replace('T', ' ')} "
+                       f"({count} файлов)?\nТекущие файлы уйдут в бэкап — восстановление можно отменить.",
+                       "Восстановить", "Отмена"):
+            return
+        files = [os.path.join(self.mods_path, f) for f in os.listdir(self.mods_path) if self.content.matches(f)]
+        if not self._confirm_game_not_running(files):
+            return
+        transaction, errors = restore_snapshot(self.mods_path, snapshot, self.content)
+        if errors:
+            show_message(self, QMessageBox.Icon.Warning, "Восстановлено частично", "\n".join(errors[:10]))
+        else:
+            self.toasts.show("Сборка восстановлена из снимка.", "success", "Отменить",
+                             lambda: self._rollback_dir(transaction.dir), timeout=9000)
+        self.sessions.pop(self._skey(), None)
+        self._refresh_history()
+        self.start_local_scan()
+
+    def _delete_snapshot(self, snapshot: dict):
+        if confirm(self, "Удалить снимок", "Удалить этот снимок? Файлы текущей сборки не изменятся.", "Удалить", "Отмена"):
+            delete_snapshot(snapshot)
+            self._refresh_history()
+
+    def _invalidate_folder(self, folder: str):
+        """Забывает сохранённые списки, если их папка изменилась."""
+        game_dir = self._profile().get("mods_path", "")
+        for content in CONTENT_TYPES:
+            if os.path.normcase(content.path(game_dir)) == os.path.normcase(folder or ""):
+                self.sessions.pop(self._skey(content=content), None)
+
+    # ================================================================== Переход на другую версию Minecraft
+
+    def migrate_game_version(self):
+        if self._busy or not self.mods_data or self.content is not MODS or self.is_import_mode:
+            return
+        entries = [e for e in self._count_items if e.get("filepath")]
+        dialog = MigrationDialog(self, self.tokens, entries, self.game_version, self.loader, self._channel(),
+                                 self._run_task, self.content)
+        if not dialog.exec() or not dialog.results:
+            return
+        target = dialog.target
+        ready = [r for r in dialog.results if r["version"]]
+        missing = [r["entry"] for r in dialog.results if not r["version"]]
+        if not self._confirm_game_not_running([e.get("filepath") for e in entries]):
+            return
+        self._auto_snapshot("migrate")
+        # Версия, которая уже стоит и подходит под новую версию игры, не скачивается повторно
+        to_install = [r["entry"] for r in ready
+                      if r["version"].get("id") != (r["entry"].get("installed_info") or {}).get("id")
+                      and apply_install_info(r["entry"], r["version"])]
+        if dialog.disable_missing.isChecked():
+            for entry in missing:
+                if entry.get("disabled"):
+                    continue
+                old_path = entry["filepath"]
+                try:
+                    new_path = set_disabled(old_path, True)
+                except OSError as e:
+                    logging.error(f"Не удалось выключить {entry.get('name')}: {e}")
+                    continue
+                for same in self._same_file_entries(old_path):
+                    same["filepath"], same["disabled"] = new_path, True
+        old_version = self.game_version
+        self._profile()["game_version"] = target
+        self.game_version = target
+        self._update_header()
+        self._refresh_sidebar()
+        self.start_update(to_install, UpdateTransaction(self.mods_path, "migrate"))
+        show_message(self, QMessageBox.Icon.Information, "Не забудьте про лаунчер",
+                     f"Моды обновляются под Minecraft {target}.\n\nСмените версию игры и загрузчика на {target} "
+                     f"в лаунчере (в Prism: «Изменить» → «Версия»). Вернуть всё как было можно на странице «История» — "
+                     f"там сохранён снимок сборки под {old_version}.")
+
+    # ================================================================== Каталог
+
+    def _installed_ids(self) -> Dict[str, set]:
+        result: Dict[str, set] = {}
+        for content in CONTENT_TYPES:
+            data = self.mods_data if content is self.content else self.sessions.get(self._skey(content=content)) or []
+            result[content.key] = {e["project_id"] for e in iter_all_entries(data) if e.get("project_id") and e.get("filepath")}
+        return result
+
+    def _refresh_catalog_context(self):
+        self.catalog_page.set_context(self.game_version, self.loader, self._installed_ids())
+        # Типы контента, которые ещё не открывались: читаем их папки, чтобы отметить уже установленное
+        game_dir = self._profile().get("mods_path", "")
+        for content in CONTENT_TYPES:
+            key = self._skey(content=content)
+            if content is not self.content and key not in self.sessions and os.path.isdir(content.path(game_dir)):
+                self._run_task(scan_local, (content.path(game_dir), app_config.CACHE_FILE, content),
+                               lambda data, k=key: self._on_catalog_folder_read(k, data), lambda e: None, None)
+
+    def _on_catalog_folder_read(self, key: tuple, data: List[dict]):
+        self.sessions.setdefault(key, data)
+        self.catalog_page.set_context(self.game_version, self.loader, self._installed_ids())
+
+    def _install_from_catalog(self, hit: dict):
+        if self._busy:
+            self.toasts.show("Дождитесь окончания текущей операции.", "warning")
+            return
+        content = self.catalog_page.content
+        if not self._profile().get("mods_path"):
+            self.toasts.show("Сначала укажите папку игры для этой сборки.", "warning", "Настроить", self._edit_current_profile)
+            return
+        pid = hit.get("project_id")
+        installed = self._installed_ids().get(content.key, set())
+        self.catalog_page.set_installing([pid], True)
+        self._run_task(resolve_project_install,
+                       (pid, self.game_version, self.loader, self._channel(), installed, content),
+                       lambda entries: self._on_catalog_resolved(hit, content, entries),
+                       lambda e: self._on_catalog_failed(pid, e), None)
+
+    def _on_catalog_failed(self, pid: str, error: str):
+        self.catalog_page.set_installing([pid], False)
+        self.toasts.show(f"Не удалось подготовить установку: {error}", "error")
+
+    def _on_catalog_resolved(self, hit: dict, content: ContentType, entries: List[dict]):
+        pid = hit.get("project_id")
+        self.catalog_page.set_installing([pid], False)
+        if not entries:
+            self.toasts.show(f"У «{hit.get('title')}» нет версии для Minecraft {self.game_version}"
+                             + (f" ({self.loader})" if content is MODS else "") + ".", "warning")
+            return
+        if len(entries) > 1:
+            deps = ", ".join(e.get("name") for e in entries[1:])
+            self.toasts.show(f"Вместе с «{entries[0].get('name')}» будут установлены зависимости: {deps}", "info")
+        folder = content.path(self._profile().get("mods_path", ""))
+        self._catalog_installing = [e["project_id"] for e in entries]
+        self._catalog_content = content
+        self.catalog_page.set_installing(self._catalog_installing, True)
+        self.start_update(entries, folder=folder)
+        if not self.update_worker:  # Установка не началась (игра запущена или отмена)
+            self.catalog_page.set_installing(self._catalog_installing, False)
+            self._catalog_installing = []
+
+    def _finish_catalog_install(self, worker):
+        installing, self._catalog_installing = self._catalog_installing, []
+        self.catalog_page.set_installing(installing, False)
+        results = worker.results.items()
+        succeeded = [worker.mods_to_update[i] for i, s in results if s in (ModStatus.UPDATED, ModStatus.INSTALLED)]
+        failed = [worker.mods_to_update[i] for i, s in worker.results.items() if s.is_error]
+        self._invalidate_folder(worker.mods_path)
+        installed = self._installed_ids()
+        installed.setdefault(self._catalog_content.key, set()).update(e["project_id"] for e in succeeded)
+        self.catalog_page.set_context(self.game_version, self.loader, installed)
+        if succeeded:
+            names = ", ".join(e.get("name") for e in succeeded[:3]) + (" и др." if len(succeeded) > 3 else "")
+            self.toasts.show(f"Установлено: {names}", "success", "Отменить",
+                             lambda: self._rollback_dir(worker.transaction.dir), timeout=9000)
+        if failed:
+            self.toasts.show(f"Не удалось установить: {', '.join(e.get('name') for e in failed)}", "error")
+        if os.path.normcase(worker.mods_path) == os.path.normcase(self.mods_path) and not self.is_import_mode:
+            self.start_local_scan()
+
+    # ================================================================== Быстрые команды (Ctrl+K)
+
+    def _palette_commands(self) -> List[Command]:
+        commands = [
+            Command("Проверить обновления", self._on_check_clicked, "refresh", hint="F5"),
+            Command("Обновить все", self.update_all, "download", keywords="установить"),
+            Command("Найти моды в каталоге", self._open_catalog_search, "compass", keywords="modrinth поиск скачать новые"),
+            Command("Создать снимок сборки", lambda: self._create_snapshot("manual"), "camera", keywords="бэкап резерв"),
+            Command("Перейти на другую версию Minecraft", self.migrate_game_version, "trending_up",
+                    keywords="миграция обновить версию игры"),
+            Command("Открыть .mrpack", self.import_mrpack_dialog, "package", keywords="импорт сборка"),
+            Command("Импортировать строку сборки", self.import_mod_list, "import"),
+            Command("Поделиться списком модов", self.share_mod_list, "share", keywords="экспорт"),
+            Command("Открыть папку", lambda: self._open_path(self.mods_path), "folder"),
+            Command("Перечитать папку", self._reread_folder, "refresh"),
+            Command("Настройки сборки", self._edit_current_profile, "pencil"),
+            Command("Добавить сборку", self._add_profile, "plus"),
+            Command("Найти сборки в лаунчерах", self._discover_now, "box_search", keywords="prism modrinth curseforge"),
+            Command("Тёмная тема", lambda: self._set_theme_from_palette("dark"), "moon", group="Оформление"),
+            Command("Светлая тема", lambda: self._set_theme_from_palette("light"), "sun", group="Оформление"),
+            Command("Тема как в системе", lambda: self._set_theme_from_palette("system"), "settings", group="Оформление"),
+        ]
+        for mode, (icon_name, title) in {"flat": ("list", "Все моды и зависимости"), "mine": ("user", "Только мои моды"),
+                                         "tree": ("list_tree", "Дерево с зависимостями")}.items():
+            commands.append(Command(f"Вид: {title}", lambda m=mode: self._set_view_mode(m), icon_name, group="Вид списка"))
+        for page, (icon_name, title) in enumerate(Sidebar.PAGES):
+            commands.append(Command(f"Открыть: {title}", lambda p=page: self._switch_page(p), icon_name, group="Страницы"))
+        for content in CONTENT_TYPES:
+            commands.append(Command(f"Вкладка: {content.title}", lambda c=content: self._open_content_tab(c),
+                                    CONTENT_ICONS[content.key], group="Страницы"))
+        for name, profile in self.profiles.items():
+            commands.append(Command(name, lambda n=name: self._open_profile_from_palette(n), "layers", group="Сборка",
+                                    hint=profile_subtitle(profile)))
+        for entry in self._count_items:
+            commands.append(Command(entry.get("name") or "?", lambda e=entry: self._palette_open_entry(e),
+                                    CONTENT_ICONS[self.content.key], group=self.content.title_one.capitalize(),
+                                    hint=entry.get("current_version") or "", keywords=entry.get("slug") or ""))
+        return commands
+
+    def _open_catalog_search(self):
+        self._switch_page(PAGE_CATALOG)
+        self.catalog_page.search.setFocus()
+
+    def _open_content_tab(self, content: ContentType):
+        self._switch_page(PAGE_MODS)
+        self._set_content(content)
+
+    def _open_profile_from_palette(self, name: str):
+        self._switch_page(PAGE_MODS)
+        self._on_profile_selected(name)
+        self._refresh_sidebar()
+
+    def _palette_open_entry(self, entry: dict):
+        self._switch_page(PAGE_MODS)
+        self._select_entry(entry)
+        self._open_current_details()
+
+    def _set_theme_from_palette(self, theme: str):
+        self._on_theme_selected(theme)
+        self.settings_page.load(self.config_theme, self.settings)
+
+    def _set_view_mode(self, mode: str):
+        self.settings["view_mode"] = mode
+        self.settings_page.load(self.config_theme, self.settings)
+        self._switch_page(PAGE_MODS)
+        self._rebuild_view()

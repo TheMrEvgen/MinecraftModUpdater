@@ -126,3 +126,45 @@ def test_tags_and_sizes():
     assert collect_tags([entry, {"categories": ["optimization"]}])[0] == ("cat:optimization", "оптимизация", 2)
     assert "оптимизация" in search_text(entry)
     assert format_size(512) == "512 Б" and format_size(3 * 1024 * 1024) == "3,0 МБ"
+
+
+def test_resolve_project_install_with_dependencies(monkeypatch):
+    import scanner
+    from enums import UpdateChannel
+    versions = {
+        "app": {"version_number": "1.0", "files": [{"url": "u1", "filename": "app.jar", "primary": True, "size": 10}],
+                "dependencies": [{"project_id": "lib", "dependency_type": "required"},
+                                 {"project_id": "api", "dependency_type": "required"},
+                                 {"project_id": "opt", "dependency_type": "optional"}]},
+        "lib": {"version_number": "2.0", "files": [{"url": "u2", "filename": "lib.jar"}], "dependencies": []},
+    }
+    monkeypatch.setattr(scanner, "get_latest_version", lambda pid, *a: versions.get(pid))
+    monkeypatch.setattr(scanner, "get_projects_info_from_ids", lambda ids: {i: {"title": i.upper()} for i in ids})
+    entries = scanner.resolve_project_install("app", "1.21.1", "fabric", UpdateChannel.RELEASE, installed_ids={"api"})
+    assert [e["project_id"] for e in entries] == ["app", "lib"]  # api уже стоит, opt необязательная
+    assert entries[0]["new_size"] == 10 and entries[0]["name"] == "APP"
+    assert scanner.resolve_project_install("missing", "1.21.1", "fabric", UpdateChannel.RELEASE) == []
+
+
+def test_collect_changelogs_between_versions(monkeypatch):
+    import scanner
+    monkeypatch.setattr(scanner, "get_all_versions", lambda *a: [
+        {"version_number": "4", "date_published": "2025-04-01T00:00:00Z", "changelog": "four"},
+        {"version_number": "3", "date_published": "2025-03-01T00:00:00Z", "changelog": "three"},
+        {"version_number": "2", "date_published": "2025-02-01T00:00:00Z", "changelog": "two"},
+        {"version_number": "1", "date_published": "2025-01-01T00:00:00Z", "changelog": "one"},
+    ])
+    entry = {"project_id": "p", "installed_info": {"date_published": "2025-01-01T00:00:00Z"},
+             "_latest_info": {"date_published": "2025-03-01T00:00:00Z"}}
+    assert [v["version_number"] for v in scanner.collect_changelogs([entry], "1.21.1", "fabric")["p"]] == ["3", "2"]
+
+
+def test_check_target_version(monkeypatch):
+    import scanner
+    from enums import UpdateChannel
+    monkeypatch.setattr(scanner, "get_latest_versions_from_hashes",
+                        lambda hashes, gv, loaders, types: {"h1": {"version_number": "2.0", "game_versions": ["1.21.4"]}})
+    entries = [{"name": "A", "sha1": "h1", "project_id": "a"}, {"name": "B", "sha1": "h2", "project_id": "b"},
+               {"name": "Local", "sha1": "h3"}]
+    result = scanner.check_target_version(entries, "1.21.4", "fabric", UpdateChannel.RELEASE)
+    assert [bool(r["version"]) for r in result] == [True, False, False]

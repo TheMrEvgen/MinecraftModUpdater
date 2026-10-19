@@ -10,6 +10,7 @@ from PyQt6.QtCore import QObject, QRunnable, QThread, QThreadPool, Qt, pyqtSigna
 from PyQt6.QtGui import QImage
 from packaging.version import InvalidVersion, parse as parse_version
 
+from content import MODS, ContentType
 from enums import ModStatus, UpdateChannel
 from mod_updater_logic import (
     SESSION, download_bytes, get_all_versions, get_latest_loader_version, get_latest_version,
@@ -24,8 +25,9 @@ class ScanWorker(QThread):
     finished = pyqtSignal(object)
     progress = pyqtSignal(str)
 
-    def __init__(self, mods_path, game_version, loader, cache_file, channel: UpdateChannel):
+    def __init__(self, mods_path, game_version, loader, cache_file, channel: UpdateChannel, content: ContentType = MODS):
         super().__init__()
+        self.content = content
         self.mods_path = mods_path
         self.game_version = game_version
         self.loader = loader
@@ -36,7 +38,8 @@ class ScanWorker(QThread):
     def run(self):
         try:
             mods_data = scan_mods(self.mods_path, self.game_version, self.loader, self.cache_file, self.channel,
-                                  progress=self.progress.emit, is_cancelled=lambda: not self.is_running)
+                                  progress=self.progress.emit, is_cancelled=lambda: not self.is_running,
+                                  content=self.content)
             self.finished.emit(mods_data)
         except ScanCancelled:
             logging.info("Сканирование прервано пользователем.")
@@ -55,16 +58,17 @@ class LocalScanWorker(QThread):
     """Быстрое локальное сканирование без сети. finished(None) означает отмену."""
     finished = pyqtSignal(object)
 
-    def __init__(self, mods_path, cache_file):
+    def __init__(self, mods_path, cache_file, content: ContentType = MODS):
         super().__init__()
+        self.content = content
         self.mods_path = mods_path
         self.cache_file = cache_file
         self.is_running = True
 
     def run(self):
         try:
-            mods_data = scan_local(self.mods_path, self.cache_file)
-            logging.info(f"Локальное сканирование завершено. Найдено {len(mods_data)} .jar файлов.")
+            mods_data = scan_local(self.mods_path, self.cache_file, self.content)
+            logging.info(f"Локальное сканирование завершено. Найдено файлов: {len(mods_data)}.")
             self.finished.emit(mods_data if self.is_running else None)
         except Exception as e:
             logging.exception(f"Ошибка во время локального сканирования: {e}")

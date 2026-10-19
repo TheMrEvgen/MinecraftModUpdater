@@ -241,7 +241,12 @@ def category_counts(items: List[Dict]) -> Dict[str, int]:
 
 
 def subtitle_for(entry: Dict) -> tuple[str, Optional[str]]:
-    """Вторая строка под названием и её цветовая роль."""
+    """Вторая строка под названием и её цветовая роль (всегда в одну строку)."""
+    text, role = _subtitle(entry)
+    return " ".join(text.split()), role
+
+
+def _subtitle(entry: Dict) -> tuple[str, Optional[str]]:
     if entry.get("_issues"):
         text = ", ".join(entry["_issues"])
         return "⚠ " + text[:1].upper() + text[1:], "warning"
@@ -322,6 +327,7 @@ CATEGORY_LABELS = {
     "themed": "тематические", "tweaks": "твики", "utility-pack": "полезное",
 }
 LOADER_CATEGORIES = {"fabric", "forge", "neoforge", "quilt", "liteloader", "modloader", "rift", "iris", "optifine",
+                     "babric", "bta-babric", "legacy-fabric", "ornithe", "nilloader", "java-agent", "geyser",
                      "canvas", "vanilla", "minecraft", "datapack", "bukkit", "paper", "spigot", "folia", "sponge",
                      "velocity", "waterfall", "bungeecord", "purpur"}
 
