@@ -37,12 +37,10 @@ from updater import (
     move_all_to_backup, remove_mods, rollback_transaction,
 )
 from view_model import (
-    CAT_ALL, CAT_INSTALL, CAT_NOT_FOUND, CAT_PROBLEMS, CAT_UPDATES, VIEW_FLAT, VIEW_MINE, VIEW_MODES, VIEW_TREE,
+    CAT_ALL, CAT_INSTALL, CAT_NOT_FOUND, CAT_PROBLEMS, CAT_UPDATES, VIEW_FLAT, VIEW_MODES, VIEW_TREE,
     build_rows, category_counts, entry_key, iter_all_entries, status_of,
 )
 
-VIEW_MODE_LABELS = {VIEW_FLAT: ("list", "Все моды и зависимости"), VIEW_MINE: ("user", "Только мои моды"),
-                    VIEW_TREE: ("list_tree", "Дерево с зависимостями")}
 from workers import (
     IconLoader, ImportWorker, LoaderVersionWorker, LocalScanWorker, ScanWorker, TaskWorker, UpdateWorker, fetch_json,
     fetch_versions,
@@ -288,10 +286,6 @@ class ModUpdaterApp(QMainWindow):
         self.sort_combo.currentIndexChanged.connect(lambda: self.proxy.set_sort_mode(self.sort_combo.currentData()))
         self.sort_combo.setMinimumHeight(36)
         toolbar.addWidget(self.sort_combo)
-        self.view_btn = button("", "IconButton", "list", t, "text_muted", "Вид списка")
-        self.view_btn.setFixedSize(38, 36)
-        self.view_btn.clicked.connect(self._show_view_menu)
-        toolbar.addWidget(self.view_btn)
         self.toolbar_widget = QWidget()
         self.toolbar_widget.setLayout(toolbar)
         toolbar.setContentsMargins(0, 0, 0, 0)
@@ -942,54 +936,17 @@ class ModUpdaterApp(QMainWindow):
         tree = self._view_mode() == VIEW_TREE
         self.delegate.tree = tree
         self.delegate.compact = bool(self.settings.get("compact_rows", False))
-        # Умолчание раскрытия применяем только при смене настройки, чтобы не сбрасывать «Раскрыть все» из меню
+        # Умолчание раскрытия применяем только при смене настройки, чтобы не сбрасывать «Раскрыть все» из меню строки
         expand = bool(self.settings.get("expand_dependencies", False))
         if getattr(self, "_expand_setting", None) != expand:
             self._expand_setting = expand
             self.proxy.set_expand_all(expand)
-        icon_name = VIEW_MODE_LABELS[self._view_mode()][0]
-        self.view_btn.setProperty("icon_name", icon_name)
-        self.view_btn.setIcon(icons.icon(icon_name, self.tokens["text_muted"], 16))
-        self.view_btn.setToolTip(f"Вид списка: {VIEW_MODE_LABELS[self._view_mode()][1].lower()}")
-
-    def _set_view_option(self, **options):
-        self.settings.update(options)
-        self.settings_page.load(self.config_theme, self.settings)
-        self._rebuild_view()
 
     def _rebuild_view(self):
         """Перестраивает список под новые настройки вида, сохраняя открытый мод."""
         self._set_data(self.mods_data)
         self.view.doItemsLayout()  # Высота строк могла измениться (компактный режим)
         self.view.viewport().update()
-
-    def _show_view_menu(self):
-        t = self.tokens
-        menu = QMenu(self)
-        current = self._view_mode()
-        for mode in VIEW_MODES:
-            icon_name, text = VIEW_MODE_LABELS[mode]
-            action = make_action(menu, t, icon_name, text, lambda m=mode: self._set_view_option(view_mode=m),
-                                 "accent" if mode == current else "text_muted")
-            action.setCheckable(True)
-            action.setChecked(mode == current)
-            menu.addAction(action)
-        menu.addSeparator()
-        if current == VIEW_TREE:
-            menu.addAction(make_action(menu, t, "chevron_down", "Раскрыть все", lambda: self._expand_all(True)))
-            menu.addAction(make_action(menu, t, "chevron_right", "Свернуть все", lambda: self._expand_all(False)))
-            menu.addSeparator()
-        compact = make_action(menu, t, "layers", "Компактные строки",
-                              lambda: self._set_view_option(compact_rows=not self.settings.get("compact_rows", False)))
-        compact.setCheckable(True)
-        compact.setChecked(bool(self.settings.get("compact_rows", False)))
-        menu.addAction(compact)
-        details = make_action(menu, t, "info", "Открывать панель мода при выборе",
-                              lambda: self._set_view_option(details_on_select=not self.settings.get("details_on_select", True)))
-        details.setCheckable(True)
-        details.setChecked(bool(self.settings.get("details_on_select", True)))
-        menu.addAction(details)
-        menu.exec(self.view_btn.mapToGlobal(self.view_btn.rect().bottomRight()) - self._menu_offset(menu))
 
     def _expand_all(self, expanded: bool):
         self.proxy.set_expand_all(expanded)
@@ -1078,6 +1035,11 @@ class ModUpdaterApp(QMainWindow):
             menu.addAction(make_action(menu, t, "history", "Выбрать другую версию…",
                                        lambda: (self._select_entry(entry), self._load_versions(entry))))
             menu.addAction(make_action(menu, t, "external", "Открыть на Modrinth", lambda: self._open_mod_page(entry)))
+        if self._view_mode() == VIEW_TREE:
+            menu.addSeparator()
+            menu.addAction(make_action(menu, t, "chevron_down", "Раскрыть все зависимости", lambda: self._expand_all(True)))
+            menu.addAction(make_action(menu, t, "chevron_right", "Свернуть все", lambda: self._expand_all(False)))
+            menu.addSeparator()
         if entry.get("filepath"):
             menu.addAction(make_action(menu, t, "folder", "Показать в папке", lambda: self._show_in_folder(entry)))
             menu.addSeparator()

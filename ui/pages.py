@@ -195,7 +195,7 @@ class SettingsPage(QWidget):
 
         # Список модов
         card, body = self._card("Список модов")
-        body.addWidget(label("Как показывать моды сборки. Вид можно быстро сменить и кнопкой справа от поиска.",
+        body.addWidget(label("Как показывать моды сборки.",
                              "Muted", wrap=True))
         self.view_group = QButtonGroup(self)
         for i, (key, text, hint) in enumerate((
@@ -303,7 +303,6 @@ class SettingsPage(QWidget):
         for b in self.view_group.buttons():
             b.setChecked(b.property("view_key") == settings.get("view_mode", "flat"))
         self.expand_deps.setChecked(bool(settings.get("expand_dependencies", False)))
-        self.expand_deps.setEnabled(settings.get("view_mode") == "tree")
         self.compact_rows.setChecked(bool(settings.get("compact_rows", False)))
         self.details_on_select.setChecked(bool(settings.get("details_on_select", True)))
         self._loading = False
@@ -312,7 +311,6 @@ class SettingsPage(QWidget):
         if not self._loading:
             checked_view = self.view_group.checkedButton()
             view_mode = checked_view.property("view_key") if checked_view else "flat"
-            self.expand_deps.setEnabled(view_mode == "tree")
             self.settings_changed.emit({
                 "view_mode": view_mode,
                 "expand_dependencies": self.expand_deps.isChecked(),
