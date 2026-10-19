@@ -101,7 +101,8 @@ def build_executable(onedir: bool = False):
         params.extend(['--exclude-module', module])
 
     if os.path.exists(ICON_FILE):
-        params.extend(['--icon', ICON_FILE])
+        # --icon задаёт иконку .exe, --add-data кладёт файл внутрь сборки для иконки окна
+        params.extend(['--icon', ICON_FILE, '--add-data', f'{ICON_FILE}{os.pathsep}.'])
         print(f"Используется иконка: {ICON_FILE}")
     else:
         print(f"ПРЕДУПРЕЖДЕНИЕ: Файл иконки '{ICON_FILE}' не найден. Приложение будет без иконки.")

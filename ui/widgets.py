@@ -4,7 +4,7 @@ from typing import Callable, Dict, List, Optional
 from PyQt6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QFont, QFontMetrics, QPainter
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QButtonGroup, QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
+    QAbstractItemView, QApplication, QButtonGroup, QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QVBoxLayout,
     QWidget,
 )
@@ -494,8 +494,12 @@ class Sidebar(QFrame):
     def set_tokens(self, tokens: dict):
         self.tokens = tokens
         self.profile_delegate.tokens = tokens
-        self.logo.setStyleSheet(f"background: {tokens['accent']}; border-radius: 10px;")
-        self.logo.setPixmap(icons.pixmap("package", tokens["accent_text"], 20))
+        app_icon = QApplication.windowIcon()
+        if not app_icon.isNull():
+            self.logo.setPixmap(app_icon.pixmap(QSize(34, 34)))
+        else:
+            self.logo.setStyleSheet(f"background: {tokens['accent']}; border-radius: 10px;")
+            self.logo.setPixmap(icons.pixmap("package", tokens["accent_text"], 20))
         self._refresh_nav_icons()
         self.profile_list.viewport().update()
 

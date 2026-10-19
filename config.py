@@ -27,6 +27,15 @@ DEFAULT_CHANNEL = UpdateChannel.BETA
 LOG_RETENTION_DAYS = 14
 
 
+def resource_path(relative: str) -> str:
+    """Путь к файлу ресурса: рядом с исходниками или внутри сборки PyInstaller."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, relative)
+
+
+APP_ICON = "icon.ico"
+
+
 def default_profile() -> dict:
     return {
         "mods_path": "",
