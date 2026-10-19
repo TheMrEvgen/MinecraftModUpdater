@@ -74,15 +74,38 @@ def demote_headings(markdown: str, levels: int = 3) -> str:
     return re.sub(r"^(#{1,6})(?=\s)", lambda m: "#" * min(6, len(m.group(1)) + levels), markdown or "", flags=re.MULTILINE)
 
 
+_IMAGE_MD = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_IMAGE_LINK_MD = re.compile(r"\[\s*!\[[^\]]*\]\([^)]*\)\s*\]\(([^)]*)\)")
+_HTML_DROP = re.compile(r"<\s*(img|iframe|video|source|picture)\b[^>]*>(\s*</\s*\1\s*>)?", re.IGNORECASE)
+_HTML_UNWRAP = re.compile(r"</?\s*(center|div|span|p|font|details|sub|sup)\b[^>]*>", re.IGNORECASE)
+_SUMMARY = re.compile(r"<\s*summary\b[^>]*>(.*?)<\s*/\s*summary\s*>", re.IGNORECASE | re.DOTALL)
+
+
+def prepare_markdown(markdown: str) -> str:
+    """
+    Описание с Modrinth для QTextBrowser: картинки он не загружает (вместо них — пустые значки), поэтому
+    картинки убираем (картинка-ссылка становится обычной ссылкой), обёртки HTML снимаем, заголовки уменьшаем.
+    """
+    text = markdown or ""
+    text = _IMAGE_LINK_MD.sub(lambda m: f"[ссылка]({m.group(1)})", text)
+    text = _IMAGE_MD.sub("", text)
+    text = _HTML_DROP.sub("", text)
+    text = _SUMMARY.sub(lambda m: f"\n\n**{m.group(1).strip()}**\n\n", text)
+    text = _HTML_UNWRAP.sub("", text)
+    text = re.sub(r"<\s*br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return demote_headings(text.strip())
+
+
 def changelog_markdown(versions: List[Dict], fallback: str = "") -> str:
     """Списки изменений нескольких версий одним документом (новые сверху)."""
     if not versions:
-        return demote_headings(fallback) or "_Автор не оставил описания изменений._"
+        return prepare_markdown(fallback) or "_Автор не оставил описания изменений._"
     parts = []
     for v in versions:
         kind = VERSION_TYPES.get(v.get("version_type"), v.get("version_type") or "")
         parts.append(f"### {v.get('version_number')}  ·  {kind}  ·  {v.get('date')}\n\n"
-                     f"{demote_headings((v.get('changelog') or '').strip()) or '_Без описания._'}")
+                     f"{prepare_markdown(v.get('changelog') or '') or '_Без описания._'}")
     return "\n\n---\n\n".join(parts)
 
 
@@ -165,7 +188,7 @@ class UpdateReviewDialog(FramelessDialog):
         self.subtitle.setText(f"{current}  →  {entry.get('new_version') or ''}{size}")
         latest = (entry.get("_latest_info") or {}).get("changelog") or ""
         if self.changelogs is None:
-            text = (demote_headings(latest) + "\n\n_Загружаем изменения промежуточных версий…_") if latest \
+            text = (prepare_markdown(latest) + "\n\n_Загружаем изменения промежуточных версий…_") if latest \
                 else "_Загружаем список изменений…_"
         else:
             text = changelog_markdown(self.changelogs.get(entry.get("project_id"), []), latest)

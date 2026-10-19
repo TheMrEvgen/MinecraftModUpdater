@@ -205,3 +205,12 @@ def test_transactions_and_snapshots_get_unique_dirs(tmp_path):
     assert len({tx.dir for tx in txs}) == 3  # Метка времени одинаковая, папки — разные
     snaps = [create_snapshot(str(tmp_path)) for _ in range(3)]
     assert len({s["dir"] for s in snaps}) == 3
+
+
+def test_prepare_markdown_strips_images():
+    from ui.dialogs import prepare_markdown
+    text = ("# Title\n[![badge](https://img/x.svg)](https://discord.gg/x)\n<center><img src='a.png'></center>\n"
+            "![shot](https://cdn/a.png)\nText<br>line\n<details><summary>More</summary>hidden</details>")
+    result = prepare_markdown(text)
+    assert "img" not in result and "![" not in result and "<center>" not in result
+    assert result.startswith("#### Title") and "(https://discord.gg/x)" in result and "**More**" in result

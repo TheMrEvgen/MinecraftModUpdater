@@ -172,6 +172,9 @@ QListWidget::item:hover {{ background: {t['surface2']}; }}
 #Swatch:checked {{ border: 3px solid {t['text']}; }}
 #StatValue {{ font-size: 20pt; font-weight: 700; }}
 #Thumb {{ background: {t['surface3']}; border-radius: 10px; }}
+#GalleryArrow {{ background: {rgba(t['surface3'], 0.92)}; border: 1px solid {t['border_strong']};
+                 border-radius: 16px; }}
+#GalleryArrow:hover {{ background: {t['surface2']}; border-color: {t['accent']}; }}
 #WarningText {{ color: {t['warning']}; }}
 #Segment {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 9px; padding: 7px 14px;
             color: {t['text_muted']}; font-weight: 600; }}

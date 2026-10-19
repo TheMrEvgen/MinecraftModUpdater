@@ -41,6 +41,7 @@ _PATHS = {
             '<path d="M7 3v5h8"/>',
     "chevron_down": '<path d="m6 9 6 6 6-6"/>',
     "chevron_right": '<path d="m9 18 6-6-6-6"/>',
+    "chevron_left": '<path d="m15 18-6-6 6-6"/>',
     "list": '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/>'
             '<path d="M3 18h.01"/>',
     "list_tree": '<path d="M21 12h-8"/><path d="M21 6H8"/><path d="M21 18h-8"/><path d="M3 6v4c0 1.1.9 2 2 2h3"/>'

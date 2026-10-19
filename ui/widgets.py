@@ -267,7 +267,7 @@ class ToastManager(QObject):
         toast = Toast(self.host, self.tokens, text, kind, action_text, action, timeout)
         toast.closed.connect(self._remove)
         self.toasts.append(toast)
-        if len(self.toasts) > 4:
+        if len(self.toasts) > 3:  # Не больше трёх уведомлений сразу — старые уходят
             self.toasts[0].dismiss()
         toast.show()
         toast.raise_()
@@ -649,3 +649,83 @@ class FadeIn:
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.finished.connect(lambda: widget.setGraphicsEffect(None))
         anim.start()
+
+
+class FlexButton(QPushButton):
+    """Кнопка с текстом, которая при нехватке места показывает только значок (текст — во всплывающей подсказке)."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._full_text = text
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def setText(self, text: str):
+        self._full_text = text
+        super().setText(text)
+        self._fit()
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        return QSize(min(hint.width(), 44), hint.height())
+
+    def _full_width(self) -> int:
+        fm = self.fontMetrics()
+        return fm.horizontalAdvance(self._full_text) + self.iconSize().width() + 34
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit()
+
+    def _fit(self):
+        compact = bool(self._full_text) and self.width() < self._full_width() and not self.icon().isNull()
+        shown = "" if compact else self._full_text
+        if super().text() != shown:
+            super().setText(shown)
+        if compact and not self.toolTip():
+            self.setToolTip(self._full_text)
+
+
+def flex_button(text: str, object_name: Optional[str], icon_name: str, tokens: dict, icon_color_key: str = "text",
+                tooltip: str = "") -> FlexButton:
+    btn = FlexButton(text)
+    if object_name:
+        btn.setObjectName(object_name)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setIcon(icons.icon(icon_name, tokens[icon_color_key], 16))
+    btn.setProperty("icon_name", icon_name)
+    btn.setProperty("icon_color_key", icon_color_key)
+    btn.setToolTip(tooltip or text)
+    return btn
+
+
+class ElideButton(QPushButton):
+    """Кнопка, текст которой сокращается многоточием, если не помещается (полный текст — в подсказке)."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._full_text = text
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def setText(self, text: str):
+        self._full_text = text
+        self.setToolTip(text)
+        self._fit()
+
+    def text(self) -> str:
+        return self._full_text
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        return QSize(min(hint.width(), 90), hint.height())
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        return QSize(min(hint.width(), 200), hint.height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit()
+
+    def _fit(self):
+        room = max(20, self.width() - self.iconSize().width() - 40)
+        super().setText(self.fontMetrics().elidedText(self._full_text, Qt.TextElideMode.ElideMiddle, room))

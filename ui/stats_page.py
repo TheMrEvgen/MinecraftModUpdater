@@ -39,6 +39,9 @@ class BarChart(QWidget):
     def sizeHint(self):
         return QSize(400, max(ROW_HEIGHT, len(self.items) * ROW_HEIGHT))
 
+    def minimumSizeHint(self):
+        return QSize(220, max(ROW_HEIGHT, len(self.items) * ROW_HEIGHT))
+
     def _geometry(self):
         fm = QFontMetrics(self.font())
         label_w = min(230, max([fm.horizontalAdvance(i[0]) for i in self.items] + [60]) + 24)
@@ -105,7 +108,8 @@ class StatTile(QFrame):
         layout.setSpacing(2)
         self.value = QLabel("—")
         self.value.setObjectName("StatValue")
-        self.caption = label(title, "Muted")
+        self.caption = label(title, "Muted", wrap=True)
+        self.setMinimumWidth(150)
         layout.addWidget(self.value)
         layout.addWidget(self.caption)
 
@@ -129,6 +133,7 @@ class StatsPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         outer.addWidget(scroll)
         content = QWidget()
         scroll.setWidget(content)
@@ -142,39 +147,38 @@ class StatsPage(QWidget):
         head.addWidget(self.subtitle)
         root.addLayout(head)
 
-        tiles = QHBoxLayout()
-        tiles.setSpacing(10)
+        self.tiles_grid = QGridLayout()
+        self.tiles_grid.setSpacing(10)
         self.tiles: Dict[str, StatTile] = {}
         for key, title in (("count", "модов в сборке"), ("size", "занимают на диске"), ("update", "скачается при обновлении"),
                            ("disabled", "выключены"), ("abandoned", "давно не обновлялись")):
-            tile = StatTile(title)
-            self.tiles[key] = tile
-            tiles.addWidget(tile)
-        root.addLayout(tiles)
+            self.tiles[key] = StatTile(title)
+        root.addLayout(self.tiles_grid)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(14)
+        self.charts_grid = grid
         self.categories = BarChart(tokens)
         self.categories.item_clicked.connect(lambda title: self.filter_requested.emit(f'tag:"{title}"'))
         self.heaviest = BarChart(tokens)
         self.heaviest.item_clicked.connect(self.entry_requested)
         self.sides = BarChart(tokens)
         self.sides.item_clicked.connect(lambda query: query and self.filter_requested.emit(query))
-        grid.addWidget(self._section("Размер по категориям", "Щёлкните по строке, чтобы увидеть эти моды в списке.",
-                                     self.categories), 0, 0)
-        grid.addWidget(self._section("Самые тяжёлые моды", "Размер файла.", self.heaviest), 0, 1)
-        grid.addWidget(self._section("Где нужен мод", "Сторона по данным Modrinth: клиент, сервер или оба.",
-                                     self.sides), 1, 0)
+        self.sections = [
+            self._section("Размер по категориям", "Щёлкните по строке, чтобы увидеть эти моды в списке.", self.categories),
+            self._section("Самые тяжёлые моды", "Размер файла.", self.heaviest),
+            self._section("Где нужен мод", "Сторона по данным Modrinth: клиент, сервер или оба.", self.sides),
+        ]
         self.abandoned_box = QVBoxLayout()
         self.abandoned_box.setSpacing(6)
         abandoned_widget = QWidget()
         abandoned_widget.setLayout(self.abandoned_box)
         self.abandoned_box.setContentsMargins(0, 0, 0, 0)
-        grid.addWidget(self._section("Давно не обновлялись", "Автор не выпускал версий больше года — "
-                                     "такие моды стоит заменить живыми аналогами.", abandoned_widget), 1, 1)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
+        self.sections.append(self._section("Давно не обновлялись", "Автор не выпускал версий больше года — "
+                                           "такие моды стоит заменить живыми аналогами.", abandoned_widget))
+        self._columns = None
+        self._arrange(2)
         self.grid_widget = QWidget()
         self.grid_widget.setLayout(grid)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -182,6 +186,25 @@ class StatsPage(QWidget):
         self.empty = EmptyState()
         root.addWidget(self.empty)
         root.addStretch()
+
+    def _arrange(self, columns: int):
+        """Плитки и графики по ширине страницы: в узком окне — в один-два столбца."""
+        if columns == self._columns:
+            return
+        self._columns = columns
+        tile_columns = 5 if columns == 2 else 3
+        for i, tile in enumerate(self.tiles.values()):
+            self.tiles_grid.addWidget(tile, i // tile_columns, i % tile_columns)
+        for i, section in enumerate(self.sections):
+            self.charts_grid.addWidget(section, i // columns, i % columns)
+        for c in range(2):
+            self.charts_grid.setColumnStretch(c, 1 if c < columns else 0)
+        for c in range(5):
+            self.tiles_grid.setColumnStretch(c, 1 if c < tile_columns else 0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._arrange(2 if self.width() >= 960 else 1)
 
     def _section(self, title: str, hint: str, widget: QWidget) -> QFrame:
         card = QFrame()

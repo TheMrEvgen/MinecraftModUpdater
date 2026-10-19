@@ -696,6 +696,13 @@ class ToolsMixin:
             self.catalog_page.set_installing(self._catalog_installing, False)
             self._catalog_installing = []
 
+    def _installed_version(self, project_id: str) -> Optional[str]:
+        """Установленная версия проекта (для отметки в списке версий каталога)."""
+        content = self.catalog_page.content
+        data = self.mods_data if content is self.content else self.sessions.get(self._skey(content=content)) or []
+        return next((e.get("current_version") for e in iter_all_entries(data)
+                     if e.get("project_id") == project_id and e.get("filepath")), None)
+
     def _show_installed_from_catalog(self, hit: dict):
         content = self.catalog_page.content
         self._switch_page(self.PAGE_MODS_INDEX)

@@ -17,7 +17,10 @@ import icons
 from content import CONTENT_TYPES, MODS, ContentType
 from mod_updater_logic import format_date, get_all_versions, get_categories, get_project, get_projects_info_from_ids, search_projects
 from theme import qcolor
-from ui.widgets import EmptyState, SearchBox, button, label, make_action, refresh_button_icons, rounded_pixmap, style_segments
+from ui.details_panel import PANEL_MAX, panel_width
+from ui.widgets import (
+    EmptyState, SearchBox, button, flex_button, label, make_action, refresh_button_icons, rounded_pixmap, style_segments,
+)
 from view_model import CATEGORY_LABELS, LOADER_CATEGORIES
 
 HIT_ROLE = Qt.ItemDataRole.UserRole + 1   # индекс в CatalogPage.hits
@@ -63,7 +66,13 @@ class CatalogDelegate(QStyledItemDelegate):
         return QSize(option.rect.width(), self.ROW_HEIGHT)
 
     @staticmethod
-    def button_rect(rect: QRect) -> QRect:
+    def narrow(rect: QRect) -> bool:
+        return rect.width() < 560
+
+    @classmethod
+    def button_rect(cls, rect: QRect) -> QRect:
+        if cls.narrow(rect):  # Узкий список: кнопка становится значком
+            return QRect(rect.right() - 54, rect.center().y() - 17, 40, 34)
         return QRect(rect.right() - 150, rect.center().y() - 17, 134, 34)
 
     @staticmethod
@@ -146,7 +155,8 @@ class CatalogDelegate(QStyledItemDelegate):
         text = format_count(hit.get("downloads") or 0)
         p.drawText(QRect(x + 16, y, 100, fm_s.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
         x += 16 + fm_s.horizontalAdvance(text) + 14
-        for cat in [c for c in hit.get("display_categories") or hit.get("categories") or [] if c not in LOADER_CATEGORIES][:4]:
+        categories = [c for c in hit.get("display_categories") or hit.get("categories") or [] if c not in LOADER_CATEGORIES]
+        for cat in categories[:0 if self.narrow(rect) else 4]:
             tag = CATEGORY_LABELS.get(cat, cat)
             w = fm_s.horizontalAdvance(tag) + 14
             if x + w > left + width:
@@ -160,7 +170,9 @@ class CatalogDelegate(QStyledItemDelegate):
 
         hot = hovered and btn.contains(self._mouse)
         p.setFont(self.font_button)
-        if state == "installed":
+        if self.narrow(rect):
+            self._paint_icon_button(p, btn, state, hot)
+        elif state == "installed":
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(qcolor(t["accent"], 0.12))
             p.drawRoundedRect(QRectF(btn), 9, 9)
@@ -180,6 +192,28 @@ class CatalogDelegate(QStyledItemDelegate):
             p.setPen(qcolor(t["accent_text"]))
             p.drawText(btn.adjusted(26, 0, 0, 0), Qt.AlignmentFlag.AlignCenter, "Установить")
         p.restore()
+
+    def _paint_icon_button(self, p: QPainter, btn: QRect, state: str, hot: bool):
+        t = self.page.tokens
+        p.setPen(Qt.PenStyle.NoPen)
+        if state == "available":
+            p.setBrush(qcolor(t["accent_hover"] if hot else t["accent"]))
+            icon_name, color = "download", t["accent_text"]
+        else:
+            p.setBrush(qcolor(t["accent"], 0.12) if state == "installed" else qcolor(t["surface3"]))
+            icon_name, color = ("check", t["accent"]) if state == "installed" else ("refresh", t["text_muted"])
+        p.drawRoundedRect(QRectF(btn), 9, 9)
+        p.drawPixmap(QRect(btn.center().x() - 8, btn.center().y() - 8, 16, 16), icons.pixmap(icon_name, color, 16))
+
+    def helpEvent(self, event, view, option, index):
+        hit = self.page.hit_at(index.data(HIT_ROLE))
+        if hit and self.button_rect(option.rect).contains(event.pos()):
+            state = self.page.install_state(hit)
+            from PyQt6.QtWidgets import QToolTip
+            QToolTip.showText(event.globalPos(), {"available": "Установить", "installed": "Уже установлен",
+                                                  "installing": "Устанавливается…"}[state], view)
+            return True
+        return super().helpEvent(event, view, option, index)
 
     def editorEvent(self, event, model, option, index):
         if event.type() == QEvent.Type.MouseMove:
@@ -211,7 +245,7 @@ class CatalogDetails(QFrame):
         super().__init__()
         self.page = page
         self.setObjectName("DetailsPanel")
-        self.setFixedWidth(400)
+        self.setFixedWidth(PANEL_MAX)
         self.hit: Optional[Dict] = None
         self.versions: List[Dict] = []
         t = page.tokens
@@ -252,19 +286,24 @@ class CatalogDetails(QFrame):
         self.summary = label("", "Muted", wrap=True)
         self.layout_.addWidget(self.summary)
 
-        self.install_btn = button("Установить", "PrimaryButton", "download", t, "accent_text")
+        from ui.widgets import ElideButton
+        self.install_btn = ElideButton("Установить")
+        self.install_btn.setObjectName("PrimaryButton")
+        self.install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.install_btn.setProperty("icon_name", "download")
+        self.install_btn.setProperty("icon_color_key", "accent_text")
+        self.install_btn.setIcon(icons.icon("download", t["accent_text"], 16))
         self.install_btn.setMinimumHeight(38)
         self.install_btn.clicked.connect(lambda: self.hit and self.page.install_requested.emit(self.hit))
         self.layout_.addWidget(self.install_btn)
         actions = QHBoxLayout()
-        self.page_btn = button("Modrinth", None, "external", t, "text", "Открыть страницу проекта")
+        self.page_btn = flex_button("Modrinth", None, "external", t, "text", "Открыть страницу проекта")
         self.page_btn.clicked.connect(lambda: self.hit and webbrowser.open(hit_url(self.hit)))
-        self.mine_btn = button("В моих модах", None, "package", t, "text", "Показать установленный мод в списке")
+        self.mine_btn = flex_button("В моих модах", None, "package", t, "text", "Показать установленный мод в списке")
         self.mine_btn.clicked.connect(lambda: self.hit and self.page.show_installed_requested.emit(self.hit))
-        self.similar_btn = button("Похожие", None, "compass", t, "text", "Искать проекты той же категории")
+        self.similar_btn = flex_button("Похожие", None, "compass", t, "text", "Искать проекты той же категории")
         self.similar_btn.clicked.connect(lambda: self.hit and self.page.show_similar(self.hit))
         for b in (self.page_btn, self.mine_btn, self.similar_btn):
-            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             actions.addWidget(b)
         self.layout_.addLayout(actions)
 
@@ -275,6 +314,8 @@ class CatalogDetails(QFrame):
         from ui.gallery import GalleryStrip, LinksRow
         self.gallery_title = label("Скриншоты", "SectionTitle")
         self.gallery = GalleryStrip(page.thumb_loader, page.full_loader) if page.thumb_loader else None
+        if self.gallery:
+            self.gallery.set_tokens(t)
         self.layout_.addWidget(self.gallery_title)
         if self.gallery:
             self.layout_.addWidget(self.gallery)
@@ -313,6 +354,8 @@ class CatalogDetails(QFrame):
     def set_tokens(self, tokens: dict):
         self.versions_delegate.tokens = tokens
         self.links.tokens = tokens
+        if self.gallery:
+            self.gallery.set_tokens(tokens)
         refresh_button_icons(self, tokens)
 
     def show_hit(self, hit: Dict):
@@ -377,10 +420,11 @@ class CatalogDetails(QFrame):
         from ui.details_panel import INSTALLED_ROLE, VERSION_ROLE
         self.versions = versions
         self.versions_list.clear()
+        installed_version = self.page.installed_version(pid)
         for v in versions[:50]:
             item = QListWidgetItem(v.get("version_number") or "")
             item.setData(VERSION_ROLE, v)
-            item.setData(INSTALLED_ROLE, False)
+            item.setData(INSTALLED_ROLE, bool(installed_version) and v.get("version_number") == installed_version)
             self.versions_list.addItem(item)
         if not versions:
             self.versions_list.addItem("Нет версий для этой версии игры и загрузчика")
@@ -440,6 +484,7 @@ class CatalogPage(QWidget):
         self.loader = ""
         self.installed: Dict[str, Set[str]] = {}     # тип контента -> project_id установленных
         self.installing: Set[str] = set()
+        self.installed_version: Callable[[str], Optional[str]] = lambda project_id: None  # Задаёт главное окно
         self.checked: Dict[str, Dict] = {}           # project_id -> hit (отмеченные для массовой установки)
         self.hits: List[Dict] = []
         self.total = 0
@@ -515,6 +560,7 @@ class CatalogPage(QWidget):
         self.stack = QStackedWidget()
         self.list = QListWidget()
         self.list.setObjectName("ModList")
+        self.list.setMinimumWidth(280)
         self.list.setMouseTracking(True)
         self.list.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -740,6 +786,10 @@ class CatalogPage(QWidget):
             self.category_combo.addItem(CATEGORY_LABELS.get(name, name).capitalize(), name)
         self.category_combo.setCurrentIndex(max(0, self.category_combo.findData(current)))
         self.category_combo.blockSignals(False)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.details.setFixedWidth(panel_width(self.width() - 56))
 
     def showEvent(self, event):
         super().showEvent(event)

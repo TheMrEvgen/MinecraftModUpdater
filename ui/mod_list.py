@@ -330,9 +330,12 @@ class ModDelegate(QStyledItemDelegate):
         right = r.right()
         lay["more"] = QRect(right - 30, cy - 15, 30, 30)
         lay["update"] = QRect(lay["more"].left() - 34, cy - 15, 30, 30)
-        lay["status"] = QRect(lay["update"].left() - 150, cy - 12, 140, 24)
+        # Узкий список (открыта панель мода, маленькое окно): статус — цветной точкой, подробности в подсказке
+        lay["narrow"] = rect.width() < 560
+        status_width = 18 if lay["narrow"] else 140
+        lay["status"] = QRect(lay["update"].left() - status_width - 10, cy - 12, status_width, 24)
         # Необязательные колонки: «Размер / дата / сторона» и «Версии» — только если хватает ширины
-        meta_on = bool(self.columns & {"size", "date", "side"}) and rect.width() > 900
+        meta_on = bool(self.columns & {"size", "date", "side"}) and rect.width() > 640
         meta_width = 120 if meta_on else 0
         lay["meta"] = QRect(lay["status"].left() - meta_width - 10, r.top(), meta_width, r.height())
         wide = rect.width() > 820 and "versions" in self.columns
@@ -676,6 +679,11 @@ class ModDelegate(QStyledItemDelegate):
 
         label, role = status_style(entry)
         color = t.get(role, t["text_muted"])
+        if r.width() < 40:  # Узкий режим: только точка
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(qcolor(color))
+            p.drawEllipse(QRectF(r.center().x() - 4, r.center().y() - 4, 8, 8))
+            return
         fm = QFontMetrics(self.font_chip)
         width = min(r.width(), fm.horizontalAdvance(label) + 26)
         chip = QRectF(r.right() - width, r.top(), width, r.height())
@@ -780,6 +788,7 @@ class ModListView(QListView):
         self.setObjectName("ModList")
         self.setMouseTracking(True)
         self.setUniformItemSizes(False)  # Высота строк разная: заголовки групп и анимация раскрытия
+        self.setMinimumWidth(280)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.verticalScrollBar().setSingleStep(18)

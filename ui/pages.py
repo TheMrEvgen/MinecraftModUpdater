@@ -235,6 +235,7 @@ class SettingsPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         outer.addWidget(scroll)
         content = QWidget()
         scroll.setWidget(content)
@@ -292,9 +293,9 @@ class SettingsPage(QWidget):
         row.addWidget(label("применится после перезапуска", "Faint"))
         row.addStretch()
         body.addLayout(row)
-        self.minimal = QCheckBox("Режим «Минимум»: только список модов и большая кнопка «Обновить все»")
+        self.minimal = QCheckBox("Режим «Минимум»")
         self.minimal.toggled.connect(self._emit)
-        body.addWidget(self.minimal)
+        self._add_with_hint(body, self.minimal, "Только список модов и большая кнопка «Обновить все».")
         root.addWidget(card)
 
         # Список модов
@@ -316,22 +317,26 @@ class SettingsPage(QWidget):
         self.view_group.buttonClicked.connect(self._emit)
         self.expand_deps = QCheckBox("В дереве сразу раскрывать зависимости")
         self.expand_deps.toggled.connect(self._emit)
-        self.compact_rows = QCheckBox("Компактные строки (без описания, больше модов на экране)")
+        self.compact_rows = QCheckBox("Компактные строки")
+        self.compact_rows.setProperty("hint", "Без описания — на экране помещается больше модов.")
         self.compact_rows.toggled.connect(self._emit)
-        self.details_on_select = QCheckBox("Открывать панель мода сбоку при выборе строки "
-                                           "(иначе — двойной щелчок, Enter или «Подробнее» в меню)")
+        self.details_on_select = QCheckBox("Открывать панель мода при выборе строки")
+        self.details_on_select.setProperty("hint", "Иначе — двойной щелчок, Enter или «Подробнее» в меню мода.")
         self.details_on_select.toggled.connect(self._emit)
-        self.group_by_status = QCheckBox("Заголовки групп («Обновления», «Актуальные»…) при сортировке «Сначала важные»")
+        self.group_by_status = QCheckBox("Заголовки групп")
+        self.group_by_status.setProperty("hint", "«Обновления», «Актуальные»… при сортировке «Сначала важные».")
         self.group_by_status.toggled.connect(self._emit)
-        self.animations = QCheckBox("Анимации (плавное раскрытие зависимостей)")
+        self.animations = QCheckBox("Анимации")
+        self.animations.setProperty("hint", "Плавное раскрытие зависимостей в дереве.")
         self.animations.toggled.connect(self._emit)
-        self.per_profile = QCheckBox("Запоминать вид и сортировку отдельно для каждой сборки")
+        self.per_profile = QCheckBox("Вид и сортировка — свои у каждой сборки")
         self.per_profile.toggled.connect(self._emit)
-        self.abandoned = QCheckBox("Помечать моды, которые автор не обновлял больше года")
+        self.abandoned = QCheckBox("Помечать давно не обновлявшиеся моды")
+        self.abandoned.setProperty("hint", "Автор не выпускал версий больше года.")
         self.abandoned.toggled.connect(self._emit)
         for widget in (self.expand_deps, self.compact_rows, self.details_on_select, self.group_by_status, self.animations,
                        self.per_profile, self.abandoned):
-            body.addWidget(widget)
+            self._add_with_hint(body, widget, widget.property("hint"))
         body.addWidget(label("Что показывать в строке мода:", "Muted"))
         from ui.mod_list import COLUMNS
         grid = QGridLayout()
@@ -350,7 +355,7 @@ class SettingsPage(QWidget):
         self.auto_check = QCheckBox("Проверять обновления автоматически при открытии сборки")
         self.auto_check.toggled.connect(self._emit)
         body.addWidget(self.auto_check)
-        self.changelog_before = QCheckBox("Показывать список изменений перед «Обновить все»")
+        self.changelog_before = QCheckBox("Показывать «Что нового» перед «Обновить все»")
         self.changelog_before.toggled.connect(self._emit)
         body.addWidget(self.changelog_before)
         row = QHBoxLayout()
@@ -367,9 +372,9 @@ class SettingsPage(QWidget):
         card, body = self._card("Снимки и бэкапы")
         body.addWidget(label("Снимок сохраняет весь набор модов, чтобы вернуться к нему со страницы «История». "
                              "Файлы связываются жёсткими ссылками и почти не занимают места.", "Muted", wrap=True))
-        self.auto_snapshot = QCheckBox("Делать снимок перед «Обновить все», заменой сборки и сменой версии игры")
+        self.auto_snapshot = QCheckBox("Снимок перед большими изменениями")
         self.auto_snapshot.toggled.connect(self._emit)
-        body.addWidget(self.auto_snapshot)
+        self._add_with_hint(body, self.auto_snapshot, "Перед «Обновить все», заменой сборки и сменой версии игры.")
         row = QHBoxLayout()
         row.addWidget(label("Хранить автоматических снимков:"))
         self.snapshots_keep = QComboBox()
@@ -461,6 +466,14 @@ class SettingsPage(QWidget):
         body.addWidget(shortcuts)
         root.addWidget(card)
         root.addStretch()
+
+    @staticmethod
+    def _add_with_hint(body, widget, hint: str = None):
+        body.addWidget(widget)
+        if hint:
+            hint_label = label(hint, "Faint", wrap=True)
+            hint_label.setContentsMargins(26, 0, 0, 2)
+            body.addWidget(hint_label)
 
     def _card(self, title: str):
         card = QFrame()

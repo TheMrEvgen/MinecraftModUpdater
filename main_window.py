@@ -194,6 +194,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self.catalog_page.install_version_requested.connect(self._install_catalog_version)
         self.catalog_page.show_installed_requested.connect(self._show_installed_from_catalog)
         self.catalog_page.open_requested.connect(self._open_catalog_hit)
+        self.catalog_page.installed_version = self._installed_version
         self.stack.addWidget(self.catalog_page)
         self.history_page = HistoryPage(t)
         self.history_page.rollback_requested.connect(self._rollback_from_history)
@@ -533,6 +534,8 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.drop_overlay.setGeometry(self.centralWidget().rect().adjusted(260, 12, -12, -12))
+        from ui.details_panel import panel_width
+        self.details.setFixedWidth(panel_width(self.stack.width() - 56))
         if self.palette.isVisible():
             self.palette.open()
 

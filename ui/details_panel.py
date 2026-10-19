@@ -13,14 +13,22 @@ import icons
 from enums import ModStatus
 from mod_updater_logic import format_date
 from theme import qcolor, rgba
-from ui.widgets import button, label, refresh_button_icons, rounded_pixmap
+from ui.widgets import ElideButton, button, flex_button, label, refresh_button_icons, rounded_pixmap
+
+PANEL_MIN, PANEL_MAX = 330, 420
+
+
+def panel_width(available: int) -> int:
+    """Ширина боковой панели: ~40% места под списком, но не уже 330 и не шире 420."""
+    return max(PANEL_MIN, min(PANEL_MAX, int(available * 0.42)))
 from query import days_since, is_abandoned
 from view_model import entry_tags, format_size, status_of, status_style
 
 
 def demote_headings(markdown: str) -> str:
-    from ui.dialogs import demote_headings as demote  # dialogs импортирует widgets — избегаем цикла при загрузке
-    return demote(markdown)
+    """Описание или список изменений для QTextBrowser (см. ui.dialogs.prepare_markdown)."""
+    from ui.dialogs import prepare_markdown  # dialogs импортирует widgets — избегаем цикла при загрузке
+    return prepare_markdown(markdown)
 
 SIDE_LABELS = {"required": "нужен", "optional": "необязателен", "unsupported": "не поддерживается"}
 VERSION_TYPES = {"release": "релиз", "beta": "бета", "alpha": "альфа"}
@@ -127,7 +135,7 @@ class DetailsPanel(QFrame):
     def __init__(self, tokens: dict, parent=None):
         super().__init__(parent)
         self.setObjectName("DetailsPanel")
-        self.setFixedWidth(400)
+        self.setFixedWidth(PANEL_MAX)
         self.tokens = tokens
         self.entry: Optional[Dict] = None
         self._versions: List[Dict] = []
@@ -185,19 +193,24 @@ class DetailsPanel(QFrame):
         self.issues_label = label("", None, wrap=True)
         self.layout_.addWidget(self.issues_label)
 
-        self.install_btn = button("Обновить", "PrimaryButton", "download", tokens, "accent_text")
+        self.install_btn = ElideButton("Обновить")
+        self.install_btn.setObjectName("PrimaryButton")
+        self.install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.install_btn.setProperty("icon_name", "download")
+        self.install_btn.setProperty("icon_color_key", "accent_text")
+        self.install_btn.setIcon(icons.icon("download", tokens["accent_text"], 16))
         self.install_btn.setMinimumHeight(38)
         self.layout_.addWidget(self.install_btn)
         actions = QHBoxLayout()
         actions.setSpacing(8)
         self.install_btn.clicked.connect(lambda: self.entry and self.install_requested.emit(self.entry))
-        self.page_btn = button("Modrinth", None, "external", tokens, "text", "Открыть страницу мода")
+        self.page_btn = flex_button("Modrinth", None, "external", tokens, "text", "Открыть страницу мода")
         self.page_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.page_btn.clicked.connect(lambda: self.entry and self.open_page_requested.emit(self.entry))
-        self.file_btn = button("В папке", None, "folder", tokens, "text", "Показать файл в папке")
+        self.file_btn = flex_button("В папке", None, "folder", tokens, "text", "Показать файл в папке")
         self.file_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.file_btn.clicked.connect(lambda: self.entry and self.open_file_requested.emit(self.entry))
-        self.delete_btn = button("Удалить", "DangerButton", "trash", tokens, "danger", "Удалить мод (можно отменить)")
+        self.delete_btn = flex_button("Удалить", "DangerButton", "trash", tokens, "danger", "Удалить мод (можно отменить)")
         self.delete_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.delete_btn.clicked.connect(lambda: self.entry and self.delete_requested.emit(self.entry))
         actions.addWidget(self.page_btn)
@@ -207,11 +220,12 @@ class DetailsPanel(QFrame):
 
         extra = QHBoxLayout()
         extra.setSpacing(8)
-        self.pin_btn = button("Закрепить", None, "lock", tokens, "text", "Не обновлять этот мод (в том числе в «Обновить все»)")
+        self.pin_btn = flex_button("Закрепить", None, "lock", tokens, "text",
+                                   "Не обновлять этот мод (в том числе в «Обновить все»)")
         self.pin_btn.clicked.connect(lambda: self.entry and self.pin_toggled.emit(self.entry))
-        self.disable_btn = button("Выключить", None, "power", tokens, "text", "Выключить мод без удаления (*.disabled)")
+        self.disable_btn = flex_button("Выключить", None, "power", tokens, "text", "Выключить мод без удаления (*.disabled)")
         self.disable_btn.clicked.connect(lambda: self.entry and self.disable_toggled.emit(self.entry))
-        self.tags_btn = button("Метки", None, "tag", tokens, "text", "Добавить или убрать свои метки")
+        self.tags_btn = flex_button("Метки", None, "tag", tokens, "text", "Добавить или убрать свои метки")
         self.tags_btn.clicked.connect(lambda: self.entry and self.tags_menu_requested.emit(
             self.entry, self.tags_btn.mapToGlobal(self.tags_btn.rect().bottomLeft())))
         for b in (self.pin_btn, self.disable_btn, self.tags_btn):
@@ -231,7 +245,7 @@ class DetailsPanel(QFrame):
         box.setContentsMargins(12, 8, 8, 8)
         self.abandoned_label = label("", None, wrap=True)
         box.addWidget(self.abandoned_label, 1)
-        self.replace_btn = button("Найти замену", "GhostButton", "compass", tokens, "text")
+        self.replace_btn = flex_button("Найти замену", "GhostButton", "compass", tokens, "text")
         self.replace_btn.clicked.connect(lambda: self.entry and self.replacement_requested.emit(self.entry))
         box.addWidget(self.replace_btn)
         self.layout_.addWidget(self.abandoned_box)
@@ -311,6 +325,7 @@ class DetailsPanel(QFrame):
     def attach_gallery(self, thumb_loader, full_loader):
         from ui.gallery import GalleryStrip
         self.gallery = GalleryStrip(thumb_loader, full_loader)
+        self.gallery.set_tokens(self.tokens)
         self.layout_.insertWidget(self._gallery_index, self.gallery)
         self.gallery.hide()
 
@@ -321,6 +336,8 @@ class DetailsPanel(QFrame):
     def set_tokens(self, tokens: dict):
         self.tokens = tokens
         self.links.tokens = tokens
+        if self.gallery is not None:
+            self.gallery.set_tokens(tokens)
         self.versions_delegate.tokens = tokens
         self.versions_list.viewport().update()
         refresh_button_icons(self, tokens)
