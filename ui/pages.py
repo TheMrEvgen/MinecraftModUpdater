@@ -241,10 +241,17 @@ class SettingsPage(QWidget):
         outer.addWidget(scroll)
         content = QWidget()
         scroll.setWidget(content)
-        root = QVBoxLayout(content)
+        # На очень широком экране карточки не тянутся на всю ширину — так их легче читать
+        columns = QHBoxLayout(content)
+        columns.setContentsMargins(0, 0, 0, 0)
+        inner = QWidget()
+        inner.setMaximumWidth(1280)
+        columns.addWidget(inner, 1)
+        columns.addStretch(0)
+        root = QVBoxLayout(inner)
         root.setContentsMargins(32, 28, 32, 24)
         root.setSpacing(16)
-        root.addLayout(page_header(tr("Настройки"), tr("Оформление, проверка обновлений и данные приложения.")))
+        root.addLayout(page_header(tr("Настройки"),tr("Оформление, проверка обновлений и данные приложения.")))
 
         self._root = root
         self.install_card = self._build_install_card(tokens)
@@ -374,6 +381,7 @@ class SettingsPage(QWidget):
             box.toggled.connect(self._emit)
             self.column_boxes[key] = box
             grid.addWidget(box, i // 3, i % 3)
+        grid.setColumnStretch(3, 1)  # Галочки прижаты влево, а не разбросаны по широкому экрану
         body.addLayout(grid)
         root.addWidget(card)
 

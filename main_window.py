@@ -2,6 +2,7 @@
 import logging
 import os
 import shutil
+import sys
 import time
 import webbrowser
 from typing import Callable, Dict, Iterator, List, Optional
@@ -629,6 +630,11 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
             # Ждать дальше бессмысленно: настройки сохранены, а прерывать потоки Qt не умеет
             logging.warning(f"Закрытие без ожидания фоновых задач: {', '.join(stuck)}")
             logging.shutdown()
+            for stream in (sys.stdout, sys.stderr):
+                try:
+                    stream.flush()
+                except (AttributeError, OSError, ValueError):  # В .exe без консоли потоков может не быть
+                    pass
             os._exit(0)
 
     # ================================================================== Конфигурация и сборки

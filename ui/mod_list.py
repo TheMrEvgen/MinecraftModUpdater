@@ -31,6 +31,8 @@ HEADER_HEIGHT = 36  # Заголовок группы над первой стр
 COLUMNS = (("description", tr("Описание")), ("versions", tr("Версии")), ("size", tr("Размер")), ("date", tr("Дата обновления")),
            ("side", tr("Сторона (клиент/сервер)")), ("tags", tr("Метки")))
 DEFAULT_COLUMNS = ("description", "versions")
+META_KEYS = ("size", "date", "side")  # Порядок колонок справа
+META_WIDTHS = {"size": 76, "date": 96, "side": 120}
 SIDE_SHORT = {"side:client": tr("клиент"), "side:server": tr("сервер"), "side:both": tr("клиент + сервер"), "side:any": tr("любая")}
 
 
@@ -335,12 +337,17 @@ class ModDelegate(QStyledItemDelegate):
         lay["narrow"] = rect.width() < 560
         status_width = 18 if lay["narrow"] else 140
         lay["status"] = QRect(lay["update"].left() - status_width - 10, cy - 12, status_width, 24)
-        # Необязательные колонки: «Размер / дата / сторона» и «Версии» — только если хватает ширины
-        meta_on = bool(self.columns & {"size", "date", "side"}) and rect.width() > 640
-        meta_width = 120 if meta_on else 0
+        # Необязательные колонки: «Размер / дата / сторона» и «Версии» — только если хватает ширины.
+        # Широкий экран: каждое значение в своей колонке; иначе — стопкой в одной узкой колонке
+        meta_keys = [key for key in META_KEYS if key in self.columns]
+        meta_on = bool(meta_keys) and rect.width() > 640
+        spread = meta_on and rect.width() > 1000 + 90 * len(meta_keys)
+        stack_width = 170 if self.compact and len(meta_keys) > 1 and rect.width() > 900 else 120  # Компактно — в строку
+        meta_width = (sum(META_WIDTHS[k] for k in meta_keys) if spread else stack_width) if meta_on else 0
         lay["meta"] = QRect(lay["status"].left() - meta_width - 10, r.top(), meta_width, r.height())
+        lay["meta_spread"] = meta_keys if spread else None
         wide = rect.width() > 820 and "versions" in self.columns
-        version_width = (230 if meta_on else 250) if wide else 0
+        version_width = ((230 if meta_on else 250) + min(130, max(0, rect.width() - 1300) // 4)) if wide else 0
         lay["versions"] = QRect(lay["meta"].left() - version_width - (10 if meta_on else 0), r.top(), version_width,
                                 r.height())
         lay["meta_on"] = meta_on
@@ -411,7 +418,7 @@ class ModDelegate(QStyledItemDelegate):
         if lay["wide"]:
             self._paint_versions(painter, lay["versions"], entry)
         if lay["meta_on"]:
-            self._paint_meta(painter, lay["meta"], entry)
+            self._paint_meta(painter, lay["meta"], entry, lay["meta_spread"])
         painter.setOpacity(base_opacity)
         self._paint_status(painter, lay["status"], entry)
 
@@ -553,7 +560,7 @@ class ModDelegate(QStyledItemDelegate):
                 x += w + 6
         return x - rect.left()
 
-    def _subtitle(self, entry: Dict, dep_type: Optional[str]) -> tuple:
+    def _subtitle(self, entry: Dict, dep_type: Optional[str], fallback: bool = True) -> tuple:
         """Вторая строка: проблемы важнее всего, затем заметка, затем выбранные колонки (описание, метки)."""
         text, role = subtitle_for(entry)
         if role:  # Предупреждение (проблема, «нужен для…»)
@@ -570,31 +577,49 @@ class ModDelegate(QStyledItemDelegate):
             tags = [title for key, title in entry_tags(entry) if not key.startswith("side:")]
             if tags:
                 parts.append("# " + ", ".join(tags[:4]))
-        if not parts:
+        if not parts and fallback:
             path = entry.get("filepath") or entry.get("new_filename") or ""
             parts.append(path.replace("\\", "/").rsplit("/", 1)[-1])
         return "  ·  ".join(parts), None
 
-    def _paint_meta(self, p: QPainter, r: QRect, entry: Dict):
-        """Колонка «размер / дата / сторона» — до двух строк мелким шрифтом."""
-        t = self.tokens
-        lines = []
+    def _meta_values(self, entry: Dict) -> Dict[str, str]:
+        values = {}
         if "size" in self.columns and (entry.get("size") or entry.get("new_size")):
-            lines.append(format_size(entry.get("size") or entry.get("new_size")))
+            values["size"] = format_size(entry.get("size") or entry.get("new_size"))
         if "date" in self.columns:
-            date = format_date(update_date(entry))
-            if date:
-                lines.append(date)
+            values["date"] = format_date(update_date(entry)) or ""
         if "side" in self.columns:
             side = side_tag(entry)
-            if side:
-                lines.append(SIDE_SHORT.get(side[0], side[1]))
-        if not lines:
-            return
+            values["side"] = SIDE_SHORT.get(side[0], side[1]) if side else ""
+        return values
+
+    def _paint_meta(self, p: QPainter, r: QRect, entry: Dict, spread: Optional[List[str]] = None):
+        """Размер / дата / сторона: отдельными колонками (широкий экран) или стопкой в одной колонке."""
+        t = self.tokens
+        values = self._meta_values(entry)
         p.setFont(self.font_small)
         p.setPen(qcolor(t["text_muted"]))
         fm = QFontMetrics(self.font_small)
-        lines = lines[:2] if not self.compact else lines[:1]
+        if spread:
+            x = r.left()
+            for key in spread:
+                cell = QRect(x, r.top(), META_WIDTHS[key] - 10, r.height())
+                p.drawText(cell, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                           fm.elidedText(values.get(key, ""), Qt.TextElideMode.ElideRight, cell.width()))
+                x += META_WIDTHS[key]
+            return
+        lines = [v for v in values.values() if v]
+        if not lines:
+            return
+        if self.compact:  # Одна строка — через точку, только значения, которые помещаются целиком
+            joined = lines[0]
+            for value in lines[1:]:
+                if fm.horizontalAdvance(f"{joined}  ·  {value}") > r.width():
+                    break
+                joined = f"{joined}  ·  {value}"
+            lines = [joined]
+        else:
+            lines = lines[:3] if len(lines) == 3 and r.height() >= 3 * fm.height() + 8 else lines[:2]
         top = r.center().y() - (fm.height() * len(lines) + 2 * (len(lines) - 1)) // 2
         for i, line in enumerate(lines):
             p.drawText(QRect(r.left(), top + i * (fm.height() + 2), r.width(), fm.height()),
@@ -608,11 +633,9 @@ class ModDelegate(QStyledItemDelegate):
         r = lay["text"]
         name_w = min(self._paint_name_line(p, QRect(r.left(), r.top(), r.width() * 2 // 3, r.height()), entry, name, fm),
                      r.width())
-        note, role = (DEP_TYPE_LABELS.get(dep_type, ""), None) if dep_type else ("", None)
+        note, role = self._subtitle(entry, dep_type, fallback=False)
         if entry.get("_issues"):
             note, role = "⚠ " + entry["_issues"][0], "warning"
-        elif entry.get("_note"):
-            note, role = "✎ " + " ".join(str(entry["_note"]).split()), "info"
         if not lay["wide"] and entry.get("current_version"):
             note = self._versions_text(entry) + (f"  ·  {note}" if note else "")
         if note and r.width() - name_w > 40:
