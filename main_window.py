@@ -2,6 +2,7 @@
 import logging
 import os
 import shutil
+import time
 import webbrowser
 from typing import Callable, Dict, Iterator, List, Optional
 
@@ -555,8 +556,9 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         directory = os.path.join(os.path.dirname(app_config.ICON_CACHE_DIR), "ui_assets")
         try:
             os.makedirs(directory, exist_ok=True)
-            check = os.path.join(directory, f"check_{t['name']}_{t['accent_text'].lstrip('#')}.svg")
-            chevron = os.path.join(directory, f"chevron_{t['name']}.svg")
+            suffix = f"{t['name']}_{t['accent_text'].lstrip('#')}.svg"
+            check = os.path.join(directory, "check_" + suffix)
+            chevron = os.path.join(directory, "chevron_" + suffix)  # Таблица стилей берёт путь галочки с заменой check → chevron
             with open(check, "wb") as f:
                 f.write(icons.svg_bytes("check", t["accent_text"]))
             with open(chevron, "wb") as f:
@@ -602,17 +604,32 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
                            tr("Прервать и закрыть"), tr("Продолжить")):
                 event.ignore()
                 return
+        updating = bool(self.update_worker and self.update_worker.isRunning())
         for worker in workers:
             if hasattr(worker, "stop"):
                 worker.stop()
-        for worker in workers:
-            worker.wait(10000)
-        for loader in (self.icon_loader, self.thumb_loader, self.full_loader):
-            loader.shutdown()
+        # Сначала сохраняем и прячем окно: ожидание потоков не должно выглядеть как зависание
         self.window_cfg["geometry"] = bytes(self.saveGeometry().toBase64()).decode()
         self.save_config()
+        self.hide()
+        QApplication.processEvents()
+        loaders = (self.icon_loader, self.thumb_loader, self.full_loader)
+        for loader in loaders:
+            loader.shutdown(0)
+        # Поток с сетевым запросом останавливается только после ответа (а Modrinth может отвечать минуту).
+        # Обновлению даём время откатить начатое, остальным — пару секунд
+        deadline = time.monotonic() + (20 if updating else 2)
+        for worker in workers:
+            worker.wait(max(0, int((deadline - time.monotonic()) * 1000)))
+        stuck = [type(w).__name__ for w in workers if w.isRunning()]
+        stuck += [type(l).__name__ for l in loaders if l.pool.activeThreadCount()]
         logging.getLogger().removeHandler(self._gui_log_handler)
         super().closeEvent(event)
+        if stuck:
+            # Ждать дальше бессмысленно: настройки сохранены, а прерывать потоки Qt не умеет
+            logging.warning(f"Закрытие без ожидания фоновых задач: {', '.join(stuck)}")
+            logging.shutdown()
+            os._exit(0)
 
     # ================================================================== Конфигурация и сборки
 

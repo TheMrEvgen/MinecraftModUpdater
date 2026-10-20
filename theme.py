@@ -179,7 +179,7 @@ QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {{ border
 QLineEdit:disabled, QComboBox:disabled {{ color: {t['text_faint']}; }}
 #SearchBox {{ padding-left: 34px; border-radius: 10px; min-height: 22px; }}
 QComboBox::drop-down {{ border: none; width: 26px; }}
-QComboBox::down-arrow {{ image: url({check_icon.replace('check', 'chevron')}); width: 12px; height: 12px; }}
+QComboBox::down-arrow {{ image: url({check_icon.replace('/check_', '/chevron_')}); width: 12px; height: 12px; }}
 QComboBox QAbstractItemView {{ background: {t['surface2']}; border: 1px solid {t['border_strong']};
     border-radius: 8px; padding: 4px; selection-background-color: {rgba(t['accent'], 0.18)}; selection-color: {t['text']}; }}
 QCheckBox {{ spacing: 8px; }}

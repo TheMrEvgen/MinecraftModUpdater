@@ -348,6 +348,7 @@ class IconLoader(QObject):
         self._pending.discard(project_id)
         self.icon_ready.emit(project_id, path)
 
-    def shutdown(self):
+    def shutdown(self, wait_ms: int = 3000):
         self.pool.clear()
-        self.pool.waitForDone(3000)
+        if wait_ms:
+            self.pool.waitForDone(wait_ms)
