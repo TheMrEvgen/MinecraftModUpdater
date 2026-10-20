@@ -4,24 +4,25 @@ from typing import Dict, List, Optional
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QKeySequence
 from PyQt6.QtWidgets import QGridLayout, QKeySequenceEdit, QLabel, QPushButton, QWidget
+from i18n import tr
 
 # (действие, подпись, сочетание по умолчанию)
 ACTIONS = (
-    ("check", "Проверить обновления", "F5"),
-    ("update_all", "Обновить все", "Ctrl+U"),
-    ("palette", "Быстрые команды", "Ctrl+K"),
-    ("search", "Поиск", "Ctrl+F"),
-    ("undo", "Отменить последнее действие", "Ctrl+Z"),
-    ("favorite", "Избранное для выбранного мода", "Ctrl+D"),
-    ("pin", "Закрепить / открепить выбранный мод", "Ctrl+L"),
-    ("disable", "Выключить / включить выбранный мод", "Ctrl+E"),
-    ("note", "Заметка к выбранному моду", "Ctrl+N"),
-    ("catalog", "Открыть каталог", "Ctrl+2"),
-    ("mods", "Открыть список модов", "Ctrl+1"),
-    ("history", "Открыть историю", "Ctrl+3"),
-    ("stats", "Открыть статистику", "Ctrl+4"),
-    ("snapshot", "Создать снимок сборки", "Ctrl+Shift+S"),
-    ("crash", "Разобрать краш игры", "Ctrl+Shift+C"),
+    ("check", tr("Проверить обновления"), "F5"),
+    ("update_all", tr("Обновить все"), "Ctrl+U"),
+    ("palette", tr("Быстрые команды"), "Ctrl+K"),
+    ("search", tr("Поиск"), "Ctrl+F"),
+    ("undo", tr("Отменить последнее действие"), "Ctrl+Z"),
+    ("favorite", tr("Избранное для выбранного мода"), "Ctrl+D"),
+    ("pin", tr("Закрепить / открепить выбранный мод"), "Ctrl+L"),
+    ("disable", tr("Выключить / включить выбранный мод"), "Ctrl+E"),
+    ("note", tr("Заметка к выбранному моду"), "Ctrl+N"),
+    ("catalog", tr("Открыть каталог"), "Ctrl+2"),
+    ("mods", tr("Открыть список модов"), "Ctrl+1"),
+    ("history", tr("Открыть историю"), "Ctrl+3"),
+    ("stats", tr("Открыть статистику"), "Ctrl+4"),
+    ("snapshot", tr("Создать снимок сборки"), "Ctrl+Shift+S"),
+    ("crash", tr("Разобрать краш игры"), "Ctrl+Shift+C"),
 )
 DEFAULTS = {key: default for key, _, default in ACTIONS}
 # Клавиши, занятые списком (их нельзя назначить действиям)
@@ -70,7 +71,7 @@ class ShortcutEditor(QWidget):
             edit.setFixedWidth(170)
             edit.keySequenceChanged.connect(lambda _seq, k=key: self._on_changed(k))
             grid.addWidget(edit, row, 1)
-            reset = QPushButton("По умолчанию")
+            reset = QPushButton(tr("По умолчанию"))
             reset.setObjectName("GhostButton")
             reset.clicked.connect(lambda _=False, k=key: self._reset(k))
             grid.addWidget(reset, row, 2)
@@ -98,7 +99,7 @@ class ShortcutEditor(QWidget):
         sequence = self.edits[key].keySequence().toString()
         if sequence in RESERVED:
             self.edits[key].setKeySequence(QKeySequence(DEFAULTS[key]))
-            self.warnings[key].setText(f"«{sequence}» занята списком модов")
+            self.warnings[key].setText(tr('«{0}» занята списком модов', sequence))
             return
         if sequence == QKeySequence(DEFAULTS[key]).toString():
             self._overrides.pop(key, None)
@@ -113,6 +114,6 @@ class ShortcutEditor(QWidget):
         for key, warning in self.warnings.items():
             if key in conflicted:
                 others = [self._titles[k] for k in conflicts[conflicted[key]] if k != key]
-                warning.setText(f"⚠ то же, что «{others[0]}»")
+                warning.setText(tr('⚠ то же, что «{0}»', others[0]))
             else:
                 warning.setText("")

@@ -1,4 +1,5 @@
 from enum import Enum
+from i18n import tr
 
 
 class ModStatus(str, Enum):
@@ -6,25 +7,25 @@ class ModStatus(str, Enum):
     Статусы модов. Наследование от str позволяет хранить значения прямо в словарях модов,
     сравнивать их со строками и показывать в таблице без дополнительных преобразований.
     """
-    NOT_CHECKED = "Не проверено"
-    UP_TO_DATE = "Актуально"
-    UPDATE_AVAILABLE = "Доступно обновление"
-    READY_TO_INSTALL = "Готов к установке"
-    NOT_FOUND = "Не найден на Modrinth"
-    REQUIRED = "Требуется"
-    OPTIONAL = "Опционально"
-    INCOMPATIBLE = "⛔ Несовместим"
-    VERSION_CONFLICT = "⚠️ Конфликт версий"
+    NOT_CHECKED = tr("Не проверено")
+    UP_TO_DATE = tr("Актуально")
+    UPDATE_AVAILABLE = tr("Доступно обновление")
+    READY_TO_INSTALL = tr("Готов к установке")
+    NOT_FOUND = tr("Не найден на Modrinth")
+    REQUIRED = tr("Требуется")
+    OPTIONAL = tr("Опционально")
+    INCOMPATIBLE = tr("⛔ Несовместим")
+    VERSION_CONFLICT = tr("⚠️ Конфликт версий")
     # Статусы процесса установки
-    DOWNLOADING = "Скачивание..."
-    FINISHING = "Завершение..."
-    UPDATED = "Обновлено!"
-    INSTALLED = "Установлено!"
-    CANCELLED = "Отменено"
-    DOWNLOAD_ERROR = "Ошибка!"
-    HASH_ERROR = "Ошибка хэша!"
-    REPLACE_ERROR = "Ошибка замены!"
-    CRITICAL_ERROR = "Крит. ошибка!"
+    DOWNLOADING = tr("Скачивание...")
+    FINISHING = tr("Завершение...")
+    UPDATED = tr("Обновлено!")
+    INSTALLED = tr("Установлено!")
+    CANCELLED = tr("Отменено")
+    DOWNLOAD_ERROR = tr("Ошибка!")
+    HASH_ERROR = tr("Ошибка хэша!")
+    REPLACE_ERROR = tr("Ошибка замены!")
+    CRITICAL_ERROR = tr("Крит. ошибка!")
 
     def __str__(self) -> str:
         return self.value
@@ -60,9 +61,9 @@ class UpdateChannel(str, Enum):
     @property
     def display_name(self) -> str:
         return {
-            UpdateChannel.RELEASE: "Только релизы",
-            UpdateChannel.BETA: "Релизы и беты",
-            UpdateChannel.ALPHA: "Все (включая альфы)",
+            UpdateChannel.RELEASE: tr("Только релизы"),
+            UpdateChannel.BETA: tr("Релизы и беты"),
+            UpdateChannel.ALPHA: tr("Все (включая альфы)"),
         }[self]
 
     @classmethod

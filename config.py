@@ -10,6 +10,7 @@ from logging.handlers import RotatingFileHandler
 import platformdirs
 
 from enums import UpdateChannel
+from i18n import tr
 
 APP_NAME = "MinecraftModUpdater"
 
@@ -208,9 +209,9 @@ def import_config(path: str) -> dict:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise ValueError(f"Не удалось прочитать файл: {e}") from e
+        raise ValueError(tr('Не удалось прочитать файл: {0}', e)) from e
     if not isinstance(data, dict) or data.get("format") != EXPORT_FORMAT:
-        raise ValueError("Это не файл настроек Minecraft Mod Updater.")
+        raise ValueError(tr("Это не файл настроек Minecraft Mod Updater."))
     data.pop("format", None)
     data.pop("app_version", None)
     return _normalize(data)

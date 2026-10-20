@@ -22,22 +22,23 @@ from ui.widgets import (
     EmptyState, SearchBox, button, flex_button, label, make_action, refresh_button_icons, rounded_pixmap, style_segments,
 )
 from view_model import CATEGORY_LABELS, LOADER_CATEGORIES
+from i18n import language, tr
 
 HIT_ROLE = Qt.ItemDataRole.UserRole + 1   # индекс в CatalogPage.hits
 PAGE_SIZE = 20
-SORTS = (("relevance", "По релевантности"), ("downloads", "Популярные"), ("updated", "Недавно обновлённые"),
-         ("newest", "Новые"), ("follows", "Больше подписчиков"))
-SIDES = (("", "Любая сторона"), ("client", "Нужны на клиенте"), ("server", "Работают на сервере"))
+SORTS = (("relevance", tr("По релевантности")), ("downloads", tr("Популярные")), ("updated", tr("Недавно обновлённые")),
+         ("newest", tr("Новые")), ("follows", tr("Больше подписчиков")))
+SIDES = (("", tr("Любая сторона")), ("client", tr("Нужны на клиенте")), ("server", tr("Работают на сервере")))
 CONTENT_ICONS = {"mods": "package", "shaders": "sparkles", "resourcepacks": "image"}
-VERSION_TYPES = {"release": "релиз", "beta": "бета", "alpha": "альфа"}
-SIDE_TEXT = {"required": "нужен", "optional": "необязателен", "unsupported": "не нужен", "unknown": "?"}
+VERSION_TYPES = {"release": tr("релиз"), "beta": tr("бета"), "alpha": tr("альфа")}
+SIDE_TEXT = {"required": tr("нужен"), "optional": tr("необязателен"), "unsupported": tr("не нужен"), "unknown": "?"}
 
 
 def format_count(n: int) -> str:
     if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f} млн".replace(".", ",").replace(",0 ", " ")
+        return tr('{0:.1f} млн', n / 1_000_000).replace(".", "," if language() == "ru" else ".").replace(",0 ", " ").replace(".0", "")
     if n >= 1_000:
-        return f"{n / 1_000:.0f} тыс."
+        return tr('{0:.0f} тыс.', n / 1_000)
     return str(n)
 
 
@@ -142,7 +143,7 @@ class CatalogDelegate(QStyledItemDelegate):
             p.setPen(qcolor(t["text_faint"]))
             p.drawText(QRect(x, y, max(0, left + width - x), fm_t.height()),
                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                       fm_s.elidedText(f"от {hit['author']}", Qt.TextElideMode.ElideRight, max(0, left + width - x)))
+                       fm_s.elidedText(tr('от {0}', hit['author']), Qt.TextElideMode.ElideRight, max(0, left + width - x)))
         y += fm_t.height() + 3
         p.setFont(self.font_small)
         p.setPen(qcolor(t["text_muted"]))
@@ -177,20 +178,20 @@ class CatalogDelegate(QStyledItemDelegate):
             p.setBrush(qcolor(t["accent"], 0.12))
             p.drawRoundedRect(QRectF(btn), 9, 9)
             p.setPen(qcolor(t["accent"]))
-            p.drawText(btn, Qt.AlignmentFlag.AlignCenter, "✓ Установлен")
+            p.drawText(btn, Qt.AlignmentFlag.AlignCenter, tr("✓ Установлен"))
         elif state == "installing":
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(qcolor(t["surface3"]))
             p.drawRoundedRect(QRectF(btn), 9, 9)
             p.setPen(qcolor(t["text_muted"]))
-            p.drawText(btn, Qt.AlignmentFlag.AlignCenter, "Установка…")
+            p.drawText(btn, Qt.AlignmentFlag.AlignCenter, tr("Установка…"))
         else:
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(qcolor(t["accent_hover"] if hot else t["accent"]))
             p.drawRoundedRect(QRectF(btn), 9, 9)
             p.drawPixmap(QRect(btn.left() + 16, btn.center().y() - 8, 16, 16), icons.pixmap("download", t["accent_text"], 16))
             p.setPen(qcolor(t["accent_text"]))
-            p.drawText(btn.adjusted(26, 0, 0, 0), Qt.AlignmentFlag.AlignCenter, "Установить")
+            p.drawText(btn.adjusted(26, 0, 0, 0), Qt.AlignmentFlag.AlignCenter, tr("Установить"))
         p.restore()
 
     def _paint_icon_button(self, p: QPainter, btn: QRect, state: str, hot: bool):
@@ -210,8 +211,8 @@ class CatalogDelegate(QStyledItemDelegate):
         if hit and self.button_rect(option.rect).contains(event.pos()):
             state = self.page.install_state(hit)
             from PyQt6.QtWidgets import QToolTip
-            QToolTip.showText(event.globalPos(), {"available": "Установить", "installed": "Уже установлен",
-                                                  "installing": "Устанавливается…"}[state], view)
+            QToolTip.showText(event.globalPos(), {"available": tr("Установить"), "installed": tr("Уже установлен"),
+                                                  "installing": tr("Устанавливается…")}[state], view)
             return True
         return super().helpEvent(event, view, option, index)
 
@@ -262,7 +263,7 @@ class CatalogDetails(QFrame):
         self.layout_.setSpacing(12)
         top = QHBoxLayout()
         top.addStretch()
-        close = button("", "IconButton", "x", t, "text_muted", "Закрыть (Esc)")
+        close = button("", "IconButton", "x", t, "text_muted", tr("Закрыть (Esc)"))
         close.setFixedSize(30, 30)
         close.clicked.connect(self.closed)
         top.addWidget(close)
@@ -287,7 +288,7 @@ class CatalogDetails(QFrame):
         self.layout_.addWidget(self.summary)
 
         from ui.widgets import ElideButton
-        self.install_btn = ElideButton("Установить")
+        self.install_btn = ElideButton(tr("Установить"))
         self.install_btn.setObjectName("PrimaryButton")
         self.install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.install_btn.setProperty("icon_name", "download")
@@ -297,11 +298,11 @@ class CatalogDetails(QFrame):
         self.install_btn.clicked.connect(lambda: self.hit and self.page.install_requested.emit(self.hit))
         self.layout_.addWidget(self.install_btn)
         actions = QHBoxLayout()
-        self.page_btn = flex_button("Modrinth", None, "external", t, "text", "Открыть страницу проекта")
+        self.page_btn = flex_button("Modrinth", None, "external", t, "text", tr("Открыть страницу проекта"))
         self.page_btn.clicked.connect(lambda: self.hit and webbrowser.open(hit_url(self.hit)))
-        self.mine_btn = flex_button("В моих модах", None, "package", t, "text", "Показать установленный мод в списке")
+        self.mine_btn = flex_button(tr("В моих модах"), None, "package", t, "text", tr("Показать установленный мод в списке"))
         self.mine_btn.clicked.connect(lambda: self.hit and self.page.show_installed_requested.emit(self.hit))
-        self.similar_btn = flex_button("Похожие", None, "compass", t, "text", "Искать проекты той же категории")
+        self.similar_btn = flex_button(tr("Похожие"), None, "compass", t, "text", tr("Искать проекты той же категории"))
         self.similar_btn.clicked.connect(lambda: self.hit and self.page.show_similar(self.hit))
         for b in (self.page_btn, self.mine_btn, self.similar_btn):
             actions.addWidget(b)
@@ -312,32 +313,32 @@ class CatalogDetails(QFrame):
         self.layout_.addWidget(self.info)
 
         from ui.gallery import GalleryStrip, LinksRow
-        self.gallery_title = label("Скриншоты", "SectionTitle")
+        self.gallery_title = label(tr("Скриншоты"), "SectionTitle")
         self.gallery = GalleryStrip(page.thumb_loader, page.full_loader) if page.thumb_loader else None
         if self.gallery:
             self.gallery.set_tokens(t)
         self.layout_.addWidget(self.gallery_title)
         if self.gallery:
             self.layout_.addWidget(self.gallery)
-        self.links_title = label("Ссылки", "SectionTitle")
+        self.links_title = label(tr("Ссылки"), "SectionTitle")
         self.links = LinksRow(t)
         self.layout_.addWidget(self.links_title)
         self.layout_.addWidget(self.links)
 
-        self.deps_title = label("Зависимости", "SectionTitle")
+        self.deps_title = label(tr("Зависимости"), "SectionTitle")
         self.deps = label("", "Muted", wrap=True)
         self.deps.setTextFormat(Qt.TextFormat.RichText)
         self.layout_.addWidget(self.deps_title)
         self.layout_.addWidget(self.deps)
 
-        self.body_title = label("Описание", "SectionTitle")
+        self.body_title = label(tr("Описание"), "SectionTitle")
         self.body = QTextBrowser()
         self.body.setOpenExternalLinks(True)
         self.body.setMinimumHeight(260)
         self.layout_.addWidget(self.body_title)
         self.layout_.addWidget(self.body)
 
-        self.versions_title = label("Версии для вашей сборки", "SectionTitle")
+        self.versions_title = label(tr("Версии для вашей сборки"), "SectionTitle")
         self.versions_list = QListWidget()
         self.versions_list.setObjectName("VersionList")
         self.versions_list.setMinimumHeight(200)
@@ -345,7 +346,7 @@ class CatalogDetails(QFrame):
         self.versions_delegate = VersionDelegate(self.versions_list, t)
         self.versions_list.setItemDelegate(self.versions_delegate)
         self.versions_list.itemDoubleClicked.connect(lambda _: self._install_version())
-        self.version_btn = button("Установить выбранную версию", None, "download", t, "text")
+        self.version_btn = button(tr("Установить выбранную версию"), None, "download", t, "text")
         self.version_btn.clicked.connect(self._install_version)
         for w in (self.versions_title, self.versions_list, self.version_btn):
             self.layout_.addWidget(w)
@@ -370,24 +371,20 @@ class CatalogDetails(QFrame):
         else:
             self.icon.setPixmap(icons.pixmap("package", t["text_faint"], 30))
         self.title.setText(hit.get("title") or "")
-        self.author.setText(f"от {hit['author']}" if hit.get("author") else "")
-        self.stats.setText(f"↓ {format_count(hit.get('downloads') or 0)}   ♥ {format_count(hit.get('follows') or 0)}"
-                           f"   ·   обновлён {format_date(hit.get('date_modified'))}")
+        self.author.setText(tr('от {0}', hit['author']) if hit.get("author") else "")
+        self.stats.setText(tr('↓ {0}   ♥ {1}   ·   обновлён {2}', format_count(hit.get('downloads') or 0), format_count(hit.get('follows') or 0), format_date(hit.get('date_modified'))))
         self.summary.setText(hit.get("description") or "")
         state = self.page.install_state(hit)
         self.install_btn.setVisible(state == "available")
         self.mine_btn.setVisible(state == "installed")
         cats = [CATEGORY_LABELS.get(c, c) for c in hit.get("display_categories") or hit.get("categories") or []
                 if c not in LOADER_CATEGORIES]
-        side = (f"клиент — {SIDE_TEXT.get(hit.get('client_side'), '?')}, "
-                f"сервер — {SIDE_TEXT.get(hit.get('server_side'), '?')}")
-        self.info.setText(f"<span style='color:{t['text_faint']}'>Категории:</span> {', '.join(cats) or '—'}<br>"
-                          f"<span style='color:{t['text_faint']}'>Сторона:</span> {side}<br>"
-                          f"<span style='color:{t['text_faint']}'>Лицензия:</span> {hit.get('license') or '—'}")
+        side = (tr('клиент — {0}, сервер — {1}', SIDE_TEXT.get(hit.get('client_side'), '?'), SIDE_TEXT.get(hit.get('server_side'), '?')))
+        self.info.setText(tr("<span style='color:{0}'>Категории:</span> {1}<br><span style='color:{2}'>Сторона:</span> {3}<br><span style='color:{4}'>Лицензия:</span> {5}", t['text_faint'], ', '.join(cats) or '—', t['text_faint'], side, t['text_faint'], hit.get('license') or '—'))
         if same:
             return
-        self.body.setMarkdown("_Загружаем описание…_")
-        self.deps.setText("Загружаем…")
+        self.body.setMarkdown(tr("_Загружаем описание…_"))
+        self.deps.setText(tr("Загружаем…"))
         for w in (self.gallery_title, self.links_title, self.links):
             w.hide()
         if self.gallery:
@@ -395,11 +392,11 @@ class CatalogDetails(QFrame):
         self.versions_list.clear()
         pid = hit.get("project_id")
         self.page.run_task(get_project, (pid,), lambda project: self._on_project(pid, project, demote_headings),
-                           lambda e: self.body.setMarkdown(f"_Не удалось загрузить описание: {e}_"), None)
+                           lambda e: self.body.setMarkdown(tr('_Не удалось загрузить описание: {0}_', e)), None)
         loaders = self.page.content.loaders(self.page.loader) if self.page.content is MODS else None
         self.page.run_task(get_all_versions, (pid, self.page.game_version, loaders),
                            lambda versions: self._on_versions(pid, versions),
-                           lambda e: self.deps.setText(f"Не удалось загрузить версии: {e}"), None)
+                           lambda e: self.deps.setText(tr('Не удалось загрузить версии: {0}', e)), None)
 
     def _on_project(self, pid: str, project: Dict, demote):
         if not self.hit or self.hit.get("project_id") != pid:
@@ -427,15 +424,15 @@ class CatalogDetails(QFrame):
             item.setData(INSTALLED_ROLE, bool(installed_version) and v.get("version_number") == installed_version)
             self.versions_list.addItem(item)
         if not versions:
-            self.versions_list.addItem("Нет версий для этой версии игры и загрузчика")
+            self.versions_list.addItem(tr("Нет версий для этой версии игры и загрузчика"))
             self.install_btn.setEnabled(False)
-            self.install_btn.setText("Нет версии для вашей сборки")
+            self.install_btn.setText(tr("Нет версии для вашей сборки"))
         else:
             self.install_btn.setEnabled(True)
-            self.install_btn.setText(f"Установить {versions[0].get('version_number')}")
+            self.install_btn.setText(tr('Установить {0}', versions[0].get('version_number')))
         deps = [d for d in (versions[0].get("dependencies") if versions else []) or [] if d.get("project_id")]
         if not deps:
-            self.deps.setText("Не нужны.")
+            self.deps.setText(tr("Не нужны."))
             return
         installed = self.page.installed.get(self.page.content.key, set())
         self.page.run_task(get_projects_info_from_ids, ([d["project_id"] for d in deps],),
@@ -445,13 +442,13 @@ class CatalogDetails(QFrame):
         if not self.hit or self.hit.get("project_id") != pid:
             return
         t = self.page.tokens
-        kinds = {"required": "обязательная", "optional": "необязательная", "incompatible": "несовместима",
-                 "embedded": "встроена"}
+        kinds = {"required": tr("обязательная"), "optional": tr("необязательная"), "incompatible": tr("несовместима"),
+                 "embedded": tr("встроена")}
         lines = []
         for dep in deps:
             name = (infos.get(dep["project_id"]) or {}).get("title") or dep["project_id"]
-            mark = (f"<span style='color:{t['accent']}'>✓ установлена</span>" if dep["project_id"] in installed else
-                    f"<span style='color:{t['info']}'>поставится сама</span>" if dep.get("dependency_type") == "required"
+            mark = (tr("<span style='color:{0}'>✓ установлена</span>", t['accent']) if dep["project_id"] in installed else
+                    tr("<span style='color:{0}'>поставится сама</span>", t['info']) if dep.get("dependency_type") == "required"
                     else "")
             lines.append(f"• <b>{name}</b> — {kinds.get(dep.get('dependency_type'), '')} {mark}")
         self.deps.setText("<br>".join(lines))
@@ -496,7 +493,7 @@ class CatalogPage(QWidget):
         root.setSpacing(12)
         head = QVBoxLayout()
         head.setSpacing(4)
-        head.addWidget(label("Каталог", "PageTitle"))
+        head.addWidget(label(tr("Каталог"), "PageTitle"))
         self.context_label = label("", "PageSubtitle", wrap=True)
         head.addWidget(self.context_label)
         root.addLayout(head)
@@ -516,7 +513,7 @@ class CatalogPage(QWidget):
 
         toolbar = QHBoxLayout()
         toolbar.setSpacing(10)
-        self.search = SearchBox(tokens, "Найти на Modrinth: название, описание…")
+        self.search = SearchBox(tokens, tr("Найти на Modrinth: название, описание…"))
         self.search.setMinimumHeight(36)
         self._timer = QTimer(self, singleShot=True, interval=350)
         self._timer.timeout.connect(self.refresh)
@@ -535,17 +532,17 @@ class CatalogPage(QWidget):
         filters.setSpacing(10)
         self.category_combo = QComboBox()
         self.category_combo.setMinimumHeight(32)
-        self.category_combo.addItem("Все категории", None)
+        self.category_combo.addItem(tr("Все категории"), None)
         self.category_combo.currentIndexChanged.connect(self.refresh)
         self.side_combo = QComboBox()
         self.side_combo.setMinimumHeight(32)
         for key, title in SIDES:
             self.side_combo.addItem(title, key)
         self.side_combo.currentIndexChanged.connect(self.refresh)
-        self.compatible = QCheckBox("Только для моей версии игры")
+        self.compatible = QCheckBox(tr("Только для моей версии игры"))
         self.compatible.setChecked(True)
         self.compatible.toggled.connect(self.refresh)
-        self.hide_installed = QCheckBox("Скрыть установленные")
+        self.hide_installed = QCheckBox(tr("Скрыть установленные"))
         self.hide_installed.toggled.connect(self._apply_hidden)
         for w in (self.category_combo, self.side_combo, self.compatible, self.hide_installed):
             filters.addWidget(w)
@@ -587,9 +584,9 @@ class CatalogPage(QWidget):
         self.selection_label.setStyleSheet("font-weight: 700; background: transparent;")
         bar.addWidget(self.selection_label)
         bar.addStretch()
-        self.install_checked_btn = button("Установить", "PrimaryButton", "download", tokens, "accent_text")
+        self.install_checked_btn = button(tr("Установить"), "PrimaryButton", "download", tokens, "accent_text")
         self.install_checked_btn.clicked.connect(self._install_checked)
-        clear = button("Снять выделение", "GhostButton", "x", tokens, "text_muted")
+        clear = button(tr("Снять выделение"), "GhostButton", "x", tokens, "text_muted")
         clear.clicked.connect(self.clear_checked)
         bar.addWidget(self.install_checked_btn)
         bar.addWidget(clear)
@@ -620,8 +617,7 @@ class CatalogPage(QWidget):
         self.game_version, self.loader, self.installed = game_version, loader, installed
         loader_title = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge", "quilt": "Quilt"}.get(loader, loader)
         filters = f"Minecraft {game_version or '?'}" + (f" · {loader_title}" if self.content is MODS and loader else "")
-        self.context_label.setText(f"Моды, шейдеры и ресурспаки с Modrinth для текущей сборки: {filters}. "
-                                   "Обязательные зависимости ставятся автоматически.")
+        self.context_label.setText(tr('Моды, шейдеры и ресурспаки с Modrinth для текущей сборки: {0}. Обязательные зависимости ставятся автоматически.', filters))
         if changed and self.isVisible():
             self.refresh()
         self._apply_hidden()
@@ -674,8 +670,8 @@ class CatalogPage(QWidget):
     def _refresh_selection(self):
         count = len(self.checked)
         self.selection_bar.setVisible(count > 0)
-        self.selection_label.setText(f"Выбрано: {count}")
-        self.install_checked_btn.setText(f"Установить ({count})")
+        self.selection_label.setText(tr('Выбрано: {0}', count))
+        self.install_checked_btn.setText(tr('Установить ({0})', count))
 
     def _install_checked(self):
         if self.checked:
@@ -728,18 +724,18 @@ class CatalogPage(QWidget):
         t = self.tokens
         menu = QMenu(self)
         if self.install_state(hit) == "available":
-            menu.addAction(make_action(menu, t, "download", "Установить", lambda: self.install_requested.emit(hit), "accent"))
+            menu.addAction(make_action(menu, t, "download", tr("Установить"), lambda: self.install_requested.emit(hit), "accent"))
             checked = hit.get("project_id") in self.checked
-            menu.addAction(make_action(menu, t, "check", "Снять отметку" if checked else "Отметить для установки",
+            menu.addAction(make_action(menu, t, "check", tr("Снять отметку") if checked else tr("Отметить для установки"),
                                        lambda: self.toggle_checked(hit)))
         else:
-            menu.addAction(make_action(menu, t, "package", "Показать в моих модах",
+            menu.addAction(make_action(menu, t, "package", tr("Показать в моих модах"),
                                        lambda: self.show_installed_requested.emit(hit)))
-        menu.addAction(make_action(menu, t, "info", "Подробнее", lambda: self.list.setCurrentItem(item)))
-        menu.addAction(make_action(menu, t, "compass", "Похожие проекты", lambda: self.show_similar(hit)))
+        menu.addAction(make_action(menu, t, "info", tr("Подробнее"), lambda: self.list.setCurrentItem(item)))
+        menu.addAction(make_action(menu, t, "compass", tr("Похожие проекты"), lambda: self.show_similar(hit)))
         menu.addSeparator()
-        menu.addAction(make_action(menu, t, "external", "Открыть на Modrinth", lambda: webbrowser.open(hit_url(hit))))
-        menu.addAction(make_action(menu, t, "copy", "Копировать ссылку",
+        menu.addAction(make_action(menu, t, "external", tr("Открыть на Modrinth"), lambda: webbrowser.open(hit_url(hit))))
+        menu.addAction(make_action(menu, t, "copy", tr("Копировать ссылку"),
                                    lambda: QGuiApplication.clipboard().setText(hit_url(hit))))
         menu.exec(self.list.viewport().mapToGlobal(pos))
 
@@ -779,7 +775,7 @@ class CatalogPage(QWidget):
         current = self.category_combo.currentData()
         self.category_combo.blockSignals(True)
         self.category_combo.clear()
-        self.category_combo.addItem("Все категории", None)
+        self.category_combo.addItem(tr("Все категории"), None)
         names = sorted({c["name"] for c in categories if c.get("header") in ("categories", "features", "style", None)},
                        key=lambda n: CATEGORY_LABELS.get(n, n))
         for name in names:
@@ -814,11 +810,11 @@ class CatalogPage(QWidget):
 
     def _search(self, offset: int):
         if not self.game_version and self.compatible.isChecked():
-            self._show_empty("alert", "Не указана версия игры", "Выберите сборку с известной версией Minecraft.")
+            self._show_empty("alert", tr("Не указана версия игры"), tr("Выберите сборку с известной версией Minecraft."))
             return
         request = self._request
         self._loading = True
-        self.status.setText("Ищем на Modrinth…")
+        self.status.setText(tr("Ищем на Modrinth…"))
         compatible = self.compatible.isChecked()
         loaders = self.content.loaders(self.loader) if self.content is MODS and compatible else None
         category = self.category_combo.currentData()
@@ -841,11 +837,11 @@ class CatalogPage(QWidget):
             self.list.addItem(item)
         self._apply_hidden()
         if not self.hits:
-            self._show_empty("search", "Ничего не найдено", "Попробуйте другой запрос или уберите фильтры.")
+            self._show_empty("search", tr("Ничего не найдено"), tr("Попробуйте другой запрос или уберите фильтры."))
         else:
             self.stack.setCurrentIndex(0)
-        self.status.setText(f"Найдено: {format_count(self.total)}  ·  показано {len(self.hits)}"
-                            + ("  ·  Пробел — отметить, Enter — подробнее" if self.hits else ""))
+        self.status.setText(tr('Найдено: {0}  ·  показано {1}', format_count(self.total), len(self.hits))
+                            + (tr("  ·  Пробел — отметить, Enter — подробнее") if self.hits else ""))
         # Если скрытые установленные «съели» всю страницу — подгружаем следующую
         if self.hide_installed.isChecked() and len(self.hits) < self.total and \
                 all(self.list.item(i).isHidden() for i in range(self.list.count())):
@@ -863,7 +859,7 @@ class CatalogPage(QWidget):
             return
         self._loading = False
         self.status.setText("")
-        self._show_empty("error", "Не удалось выполнить поиск", f"Проверьте подключение к интернету.\n{error}")
+        self._show_empty("error", tr("Не удалось выполнить поиск"), tr('Проверьте подключение к интернету.\n{0}', error))
 
     def _show_empty(self, icon_name: str, title: str, text: str):
         self.empty.set_content(self.tokens, icon_name, title, text)

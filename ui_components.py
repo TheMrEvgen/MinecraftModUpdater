@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
 )
 from PyQt6.QtCore import Qt
+from i18n import tr
 
 class DialogTitleBar(QWidget):
     """Пользовательский заголовок для диалоговых окон."""
@@ -113,7 +114,7 @@ class CustomMessageBox(QDialog):
 def show_message(parent, icon, title: str, text: str) -> None:
     """Информационное окно с одной кнопкой «ОК»."""
     box = CustomMessageBox(icon, title, text, parent)
-    box.setDefaultButton(box.addButton("ОК", QMessageBox.ButtonRole.AcceptRole))
+    box.setDefaultButton(box.addButton(tr("ОК"), QMessageBox.ButtonRole.AcceptRole))
     box.exec()
 
 
@@ -140,14 +141,14 @@ def ask_choice(parent, icon, title: str, text: str, buttons: list, default: int 
     return created.index(clicked) if clicked in created else None
 
 
-def confirm(parent, title: str, text: str, yes_text: str = "Да", no_text: str = "Нет") -> bool:
+def confirm(parent, title: str, text: str, yes_text: str = tr("Да"), no_text: str = tr("Нет")) -> bool:
     return ask_choice(parent, QMessageBox.Icon.Question, title, text, [yes_text, no_text], default=1) == 0
 
 class ImportDialog(QDialog):
     """Диалоговое окно для ввода и импорта строки со списком модов."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Импортировать список модов")
+        self.setWindowTitle(tr("Импортировать список модов"))
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setObjectName("DialogFrame")
         self.setMinimumWidth(500)
@@ -163,14 +164,14 @@ class ImportDialog(QDialog):
         layout = QVBoxLayout(content_widget)
         main_layout.addWidget(content_widget)
         
-        info_label = QLabel("Вставьте сюда строку, полученную от друга:")
+        info_label = QLabel(tr("Вставьте сюда строку, полученную от друга:"))
         layout.addWidget(info_label)
 
         self.import_text_edit = QLineEdit()
-        self.import_text_edit.setPlaceholderText("Вставьте строку здесь...")
+        self.import_text_edit.setPlaceholderText(tr("Вставьте строку здесь..."))
         layout.addWidget(self.import_text_edit)
 
-        import_button = QPushButton("Импортировать")
+        import_button = QPushButton(tr("Импортировать"))
         import_button.clicked.connect(self.accept) # accept() closes the dialog with a "Accepted" result
         layout.addWidget(import_button)
 
@@ -181,7 +182,7 @@ class ShareDialog(QDialog):
     """Диалоговое окно для отображения и копирования строки для обмена модами."""
     def __init__(self, share_string, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Поделиться списком модов")
+        self.setWindowTitle(tr("Поделиться списком модов"))
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setObjectName("DialogFrame")
         self.setMinimumWidth(500)
@@ -197,26 +198,26 @@ class ShareDialog(QDialog):
         layout = QVBoxLayout(content_widget)
         main_layout.addWidget(content_widget)
         
-        info_label = QLabel("Скопируйте эту строку и отправьте другу.\nОн сможет загрузить её через «Управление сборкой → Импортировать список».")
+        info_label = QLabel(tr("Скопируйте эту строку и отправьте другу.\nОн сможет загрузить её через «Управление сборкой → Импортировать список»."))
         layout.addWidget(info_label)
 
         self.share_text_edit = QLineEdit(share_string)
         self.share_text_edit.setReadOnly(True)
         layout.addWidget(self.share_text_edit)
 
-        copy_button = QPushButton("Скопировать в буфер обмена")
+        copy_button = QPushButton(tr("Скопировать в буфер обмена"))
         copy_button.clicked.connect(self.copy_to_clipboard)
         layout.addWidget(copy_button)
 
     def copy_to_clipboard(self):
         QApplication.clipboard().setText(self.share_text_edit.text())
-        show_message(self, QMessageBox.Icon.Information, "Скопировано", "Строка скопирована в буфер обмена!")
+        show_message(self, QMessageBox.Icon.Information, tr("Скопировано"), tr("Строка скопирована в буфер обмена!"))
 
 class VersionPickerDialog(QDialog):
     """Диалоговое окно для выбора конкретной версии мода (Даунгрейд/Откат)."""
     def __init__(self, versions, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Выбор версии")
+        self.setWindowTitle(tr("Выбор версии"))
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setObjectName("DialogFrame")
         self.setMinimumSize(600, 400)
@@ -233,7 +234,7 @@ class VersionPickerDialog(QDialog):
 
         self.table = QTableWidget()
         self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Версия", "Тип", "Дата выхода"])
+        self.table.setHorizontalHeaderLabels([tr("Версия"), tr("Тип"), tr("Дата выхода")])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -250,9 +251,9 @@ class VersionPickerDialog(QDialog):
             self.table.setItem(i, 2, QTableWidgetItem(date_str))
 
         btn_layout = QHBoxLayout()
-        ok_btn = QPushButton("Выбрать")
+        ok_btn = QPushButton(tr("Выбрать"))
         ok_btn.clicked.connect(self.on_accept)
-        cancel_btn = QPushButton("Отмена")
+        cancel_btn = QPushButton(tr("Отмена"))
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
@@ -269,7 +270,7 @@ class SyncDialog(QDialog):
     """Диалог для ввода URL синхронизации с сервером."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Синхронизация по URL")
+        self.setWindowTitle(tr("Синхронизация по URL"))
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setObjectName("DialogFrame")
         self.setMinimumWidth(500)
@@ -279,14 +280,14 @@ class SyncDialog(QDialog):
         content = QWidget()
         layout = QVBoxLayout(content)
         main_layout.addWidget(content)
-        layout.addWidget(QLabel("Введите URL к файлу конфигурации сборки сервера (JSON):"))
+        layout.addWidget(QLabel(tr("Введите URL к файлу конфигурации сборки сервера (JSON):")))
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("https://example.com/modpack.json")
         layout.addWidget(self.url_input)
         btn_layout = QHBoxLayout()
-        ok_btn = QPushButton("Синхронизировать")
+        ok_btn = QPushButton(tr("Синхронизировать"))
         ok_btn.clicked.connect(self.accept)
-        cancel_btn = QPushButton("Отмена")
+        cancel_btn = QPushButton(tr("Отмена"))
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addStretch()
         btn_layout.addWidget(ok_btn)
@@ -297,9 +298,9 @@ class SyncDialog(QDialog):
         return self.url_input.text().strip()
 
 
-PROFILE_ICONS = (("", "Точка"), ("package", "Коробка"), ("layers", "Слои"), ("flame", "Огонь"),
-                 ("shield", "Щит"), ("star", "Звезда"), ("heart", "Сердце"), ("compass", "Компас"),
-                 ("code", "Код"), ("sparkles", "Искры"), ("globe", "Глобус"))
+PROFILE_ICONS = (("", tr("Точка")), ("package", tr("Коробка")), ("layers", tr("Слои")), ("flame", tr("Огонь")),
+                 ("shield", tr("Щит")), ("star", tr("Звезда")), ("heart", tr("Сердце")), ("compass", tr("Компас")),
+                 ("code", tr("Код")), ("sparkles", tr("Искры")), ("globe", tr("Глобус")))
 
 
 class ProfileDialog(QDialog):
@@ -310,7 +311,7 @@ class ProfileDialog(QDialog):
     def __init__(self, parent=None, name: str = "", profile: dict | None = None, existing_names=(), channels=(),
                  groups=()):
         super().__init__(parent)
-        self.setWindowTitle("Изменить сборку" if name else "Новая сборка")
+        self.setWindowTitle(tr("Изменить сборку") if name else tr("Новая сборка"))
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setObjectName("DialogFrame")
         self.setMinimumWidth(580)
@@ -331,35 +332,35 @@ class ProfileDialog(QDialog):
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
         self.name_edit = QLineEdit(name)
-        self.name_edit.setPlaceholderText("Например: Выживание с друзьями")
-        form.addRow("Название", self.name_edit)
+        self.name_edit.setPlaceholderText(tr("Например: Выживание с друзьями"))
+        form.addRow(tr("Название"), self.name_edit)
 
         path_row = QHBoxLayout()
         self.path_edit = QLineEdit(self.profile.get("mods_path", ""))
-        self.path_edit.setPlaceholderText("Папка игры, внутри которой лежит папка mods")
-        browse = QPushButton("Обзор…")
+        self.path_edit.setPlaceholderText(tr("Папка игры, внутри которой лежит папка mods"))
+        browse = QPushButton(tr("Обзор…"))
         browse.clicked.connect(self._browse)
         path_row.addWidget(self.path_edit, 1)
         path_row.addWidget(browse)
-        form.addRow("Папка игры", path_row)
+        form.addRow(tr("Папка игры"), path_row)
         self.path_status = QLabel()
         self.path_status.setObjectName("Faint")
         form.addRow("", self.path_status)
 
-        self.manual = QCheckBox("Указать версию игры и загрузчик вручную")
+        self.manual = QCheckBox(tr("Указать версию игры и загрузчик вручную"))
         self.manual.setChecked(bool(self.profile.get("manual_mode")))
         form.addRow("", self.manual)
         self.version_combo = QComboBox()
         self.version_combo.setEditable(True)
         self.loader_combo = QComboBox()
         self.loader_combo.addItems(self.LOADERS)
-        form.addRow("Версия игры", self.version_combo)
-        form.addRow("Загрузчик", self.loader_combo)
+        form.addRow(tr("Версия игры"), self.version_combo)
+        form.addRow(tr("Загрузчик"), self.loader_combo)
         self.channel_combo = QComboBox()
         for value, title in channels:
             self.channel_combo.addItem(title, value)
         self.channel_combo.setCurrentIndex(max(0, self.channel_combo.findData(self.profile.get("channel"))))
-        form.addRow("Обновления", self.channel_combo)
+        form.addRow(tr("Обновления"), self.channel_combo)
 
         # Оформление сборки в боковой панели: группа, цвет, значок
         from theme import ACCENTS
@@ -368,25 +369,25 @@ class ProfileDialog(QDialog):
         self.group_combo.addItem("")
         self.group_combo.addItems(sorted(g for g in set(groups) if g))
         self.group_combo.setCurrentText(self.profile.get("group") or "")
-        self.group_combo.lineEdit().setPlaceholderText("Без группы — например, «Серверы»")
-        form.addRow("Группа", self.group_combo)
+        self.group_combo.lineEdit().setPlaceholderText(tr("Без группы — например, «Серверы»"))
+        form.addRow(tr("Группа"), self.group_combo)
         self.color_combo = QComboBox()
-        self.color_combo.addItem("Как у темы", "")
+        self.color_combo.addItem(tr("Как у темы"), "")
         for key, (title, dark, _light) in ACCENTS.items():
             self.color_combo.addItem(title, dark)
         index = self.color_combo.findData(self.profile.get("color") or "")
         self.color_combo.setCurrentIndex(max(0, index))
-        form.addRow("Цвет", self.color_combo)
+        form.addRow(tr("Цвет"), self.color_combo)
         self.icon_combo = QComboBox()
         for key, title in PROFILE_ICONS:
             self.icon_combo.addItem(title, key)
         self.icon_combo.setCurrentIndex(max(0, self.icon_combo.findData(self.profile.get("icon") or "")))
-        form.addRow("Значок", self.icon_combo)
+        form.addRow(tr("Значок"), self.icon_combo)
         self.launch_edit = QLineEdit(self.profile.get("launch_command") or "")
-        self.launch_edit.setPlaceholderText("Необязательно: своя команда для кнопки «Играть»")
-        self.launch_edit.setToolTip("Prism, MultiMC и официальный лаунчер находятся сами. Здесь можно указать свою "
-                                    'команду, например: "C:\\Games\\launcher.exe" --profile Survival')
-        form.addRow("Запуск игры", self.launch_edit)
+        self.launch_edit.setPlaceholderText(tr("Необязательно: своя команда для кнопки «Играть»"))
+        self.launch_edit.setToolTip(tr("Prism, MultiMC и официальный лаунчер находятся сами. Здесь можно указать свою "
+                                    'команду, например: "C:\\Games\\launcher.exe" --profile Survival'))
+        form.addRow(tr("Запуск игры"), self.launch_edit)
         layout.addLayout(form)
 
         self.error_label = QLabel()
@@ -396,9 +397,9 @@ class ProfileDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch()
-        cancel = QPushButton("Отмена")
+        cancel = QPushButton(tr("Отмена"))
         cancel.clicked.connect(self.reject)
-        ok = QPushButton("Сохранить")
+        ok = QPushButton(tr("Сохранить"))
         ok.setObjectName("PrimaryButton")
         ok.setDefault(True)
         ok.clicked.connect(self._accept)
@@ -416,7 +417,7 @@ class ProfileDialog(QDialog):
         self._sync_enabled()
 
     def _browse(self):
-        path = QFileDialog.getExistingDirectory(self, "Папка игры (где находится папка mods)", self.path_edit.text())
+        path = QFileDialog.getExistingDirectory(self, tr("Папка игры (где находится папка mods)"), self.path_edit.text())
         if path:
             self.path_edit.setText(path)
 
@@ -427,11 +428,11 @@ class ProfileDialog(QDialog):
             self.path_status.setText("")
         elif os.path.isdir(mods_dir):
             count = len([f for f in os.listdir(mods_dir) if f.lower().endswith(".jar")])
-            self.path_status.setText(f"✓ Папка mods найдена, модов: {count}")
+            self.path_status.setText(tr('✓ Папка mods найдена, модов: {0}', count))
         elif os.path.isdir(path):
-            self.path_status.setText("Папки mods нет — она будет создана при первой установке")
+            self.path_status.setText(tr("Папки mods нет — она будет создана при первой установке"))
         else:
-            self.path_status.setText("⚠ Папка не существует")
+            self.path_status.setText(tr("⚠ Папка не существует"))
         detected = detect_game_versions(path) if path and os.path.isdir(path) else None
         current = self.version_combo.currentText()
         self.version_combo.clear()
@@ -453,13 +454,13 @@ class ProfileDialog(QDialog):
         path = self.path_edit.text().strip()
         error = None
         if not name:
-            error = "Введите название сборки."
+            error = tr("Введите название сборки.")
         elif name in self.existing_names:
-            error = "Сборка с таким названием уже есть."
+            error = tr("Сборка с таким названием уже есть.")
         elif not path or not os.path.isdir(path):
-            error = "Укажите существующую папку игры."
+            error = tr("Укажите существующую папку игры.")
         elif self.manual.isChecked() and not self.version_combo.currentText().strip():
-            error = "Укажите версию игры."
+            error = tr("Укажите версию игры.")
         if error:
             self.error_label.setText(error)
             self.error_label.show()

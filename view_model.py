@@ -11,6 +11,7 @@ from typing import Dict, Iterable, Iterator, List, Optional
 
 from content import enabled_name
 from enums import ModStatus
+from i18n import language, tr
 
 # Категории = фильтры (карточки-сводки над списком)
 CAT_ALL = "all"
@@ -25,24 +26,24 @@ PROBLEM_STATUSES = (ModStatus.REQUIRED, ModStatus.INCOMPATIBLE, ModStatus.VERSIO
 
 # Короткие подписи статусов и цветовая роль (ключ токена темы)
 STATUS_STYLE: Dict[ModStatus, tuple] = {
-    ModStatus.NOT_CHECKED: ("Не проверено", "text_faint"),
-    ModStatus.UP_TO_DATE: ("Актуально", "text_muted"),
-    ModStatus.UPDATE_AVAILABLE: ("Обновление", "accent"),
-    ModStatus.READY_TO_INSTALL: ("К установке", "info"),
-    ModStatus.NOT_FOUND: ("Не на Modrinth", "text_faint"),
-    ModStatus.REQUIRED: ("Не установлен", "warning"),
-    ModStatus.OPTIONAL: ("Опционально", "text_muted"),
-    ModStatus.INCOMPATIBLE: ("Несовместим", "danger"),
-    ModStatus.VERSION_CONFLICT: ("Конфликт версий", "danger"),
-    ModStatus.DOWNLOADING: ("Скачивание", "info"),
-    ModStatus.FINISHING: ("Установка…", "info"),
-    ModStatus.UPDATED: ("Обновлено", "success"),
-    ModStatus.INSTALLED: ("Установлено", "success"),
-    ModStatus.CANCELLED: ("Отменено", "text_muted"),
-    ModStatus.DOWNLOAD_ERROR: ("Ошибка загрузки", "danger"),
-    ModStatus.HASH_ERROR: ("Ошибка хэша", "danger"),
-    ModStatus.REPLACE_ERROR: ("Ошибка замены", "danger"),
-    ModStatus.CRITICAL_ERROR: ("Ошибка", "danger"),
+    ModStatus.NOT_CHECKED: (tr("Не проверено"), "text_faint"),
+    ModStatus.UP_TO_DATE: (tr("Актуально"), "text_muted"),
+    ModStatus.UPDATE_AVAILABLE: (tr("Обновление"), "accent"),
+    ModStatus.READY_TO_INSTALL: (tr("К установке"), "info"),
+    ModStatus.NOT_FOUND: (tr("Не на Modrinth"), "text_faint"),
+    ModStatus.REQUIRED: (tr("Не установлен"), "warning"),
+    ModStatus.OPTIONAL: (tr("Опционально"), "text_muted"),
+    ModStatus.INCOMPATIBLE: (tr("Несовместим"), "danger"),
+    ModStatus.VERSION_CONFLICT: (tr("Конфликт версий"), "danger"),
+    ModStatus.DOWNLOADING: (tr("Скачивание"), "info"),
+    ModStatus.FINISHING: (tr("Установка…"), "info"),
+    ModStatus.UPDATED: (tr("Обновлено"), "success"),
+    ModStatus.INSTALLED: (tr("Установлено"), "success"),
+    ModStatus.CANCELLED: (tr("Отменено"), "text_muted"),
+    ModStatus.DOWNLOAD_ERROR: (tr("Ошибка загрузки"), "danger"),
+    ModStatus.HASH_ERROR: (tr("Ошибка хэша"), "danger"),
+    ModStatus.REPLACE_ERROR: (tr("Ошибка замены"), "danger"),
+    ModStatus.CRITICAL_ERROR: (tr("Ошибка"), "danger"),
 }
 
 
@@ -57,9 +58,9 @@ def status_of(entry: Dict) -> ModStatus:
 def status_style(entry: Dict) -> tuple:
     status = status_of(entry)
     if entry.get("disabled") and status not in (ModStatus.DOWNLOADING, ModStatus.FINISHING):
-        return "Выключен", "text_faint"
+        return tr("Выключен"), "text_faint"
     if entry.get("_pinned") and status == ModStatus.UPDATE_AVAILABLE:
-        return "Закреплён", "text_muted"
+        return tr("Закреплён"), "text_muted"
     return STATUS_STYLE.get(status, (str(entry.get("status") or ""), "text_muted"))
 
 
@@ -148,8 +149,8 @@ def find_known_conflicts(items: Iterable[Dict]) -> Dict[int, List[str]]:
     result: Dict[int, List[str]] = defaultdict(list)
     for a, b in KNOWN_CONFLICTS:
         if a in present and b in present and present[a] is not present[b]:
-            result[id(present[a])].append(f"несовместим с {present[b].get('name')}")
-            result[id(present[b])].append(f"несовместим с {present[a].get('name')}")
+            result[id(present[a])].append(tr('несовместим с {0}', present[b].get('name')))
+            result[id(present[b])].append(tr('несовместим с {0}', present[a].get('name')))
     return result
 
 
@@ -158,7 +159,7 @@ VIEW_FLAT = "flat"   # Все моды и зависимости одним сп
 VIEW_MINE = "mine"   # Только установленные моды — без недостающих зависимостей
 VIEW_TREE = "tree"   # Моды с раскрывающимися зависимостями
 VIEW_MODES = (VIEW_FLAT, VIEW_MINE, VIEW_TREE)
-DEP_TYPE_LABELS = {"required": "обязательная", "optional": "необязательная", "incompatible": "несовместимая"}
+DEP_TYPE_LABELS = {"required": tr("обязательная"), "optional": tr("необязательная"), "incompatible": tr("несовместимая")}
 
 
 def build_rows(mods_data: List[Dict], mode: str = VIEW_FLAT) -> tuple[List[tuple], List[Dict]]:
@@ -198,19 +199,19 @@ def entry_issues(entry: Dict) -> List[str]:
     """Проблемы мода: недостающие обязательные и установленные несовместимые зависимости."""
     issues = []
     if entry.get("duplicate_of"):
-        issues.append(f"лишняя копия — основной файл {entry['duplicate_of']}")
+        issues.append(tr('лишняя копия — основной файл {0}', entry['duplicate_of']))
     elif entry.get("duplicates"):
-        issues.append(f"дубликат: {', '.join(entry['duplicates'])}")
+        issues.append(tr('дубликат: {0}', ', '.join(entry['duplicates'])))
     if entry.get("disabled"):
         return issues  # Выключенный мод не загружается — его зависимости не важны
     for dep in entry.get("dependencies", []):
         status = status_of(dep)
         if status == ModStatus.REQUIRED and not dep.get("filepath"):
-            issues.append(f"нужен {dep.get('name')}")
+            issues.append(tr('нужен {0}', dep.get('name')))
         elif status == ModStatus.INCOMPATIBLE:
-            issues.append(f"несовместим с {dep.get('name')}")
+            issues.append(tr('несовместим с {0}', dep.get('name')))
         elif status == ModStatus.VERSION_CONFLICT:
-            issues.append(f"конфликт версий {dep.get('name')}")
+            issues.append(tr('конфликт версий {0}', dep.get('name')))
     return issues
 
 
@@ -251,11 +252,11 @@ def _subtitle(entry: Dict) -> tuple[str, Optional[str]]:
         text = ", ".join(entry["_issues"])
         return "⚠ " + text[:1].upper() + text[1:], "warning"
     if status_of(entry) == ModStatus.REQUIRED and entry.get("_required_by"):
-        return "Нужен для: " + ", ".join(entry["_required_by"]), "warning"
+        return tr("Нужен для: ") + ", ".join(entry["_required_by"]), "warning"
     if entry.get("description"):
         return entry["description"], None
     if entry.get("_required_by"):
-        return "Зависимость для: " + ", ".join(entry["_required_by"]), None
+        return tr("Зависимость для: ") + ", ".join(entry["_required_by"]), None
     path = entry.get("filepath") or entry.get("new_filename") or ""
     return path.replace("\\", "/").rsplit("/", 1)[-1], None
 
@@ -269,8 +270,8 @@ def search_text(entry: Dict, custom_tags: Optional[Dict[str, List[str]]] = None)
 
 # --- Группы (заголовки в списке при сортировке «Сначала важные») ---
 
-GROUPS = (("problems", "Проблемы"), ("updates", "Обновления"), ("install", "К установке"), ("ok", "Актуальные"),
-          ("not_found", "Нет на Modrinth"), ("disabled", "Выключенные"))
+GROUPS = (("problems", tr("Проблемы")), ("updates", tr("Обновления")), ("install", tr("К установке")), ("ok", tr("Актуальные")),
+          ("not_found", tr("Нет на Modrinth")), ("disabled", tr("Выключенные")))
 GROUP_TITLES = dict(GROUPS)
 _GROUP_ORDER = {key: i for i, (key, _) in enumerate(GROUPS)}
 
@@ -301,9 +302,9 @@ def update_date(entry: Dict) -> str:
 
 
 def format_size(size: float) -> str:
-    for unit in ("Б", "КБ", "МБ", "ГБ"):
-        if size < 1024 or unit == "ГБ":
-            return f"{size:.0f} {unit}" if unit in ("Б", "КБ") else f"{size:.1f} {unit}".replace(".", ",")
+    for unit in (tr("Б"), tr("КБ"), tr("МБ"), tr("ГБ")):
+        if size < 1024 or unit == tr("ГБ"):
+            return f"{size:.0f} {unit}" if unit in (tr("Б"), tr("КБ")) else f"{size:.1f} {unit}".replace(".", "," if language() == "ru" else ".")
         size /= 1024
     return ""
 
@@ -311,20 +312,20 @@ def format_size(size: float) -> str:
 # --- Метки ---
 
 CATEGORY_LABELS = {
-    "adventure": "приключения", "cursed": "необычное", "decoration": "декор", "economy": "экономика",
-    "equipment": "снаряжение", "food": "еда", "game-mechanics": "механики", "library": "библиотека",
-    "magic": "магия", "management": "управление", "minigame": "мини-игры", "mobs": "мобы",
-    "optimization": "оптимизация", "social": "общение", "storage": "хранение", "technology": "технологии",
-    "transportation": "транспорт", "utility": "утилиты", "worldgen": "генерация мира",
+    "adventure": tr("приключения"), "cursed": tr("необычное"), "decoration": tr("декор"), "economy": tr("экономика"),
+    "equipment": tr("снаряжение"), "food": tr("еда"), "game-mechanics": tr("механики"), "library": tr("библиотека"),
+    "magic": tr("магия"), "management": tr("управление"), "minigame": tr("мини-игры"), "mobs": tr("мобы"),
+    "optimization": tr("оптимизация"), "social": tr("общение"), "storage": tr("хранение"), "technology": tr("технологии"),
+    "transportation": tr("транспорт"), "utility": tr("утилиты"), "worldgen": tr("генерация мира"),
     # Шейдеры и ресурспаки
-    "atmosphere": "атмосфера", "bloom": "свечение", "cartoon": "мультяшные", "colored-lighting": "цветной свет",
-    "fantasy": "фэнтези", "foliage": "растительность", "high": "мощные ПК", "low": "слабые ПК", "medium": "средние ПК",
-    "path-tracing": "трассировка пути", "pbr": "PBR", "potato": "очень слабые ПК", "realistic": "реализм",
-    "reflections": "отражения", "screenshot": "для скриншотов", "semi-realistic": "полуреализм",
-    "shadows": "тени", "vanilla-like": "как в ванилле", "combat": "бой", "core-shaders": "core-шейдеры",
-    "gui": "интерфейс", "audio": "звуки", "blocks": "блоки", "entities": "существа", "environment": "окружение",
-    "fonts": "шрифты", "items": "предметы", "locale": "перевод", "models": "модели", "simplistic": "минимализм",
-    "themed": "тематические", "tweaks": "твики", "utility-pack": "полезное",
+    "atmosphere": tr("атмосфера"), "bloom": tr("свечение"), "cartoon": tr("мультяшные"), "colored-lighting": tr("цветной свет"),
+    "fantasy": tr("фэнтези"), "foliage": tr("растительность"), "high": tr("мощные ПК"), "low": tr("слабые ПК"), "medium": tr("средние ПК"),
+    "path-tracing": tr("трассировка пути"), "pbr": "PBR", "potato": tr("очень слабые ПК"), "realistic": tr("реализм"),
+    "reflections": tr("отражения"), "screenshot": tr("для скриншотов"), "semi-realistic": tr("полуреализм"),
+    "shadows": tr("тени"), "vanilla-like": tr("как в ванилле"), "combat": tr("бой"), "core-shaders": tr("core-шейдеры"),
+    "gui": tr("интерфейс"), "audio": tr("звуки"), "blocks": tr("блоки"), "entities": tr("существа"), "environment": tr("окружение"),
+    "fonts": tr("шрифты"), "items": tr("предметы"), "locale": tr("перевод"), "models": tr("модели"), "simplistic": tr("минимализм"),
+    "themed": tr("тематические"), "tweaks": tr("твики"), "utility-pack": tr("полезное"),
 }
 LOADER_CATEGORIES = {"fabric", "forge", "neoforge", "quilt", "liteloader", "modloader", "rift", "iris", "optifine",
                      "babric", "bta-babric", "legacy-fabric", "ornithe", "nilloader", "java-agent", "geyser",
@@ -337,12 +338,12 @@ def side_tag(entry: Dict) -> Optional[tuple]:
     if not client or not server:
         return None
     if server == "unsupported":
-        return "side:client", "только клиент"
+        return "side:client", tr("только клиент")
     if client == "unsupported":
-        return "side:server", "только сервер"
+        return "side:server", tr("только сервер")
     if client == "required" and server == "required":
-        return "side:both", "клиент и сервер"
-    return "side:any", "клиент или сервер"
+        return "side:both", tr("клиент и сервер")
+    return "side:any", tr("клиент или сервер")
 
 
 def entry_tags(entry: Dict, custom_tags: Optional[Dict[str, List[str]]] = None) -> List[tuple]:

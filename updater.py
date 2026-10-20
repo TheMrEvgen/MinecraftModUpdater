@@ -19,6 +19,7 @@ from enums import ModStatus
 from mod_updater_logic import (
     DownloadCancelled, DownloadError, HashMismatchError, download_file, safe_filename,
 )
+from i18n import tr
 
 BACKUP_DIR_NAME = "ModUpdater_Backups"
 TRANSACTIONS_DIR_NAME = "transactions"
@@ -26,20 +27,20 @@ SNAPSHOTS_DIR_NAME = "snapshots"
 MANIFEST_NAME = "manifest.json"
 
 KIND_LABELS = {
-    "update": "обновление/установка",
-    "delete": "удаление",
-    "replace_all": "замена сборки",
-    "add": "добавление файлов",
-    "restore": "восстановление снимка",
-    "migrate": "переход на другую версию игры",
+    "update": tr("обновление/установка"),
+    "delete": tr("удаление"),
+    "replace_all": tr("замена сборки"),
+    "add": tr("добавление файлов"),
+    "restore": tr("восстановление снимка"),
+    "migrate": tr("переход на другую версию игры"),
 }
 
 SNAPSHOT_REASONS = {
-    "manual": "создан вручную",
-    "update_all": "перед обновлением всех модов",
-    "replace_all": "перед заменой сборки",
-    "migrate": "перед переходом на другую версию игры",
-    "restore": "перед восстановлением снимка",
+    "manual": tr("создан вручную"),
+    "update_all": tr("перед обновлением всех модов"),
+    "replace_all": tr("перед заменой сборки"),
+    "migrate": tr("перед переходом на другую версию игры"),
+    "restore": tr("перед восстановлением снимка"),
 }
 
 
@@ -156,9 +157,7 @@ def get_last_transaction(mods_path: str) -> Optional[Dict]:
 def describe_transaction(manifest: Dict) -> str:
     created = manifest.get("created", "").replace("T", " ")
     kind = KIND_LABELS.get(manifest.get("kind"), manifest.get("kind", ""))
-    return (f"Операция: {kind}\nДата: {created}\n"
-            f"Установлено файлов: {len(manifest.get('installed', []))}\n"
-            f"Файлов в бэкапе: {len(manifest.get('backed_up', []))}")
+    return (tr('Операция: {0}\nДата: {1}\nУстановлено файлов: {2}\nФайлов в бэкапе: {3}', kind, created, len(manifest.get('installed', [])), len(manifest.get('backed_up', []))))
 
 
 def rollback_transaction(mods_path: str, manifest: Dict) -> List[str]:
@@ -176,22 +175,22 @@ def rollback_transaction(mods_path: str, manifest: Dict) -> List[str]:
                 os.remove(path)
                 logging.info(f"Откат: удален установленный файл {filename}")
         except OSError as e:
-            errors.append(f"Не удалось удалить {filename}: {e}")
+            errors.append(tr('Не удалось удалить {0}: {1}', filename, e))
 
     for entry in manifest.get("backed_up", []):
         source = os.path.join(tx_dir, entry["backup"])
         target = os.path.join(mods_path, entry["name"])
         if not os.path.exists(source):
-            errors.append(f"Бэкап {entry['backup']} не найден")
+            errors.append(tr('Бэкап {0} не найден', entry['backup']))
             continue
         if os.path.exists(target):
-            errors.append(f"Файл {entry['name']} уже существует в папке mods, восстановление пропущено")
+            errors.append(tr('Файл {0} уже существует в папке mods, восстановление пропущено', entry['name']))
             continue
         try:
             shutil.move(source, target)
             logging.info(f"Откат: восстановлен файл {entry['name']}")
         except OSError as e:
-            errors.append(f"Не удалось восстановить {entry['name']}: {e}")
+            errors.append(tr('Не удалось восстановить {0}: {1}', entry['name'], e))
 
     manifest_path = os.path.join(tx_dir, MANIFEST_NAME)
     if errors:
@@ -203,7 +202,7 @@ def rollback_transaction(mods_path: str, manifest: Dict) -> List[str]:
             with open(manifest_path, "w", encoding="utf-8") as f:
                 json.dump(stored, f, ensure_ascii=False, indent=2)
         except (OSError, json.JSONDecodeError) as e:
-            errors.append(f"Не удалось обновить журнал операции: {e}")
+            errors.append(tr('Не удалось обновить журнал операции: {0}', e))
     else:
         shutil.rmtree(tx_dir, ignore_errors=True)
     return errors
@@ -255,7 +254,7 @@ def set_disabled(path: str, disabled: bool) -> str:
     folder, name = os.path.split(path)
     target = os.path.join(folder, name + DISABLED_SUFFIX if disabled else enabled_name(name))
     if os.path.exists(target):
-        raise FileExistsError(f"Файл {os.path.basename(target)} уже существует")
+        raise FileExistsError(tr('Файл {0} уже существует', os.path.basename(target)))
     os.rename(path, target)
     logging.info(f"Файл {name} {'выключен' if disabled else 'включён'}.")
     return target

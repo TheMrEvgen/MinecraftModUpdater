@@ -15,6 +15,7 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import List, Optional
+from i18n import tr
 
 CREATE_NO_WINDOW = 0x08000000
 GAME_DIR_NAMES = ("minecraft", ".minecraft")
@@ -91,7 +92,7 @@ def launch_plan(profile: dict) -> Optional[LaunchPlan]:
     if custom:
         parts = [part[1:-1] if len(part) > 1 and part[0] == part[-1] == '"' else part
                  for part in shlex.split(custom, posix=False)]  # Пути в кавычках — без кавычек
-        return LaunchPlan(parts, "своя команда из настроек сборки", True)
+        return LaunchPlan(parts, tr("своя команда из настроек сборки"), True)
     game_dir = profile.get("mods_path") or ""
     source = profile.get("source") or "manual"
     if source in ("prism", "multimc") and game_dir:
@@ -157,7 +158,7 @@ def run_state(game_dir: str, since: float) -> RunState:
     state = RunState()
     report = newest_crash_report(game_dir, since)
     if report:
-        state.crashed, state.crash_file, state.reason = True, report, "создан краш-репорт"
+        state.crashed, state.crash_file, state.reason = True, report, tr("создан краш-репорт")
     log_path = os.path.join(game_dir, "logs", "latest.log")
     text = _read_since(log_path, since - 1)
     if text is not None:
@@ -165,7 +166,7 @@ def run_state(game_dir: str, since: float) -> RunState:
         state.reached_menu = any(marker in text for marker in MENU_MARKERS)
         crash = next((marker for marker in CRASH_MARKERS if marker in text), None)
         if crash and not state.crashed:
-            state.crashed, state.crash_file, state.reason = True, log_path, f"в логе: «{crash}»"
+            state.crashed, state.crash_file, state.reason = True, log_path, tr('в логе: «{0}»', crash)
     return state
 
 

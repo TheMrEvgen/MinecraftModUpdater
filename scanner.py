@@ -28,6 +28,7 @@ from mod_updater_logic import (
     format_date, get_all_versions, get_file_hash, get_latest_version, get_latest_versions_from_hashes,
     get_mods_info_from_hashes, get_projects_info_from_ids, is_newer_version, select_primary_file,
 )
+from i18n import tr
 
 ProgressCallback = Callable[[str], None]
 CancelCheck = Callable[[], bool]
@@ -301,13 +302,13 @@ def dependency_applies(project: Optional[Dict], loader: Optional[str]) -> bool:
 def project_links(project: Dict) -> List[tuple]:
     """Ссылки проекта для панели мода: (подпись, иконка, адрес)."""
     links = []
-    for key, title, icon in (("source_url", "Исходный код", "code"), ("issues_url", "Сообщить об ошибке", "bug"),
-                             ("wiki_url", "Вики", "book"), ("discord_url", "Discord", "chat")):
+    for key, title, icon in (("source_url", tr("Исходный код"), "code"), ("issues_url", tr("Сообщить об ошибке"), "bug"),
+                             ("wiki_url", tr("Вики"), "book"), ("discord_url", "Discord", "chat")):
         if project.get(key):
             links.append((title, icon, project[key]))
     for donation in project.get('donation_urls') or []:
         if donation.get('url'):
-            links.append(("Поддержать автора", "heart", donation['url']))
+            links.append((tr("Поддержать автора"), "heart", donation['url']))
             break
     return links
 
@@ -372,7 +373,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
 
     cache = ModCache(cache_file) if cache_file else None
     try:
-        progress("Индексация локальных файлов...")
+        progress(tr("Индексация локальных файлов..."))
         local_files = index_local_files(mods_path, cache, is_cancelled, content)
         if not local_files:
             return []
@@ -384,7 +385,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
         installed_infos = cache.get_mod_infos(hashes) if cache else {}
         to_fetch = [h for h in hashes if h not in installed_infos]
         if to_fetch:
-            progress(f"Запрос информации о {len(to_fetch)} модах с Modrinth...")
+            progress(tr('Запрос информации о {0} модах с Modrinth...', len(to_fetch)))
             fetched = get_mods_info_from_hashes(to_fetch)
             if cache and fetched:
                 cache.put_mod_infos(fetched)
@@ -392,7 +393,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
         check_cancel()
 
         if not installed_infos:
-            progress("Не удалось получить информацию о модах. Проверьте интернет-соединение.")
+            progress(tr("Не удалось получить информацию о модах. Проверьте интернет-соединение."))
 
         # project_id -> данные установленного файла. Если файлов одного проекта несколько (дубликаты),
         # основным считается самый новый, остальные показываются отдельно с предупреждением
@@ -413,7 +414,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
         # --- Последние версии одним пакетным запросом ---
         latest_by_project: Dict[str, Optional[Dict]] = {}
         if installed:
-            progress(f"Проверка обновлений для {len(installed)} модов...")
+            progress(tr('Проверка обновлений для {0} модов...', len(installed)))
             try:
                 latest_by_hash = get_latest_versions_from_hashes(
                     [d['sha1'] for d in installed.values()], game_version, loaders, channel.version_types)
@@ -443,7 +444,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
 
         missing_ids = {pid for pid in dependency_ids if pid not in installed}
         if missing_ids:
-            progress(f"Поиск {len(missing_ids)} недостающих зависимостей...")
+            progress(tr('Поиск {0} недостающих зависимостей...', len(missing_ids)))
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                 futures = {executor.submit(get_latest_version, pid, game_version, loaders, None, channel.version_types): pid
                            for pid in missing_ids}
@@ -462,7 +463,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
         projects_info: Dict[str, Dict] = {}
         all_project_ids = set(installed) | dependency_ids | set(duplicates)
         if all_project_ids:
-            progress(f"Запрос информации о {len(all_project_ids)} проектах...")
+            progress(tr('Запрос информации о {0} проектах...', len(all_project_ids)))
             try:
                 projects_info = get_projects_info_from_ids(all_project_ids)
                 if cache and projects_info:
@@ -574,9 +575,9 @@ def read_mrpack(path: str) -> Dict:
         with zipfile.ZipFile(path) as z:
             index = json.loads(z.read("modrinth.index.json").decode("utf-8"))
     except (OSError, KeyError, zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise ValueError(f"Не удалось прочитать .mrpack: {e}") from e
+        raise ValueError(tr('Не удалось прочитать .mrpack: {0}', e)) from e
     if not isinstance(index, dict) or not isinstance(index.get("files"), list):
-        raise ValueError("Некорректный modrinth.index.json")
+        raise ValueError(tr("Некорректный modrinth.index.json"))
     return index
 
 

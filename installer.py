@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import config as app_config
+from i18n import tr
 
 APP_TITLE = "Minecraft Mod Updater"
 EXE_NAME = "ModUpdater.exe"
@@ -179,14 +180,14 @@ def install(source_exe: str, desktop: bool = True, associate_mrpack: bool = True
     os.makedirs(paths.install_dir, exist_ok=True)
     if os.path.normcase(os.path.abspath(source_exe)) != os.path.normcase(os.path.abspath(paths.exe)):
         shutil.copy2(source_exe, paths.exe)
-        done.append(f"Программа скопирована в {paths.install_dir}")
+        done.append(tr('Программа скопирована в {0}', paths.install_dir))
     exe = paths.exe
     if make_shortcuts:
         create_shortcut(paths.start_shortcut, exe)
-        done.append("Ярлык в меню «Пуск»")
+        done.append(tr("Ярлык в меню «Пуск»"))
         if desktop:
             create_shortcut(paths.desktop_shortcut, exe)
-            done.append("Ярлык на рабочем столе")
+            done.append(tr("Ярлык на рабочем столе"))
         elif os.path.exists(paths.desktop_shortcut):
             os.remove(paths.desktop_shortcut)
     size_kb = max(1, os.path.getsize(exe) // 1024) if os.path.isfile(exe) else 1
@@ -195,22 +196,22 @@ def install(source_exe: str, desktop: bool = True, associate_mrpack: bool = True
         "DisplayIcon": f"{exe},0", "InstallLocation": paths.install_dir, "UninstallString": f'"{exe}" --uninstall',
         "QuietUninstallString": f'"{exe}" --uninstall --quiet', "NoModify": 1, "NoRepair": 1, "EstimatedSize": size_kb,
     })
-    done.append("Пункт в «Установке и удалении программ»")
+    done.append(tr("Пункт в «Установке и удалении программ»"))
     if associate_mrpack:
-        _set_values(keys["mrpack_progid"], {"": "Сборка Modrinth (.mrpack)"})
+        _set_values(keys["mrpack_progid"], {"": tr("Сборка Modrinth (.mrpack)")})
         _set_values(f"{keys['mrpack_progid']}\\DefaultIcon", {"": f"{exe},0"})
         _set_values(f"{keys['mrpack_progid']}\\shell\\open\\command", {"": f'"{exe}" "%1"'})
         _set_values(keys["mrpack_ext"], {MRPACK_PROGID: ""})
         if not _read_value(keys["mrpack_default"]):  # Не перехватываем .mrpack у другой программы без спроса
             _set_values(keys["mrpack_default"], {"": MRPACK_PROGID})
-        done.append("Открытие .mrpack двойным щелчком")
+        done.append(tr("Открытие .mrpack двойным щелчком"))
     else:
         _delete_tree(keys["mrpack_progid"])
     if protocol:
         _set_values(keys["protocol"], {"": "URL:Minecraft Mod Updater", "URL Protocol": ""})
         _set_values(f"{keys['protocol']}\\DefaultIcon", {"": f"{exe},0"})
         _set_values(f"{keys['protocol']}\\shell\\open\\command", {"": f'"{exe}" "%1"'})
-        done.append("Ссылки modupdater://")
+        done.append(tr("Ссылки modupdater://"))
     else:
         _delete_tree(keys["protocol"])
     _notify_shell()
@@ -226,7 +227,7 @@ def uninstall(paths: Optional[InstallPaths] = None, remove_data: bool = False, s
     for shortcut in (paths.start_shortcut, paths.desktop_shortcut):
         if os.path.exists(shortcut):
             os.remove(shortcut)
-            done.append(f"Удалён ярлык {os.path.basename(shortcut)}")
+            done.append(tr('Удалён ярлык {0}', os.path.basename(shortcut)))
     if _read_value(keys["mrpack_default"]) == MRPACK_PROGID:  # Снимаем только своё значение по умолчанию
         try:
             winreg = _winreg()
@@ -242,15 +243,15 @@ def uninstall(paths: Optional[InstallPaths] = None, remove_data: bool = False, s
             winreg.DeleteValue(key, MRPACK_PROGID)
     except OSError:
         pass
-    done.append("Записи реестра удалены")
+    done.append(tr("Записи реестра удалены"))
     _notify_shell()
     if remove_data:
         shutil.rmtree(app_config.CONFIG_DIR, ignore_errors=True)
-        done.append("Настройки и кэш удалены")
+        done.append(tr("Настройки и кэш удалены"))
     if schedule_exe_removal and os.path.isdir(paths.install_dir):
         # Запущенный .exe нельзя удалить сразу — удаляем папку через пару секунд после выхода
         subprocess.Popen(f'cmd /c ping 127.0.0.1 -n 3 >nul & rmdir /s /q "{paths.install_dir}"',
                          creationflags=CREATE_NO_WINDOW, close_fds=True)
-        done.append("Папка программы будет удалена после выхода")
+        done.append(tr("Папка программы будет удалена после выхода"))
     logging.info("Удаление: " + "; ".join(done))
     return done

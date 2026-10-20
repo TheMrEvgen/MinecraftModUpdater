@@ -11,6 +11,7 @@ from typing import Dict, Iterable, List, Optional, Set
 
 from content import MODS, ContentType, enabled_name, is_disabled
 from updater import BACKUP_DIR_NAME, list_snapshots, snapshots_root, transactions_root
+from i18n import tr
 
 PARTIAL_SUFFIXES = (".part", ".tmp")
 
@@ -39,7 +40,7 @@ def check_integrity(folder: str, content: ContentType = MODS) -> Dict[str, List[
             try:
                 with zipfile.ZipFile(path) as z:
                     if not z.namelist():
-                        raise zipfile.BadZipFile("пустой архив")
+                        raise zipfile.BadZipFile(tr("пустой архив"))
             except (zipfile.BadZipFile, OSError):
                 result["broken"].append(path)
     return result

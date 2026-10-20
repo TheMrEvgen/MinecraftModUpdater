@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 import icons
 from theme import qcolor
 from ui.widgets import add_shadow
+from i18n import tr
 
 INDEX_ROLE = Qt.ItemDataRole.UserRole + 1
 MAX_RESULTS = 60
@@ -22,7 +23,7 @@ class Command:
     title: str
     action: Callable[[], None]
     icon: str = "command"
-    group: str = "Действия"
+    group: str = tr("Действия")
     hint: str = ""            # Подпись справа (горячая клавиша или пояснение)
     keywords: str = ""        # Дополнительные слова для поиска
 
@@ -99,7 +100,7 @@ class CommandPalette(QFrame):
         layout.setSpacing(8)
         self.input = QLineEdit()
         self.input.setObjectName("PaletteInput")
-        self.input.setPlaceholderText("Команда, сборка или мод…   (Esc — закрыть)")
+        self.input.setPlaceholderText(tr("Команда, сборка или мод…   (Esc — закрыть)"))
         self.input.textChanged.connect(self._filter)
         self.input.installEventFilter(self)
         layout.addWidget(self.input)

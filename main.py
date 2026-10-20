@@ -3,6 +3,7 @@ import logging
 import sys
 
 import cli
+from i18n import tr
 
 
 def create_app():
@@ -27,6 +28,7 @@ def create_app():
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
     app.setStyle("Fusion")  # Предсказуемая отрисовка таблицы стилей на любой системе
+    install_qt_translator(app)
     families = set(QFontDatabase.families())
     family = next((f for f in ("Segoe UI Variable Text", "Segoe UI", "Inter", "Ubuntu", "Cantarell")
                    if f in families), app.font().family())
@@ -34,6 +36,19 @@ def create_app():
     font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
     app.setFont(font)
     return app
+
+
+def install_qt_translator(app) -> None:
+    """Стандартные тексты Qt (кнопки диалогов, меню полей ввода) на языке программы."""
+    from PyQt6.QtCore import QLibraryInfo, QLocale, QTranslator
+    import i18n
+    QLocale.setDefault(QLocale(QLocale.Language.Russian if i18n.language() == "ru" else QLocale.Language.English))
+    if i18n.language() != "ru":
+        return  # Встроенные тексты Qt уже английские
+    translator = QTranslator(app)
+    if translator.load("qtbase_ru", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+        app.installTranslator(translator)
+        app._qt_translator = translator  # Держим ссылку, пока живёт приложение
 
 
 def apply_ui_scale() -> None:
@@ -57,13 +72,13 @@ def run_uninstall(quiet: bool) -> int:
     from ui.dialogs import FramelessDialog
     from ui.widgets import label
     from PyQt6.QtWidgets import QCheckBox
-    dialog = FramelessDialog(None, "Удаление Minecraft Mod Updater", 480)
-    dialog.body.addWidget(label("Будут удалены программа, ярлыки и связь с файлами .mrpack и ссылками modupdater://. "
-                                "Ваши сборки, моды и бэкапы в папках игры не затрагиваются.", None, wrap=True))
-    remove_data = QCheckBox("Удалить также настройки, заметки и кэш программы")
+    dialog = FramelessDialog(None, tr("Удаление Minecraft Mod Updater"), 480)
+    dialog.body.addWidget(label(tr("Будут удалены программа, ярлыки и связь с файлами .mrpack и ссылками modupdater://. "
+                                "Ваши сборки, моды и бэкапы в папках игры не затрагиваются."), None, wrap=True))
+    remove_data = QCheckBox(tr("Удалить также настройки, заметки и кэш программы"))
     dialog.body.addWidget(remove_data)
-    dialog.add_button("Отмена")
-    dialog.add_button("Удалить", True, dialog.accept)
+    dialog.add_button(tr("Отмена"))
+    dialog.add_button(tr("Удалить"), True, dialog.accept)
     dialog.finish_layout()
     if not dialog.exec():
         return 1

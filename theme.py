@@ -3,6 +3,7 @@ import logging
 import sys
 
 from PyQt6.QtGui import QColor
+from i18n import tr
 
 DARK = {
     "name": "dark",
@@ -97,8 +98,8 @@ CONTRAST = {
 }
 
 THEMES = {"dark": DARK, "light": LIGHT, "oled": OLED, "contrast": CONTRAST}
-THEME_TITLES = {"system": "Как в системе", "dark": "Тёмная", "light": "Светлая", "oled": "OLED (чёрная)",
-                "contrast": "Контрастная"}
+THEME_TITLES = {"system": tr("Как в системе"), "dark": tr("Тёмная"), "light": tr("Светлая"), "oled": tr("OLED (чёрная)"),
+                "contrast": tr("Контрастная")}
 
 
 def rgba(hex_color: str, alpha: float) -> str:
@@ -323,14 +324,14 @@ def apply_window_frame_theme(widget, tokens: dict) -> None:
 # --- Акцентный цвет ---
 # Готовые акценты: (тёмная тема, светлая тема). «success» остаётся зелёным — это смысловой цвет статуса.
 ACCENTS = {
-    "green": ("Изумруд", "#1bd96a", "#0ea65a"),
-    "blue": ("Синий", "#4c8dff", "#2563eb"),
-    "violet": ("Фиолетовый", "#9b7bff", "#7c3aed"),
-    "pink": ("Розовый", "#ff5fa2", "#db2777"),
-    "orange": ("Оранжевый", "#ff8a3d", "#ea580c"),
-    "amber": ("Янтарь", "#f5c84c", "#b7791f"),
-    "teal": ("Бирюза", "#2dd4bf", "#0d9488"),
-    "red": ("Красный", "#ff5c5c", "#dc2626"),
+    "green": (tr("Изумруд"), "#1bd96a", "#0ea65a"),
+    "blue": (tr("Синий"), "#4c8dff", "#2563eb"),
+    "violet": (tr("Фиолетовый"), "#9b7bff", "#7c3aed"),
+    "pink": (tr("Розовый"), "#ff5fa2", "#db2777"),
+    "orange": (tr("Оранжевый"), "#ff8a3d", "#ea580c"),
+    "amber": (tr("Янтарь"), "#f5c84c", "#b7791f"),
+    "teal": (tr("Бирюза"), "#2dd4bf", "#0d9488"),
+    "red": (tr("Красный"), "#ff5c5c", "#dc2626"),
 }
 DEFAULT_ACCENT = "green"
 

@@ -5,6 +5,7 @@
 import os
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+from i18n import tr
 
 DISABLED_SUFFIX = ".disabled"  # Выключенный файл: mod.jar.disabled (так же делают Prism и MultiMC)
 
@@ -37,9 +38,9 @@ class ContentType:
         return name.endswith(self.extensions)
 
 
-MODS = ContentType("mods", "mods", "Моды", "мод", (".jar",), "mod", True)
-SHADERS = ContentType("shaders", "shaderpacks", "Шейдеры", "шейдер", (".zip",), "shader", False)
-RESOURCEPACKS = ContentType("resourcepacks", "resourcepacks", "Ресурспаки", "ресурспак", (".zip",), "resourcepack", False)
+MODS = ContentType("mods", "mods", tr("Моды"), tr("мод"), (".jar",), "mod", True)
+SHADERS = ContentType("shaders", "shaderpacks", tr("Шейдеры"), tr("шейдер"), (".zip",), "shader", False)
+RESOURCEPACKS = ContentType("resourcepacks", "resourcepacks", tr("Ресурспаки"), tr("ресурспак"), (".zip",), "resourcepack", False)
 CONTENT_TYPES = (MODS, SHADERS, RESOURCEPACKS)
 BY_KEY = {c.key: c for c in CONTENT_TYPES}
 

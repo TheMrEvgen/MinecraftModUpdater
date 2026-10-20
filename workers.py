@@ -18,6 +18,7 @@ from mod_updater_logic import (
 )
 from scanner import ScanCancelled, apply_install_info, scan_local, scan_mods
 from updater import UpdateTransaction, install_mod
+from i18n import tr
 
 
 class ScanWorker(QThread):
@@ -46,7 +47,7 @@ class ScanWorker(QThread):
             self.finished.emit(None)
         except Exception as e:
             logging.exception(f"Ошибка во время сканирования: {e}")
-            self.progress.emit(f"Ошибка сканирования: {e}")
+            self.progress.emit(tr('Ошибка сканирования: {0}', e))
             self.finished.emit([])
 
     def stop(self):
@@ -160,17 +161,17 @@ class ImportWorker(QThread):
             self.finished.emit(self._run())
         except Exception as e:
             logging.exception(f"Ошибка импорта: {e}")
-            self.progress.emit(f"Ошибка импорта: {e}")
+            self.progress.emit(tr('Ошибка импорта: {0}', e))
             self.finished.emit([])
 
     def _run(self):
-        self.progress.emit(f"Запрос информации о {len(self.project_ids)} проектах...")
+        self.progress.emit(tr('Запрос информации о {0} проектах...', len(self.project_ids)))
         projects_info = get_projects_info_from_ids(self.project_ids)
         if not projects_info:
-            self.progress.emit("Не удалось получить информацию о проектах.")
+            self.progress.emit(tr("Не удалось получить информацию о проектах."))
             return []
 
-        self.progress.emit(f"Поиск совместимых версий для {len(projects_info)} модов...")
+        self.progress.emit(tr('Поиск совместимых версий для {0} модов...', len(projects_info)))
         versions_map = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             futures = {}
@@ -187,7 +188,7 @@ class ImportWorker(QThread):
                     executor.shutdown(wait=False, cancel_futures=True)
                     return None
                 project_id = futures[future]
-                self.progress.emit(f"Поиск версий: {done} / {len(futures)}")
+                self.progress.emit(tr('Поиск версий: {0} / {1}', done, len(futures)))
                 try:
                     versions_map[project_id] = future.result()
                 except Exception as e:

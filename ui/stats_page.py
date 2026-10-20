@@ -14,6 +14,7 @@ from stats import build_stats
 from theme import qcolor
 from ui.widgets import EmptyState, button, label, refresh_button_icons
 from view_model import format_size
+from i18n import tr
 
 BAR_HEIGHT = 10
 ROW_HEIGHT = 30
@@ -142,7 +143,7 @@ class StatsPage(QWidget):
         root.setSpacing(16)
         head = QVBoxLayout()
         head.setSpacing(4)
-        head.addWidget(label("Статистика", "PageTitle"))
+        head.addWidget(label(tr("Статистика"), "PageTitle"))
         self.subtitle = label("", "PageSubtitle", wrap=True)
         head.addWidget(self.subtitle)
         root.addLayout(head)
@@ -150,8 +151,8 @@ class StatsPage(QWidget):
         self.tiles_grid = QGridLayout()
         self.tiles_grid.setSpacing(10)
         self.tiles: Dict[str, StatTile] = {}
-        for key, title in (("count", "модов в сборке"), ("size", "занимают на диске"), ("update", "скачается при обновлении"),
-                           ("disabled", "выключены"), ("abandoned", "давно не обновлялись")):
+        for key, title in (("count", tr("модов в сборке")), ("size", tr("занимают на диске")), ("update", tr("скачается при обновлении")),
+                           ("disabled", tr("выключены")), ("abandoned", tr("давно не обновлялись"))):
             self.tiles[key] = StatTile(title)
         root.addLayout(self.tiles_grid)
 
@@ -166,17 +167,17 @@ class StatsPage(QWidget):
         self.sides = BarChart(tokens)
         self.sides.item_clicked.connect(lambda query: query and self.filter_requested.emit(query))
         self.sections = [
-            self._section("Размер по категориям", "Щёлкните по строке, чтобы увидеть эти моды в списке.", self.categories),
-            self._section("Самые тяжёлые моды", "Размер файла.", self.heaviest),
-            self._section("Где нужен мод", "Сторона по данным Modrinth: клиент, сервер или оба.", self.sides),
+            self._section(tr("Размер по категориям"), tr("Щёлкните по строке, чтобы увидеть эти моды в списке."), self.categories),
+            self._section(tr("Самые тяжёлые моды"), tr("Размер файла."), self.heaviest),
+            self._section(tr("Где нужен мод"), tr("Сторона по данным Modrinth: клиент, сервер или оба."), self.sides),
         ]
         self.abandoned_box = QVBoxLayout()
         self.abandoned_box.setSpacing(6)
         abandoned_widget = QWidget()
         abandoned_widget.setLayout(self.abandoned_box)
         self.abandoned_box.setContentsMargins(0, 0, 0, 0)
-        self.sections.append(self._section("Давно не обновлялись", "Автор не выпускал версий больше года — "
-                                           "такие моды стоит заменить живыми аналогами.", abandoned_widget))
+        self.sections.append(self._section(tr("Давно не обновлялись"), tr("Автор не выпускал версий больше года — "
+                                           "такие моды стоит заменить живыми аналогами."), abandoned_widget))
         self._columns = None
         self._arrange(2)
         self.grid_widget = QWidget()
@@ -230,9 +231,8 @@ class StatsPage(QWidget):
                  icon_provider: Optional[Callable] = None):
         stats = build_stats(entries, custom_tags)
         has_data = stats["count"] > 0
-        self.subtitle.setText(f"Сборка «{profile_name}». Данные о категориях, стороне и датах — с Modrinth "
-                              "(появляются после проверки обновлений).")
-        self.tiles["count"].set_value(str(stats["count"]), f"модов в сборке · {stats['libraries']} библиотек")
+        self.subtitle.setText(tr('Сборка «{0}». Данные о категориях, стороне и датах — с Modrinth (появляются после проверки обновлений).', profile_name))
+        self.tiles["count"].set_value(str(stats["count"]), tr('модов в сборке · {0} библиотек', stats['libraries']))
         self.tiles["size"].set_value(format_size(stats["total_size"]))
         self.tiles["update"].set_value(format_size(stats["update_size"]) if stats["update_size"] else "0")
         self.tiles["disabled"].set_value(str(stats["disabled"]))
@@ -241,22 +241,21 @@ class StatsPage(QWidget):
                                    for title, count, size in stats["by_category"][:10]])
         self.heaviest.set_items([(e.get("name") or "?", e.get("size") or 0, format_size(e.get("size") or 0), e)
                                  for e in stats["heaviest"]])
-        side_queries = {"Только клиент": "side:client", "Только сервер": "side:server", "Клиент и сервер": "side:both",
-                        "Клиент или сервер": "side:any"}
+        side_queries = {tr("Только клиент"): "side:client", tr("Только сервер"): "side:server", tr("Клиент и сервер"): "side:both",
+                        tr("Клиент или сервер"): "side:any"}
         self.sides.set_items([(title, n, str(n), side_queries.get(title, "")) for title, n in stats["sides"]])
         while self.abandoned_box.count():
             item = self.abandoned_box.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         if not stats["abandoned"]:
-            self.abandoned_box.addWidget(label("Таких модов нет — все обновлялись в последний год.", "Muted", wrap=True))
+            self.abandoned_box.addWidget(label(tr("Таких модов нет — все обновлялись в последний год."), "Muted", wrap=True))
         for entry, days in stats["abandoned"][:8]:
             row = QHBoxLayout()
-            name = label(f"{entry.get('name')}   <span style='color:{self.tokens['text_faint']}'>"
-                         f"{days // 365} г. {days % 365 // 30} мес. назад</span>")
+            name = label(tr("{0}   <span style='color:{1}'>{2} г. {3} мес. назад</span>", entry.get('name'), self.tokens['text_faint'], days // 365, days % 365 // 30))
             name.setTextFormat(Qt.TextFormat.RichText)
             row.addWidget(name, 1)
-            find = button("Замена", "GhostButton", "compass", self.tokens, "text", "Найти похожие моды в каталоге")
+            find = button(tr("Замена"), "GhostButton", "compass", self.tokens, "text", tr("Найти похожие моды в каталоге"))
             find.clicked.connect(lambda _=False, e=entry: self.replacement_requested.emit(e))
             row.addWidget(find)
             holder = QWidget()
@@ -267,5 +266,5 @@ class StatsPage(QWidget):
             widget.setVisible(has_data)
         self.empty.setVisible(not has_data)
         if not has_data:
-            self.empty.set_content(self.tokens, "bar_chart", "Пока нечего считать",
-                                   "Откройте сборку с модами — здесь появится её статистика.")
+            self.empty.set_content(self.tokens, "bar_chart", tr("Пока нечего считать"),
+                                   tr("Откройте сборку с модами — здесь появится её статистика."))

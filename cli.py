@@ -25,6 +25,7 @@ import config as app_config
 from content import CONTENT_TYPES, content_by_key
 from enums import ModStatus, UpdateChannel
 from game_detection import detect_game_versions
+from i18n import tr
 
 EXIT_OK, EXIT_PARTIAL, EXIT_USAGE, EXIT_LOCKED = 0, 1, 2, 3
 CLI_FLAGS = ("--update-all", "--check", "--list-profiles", "--rollback", "--help", "-h")
@@ -57,22 +58,22 @@ def attach_console() -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ModUpdater", description="Minecraft Mod Updater — консольный режим")
+    parser = argparse.ArgumentParser(prog="ModUpdater", description=tr("Minecraft Mod Updater — консольный режим"))
     action = parser.add_mutually_exclusive_group(required=True)
-    action.add_argument("--update-all", action="store_true", help="обновить все моды профиля")
-    action.add_argument("--check", action="store_true", help="только проверить обновления, ничего не меняя")
-    action.add_argument("--rollback", action="store_true", help="откатить последнее изменение папки mods")
-    action.add_argument("--list-profiles", action="store_true", help="показать профили")
-    parser.add_argument("--profile", help="имя профиля (по умолчанию — текущий профиль в GUI)")
-    parser.add_argument("--game-dir", help="папка игры/сервера (содержит mods) вместо пути из профиля")
-    parser.add_argument("--channel", choices=[c.value for c in UpdateChannel], help="канал обновлений")
-    parser.add_argument("--game-version", help="версия Minecraft (переопределяет профиль)")
-    parser.add_argument("--loader", choices=["fabric", "forge", "neoforge", "quilt"], help="загрузчик")
-    parser.add_argument("--no-deps", action="store_true", help="не устанавливать недостающие обязательные зависимости")
-    parser.add_argument("--force", action="store_true", help="не проверять, запущена ли игра")
+    action.add_argument("--update-all", action="store_true", help=tr("обновить все моды профиля"))
+    action.add_argument("--check", action="store_true", help=tr("только проверить обновления, ничего не меняя"))
+    action.add_argument("--rollback", action="store_true", help=tr("откатить последнее изменение папки mods"))
+    action.add_argument("--list-profiles", action="store_true", help=tr("показать профили"))
+    parser.add_argument("--profile", help=tr("имя профиля (по умолчанию — текущий профиль в GUI)"))
+    parser.add_argument("--game-dir", help=tr("папка игры/сервера (содержит mods) вместо пути из профиля"))
+    parser.add_argument("--channel", choices=[c.value for c in UpdateChannel], help=tr("канал обновлений"))
+    parser.add_argument("--game-version", help=tr("версия Minecraft (переопределяет профиль)"))
+    parser.add_argument("--loader", choices=["fabric", "forge", "neoforge", "quilt"], help=tr("загрузчик"))
+    parser.add_argument("--no-deps", action="store_true", help=tr("не устанавливать недостающие обязательные зависимости"))
+    parser.add_argument("--force", action="store_true", help=tr("не проверять, запущена ли игра"))
     parser.add_argument("--content", choices=[c.key for c in CONTENT_TYPES], default="mods",
-                        help="что обновлять: моды, шейдеры или ресурспаки")
-    parser.add_argument("--no-snapshot", action="store_true", help="не сохранять снимок сборки перед обновлением")
+                        help=tr("что обновлять: моды, шейдеры или ресурспаки"))
+    parser.add_argument("--no-snapshot", action="store_true", help=tr("не сохранять снимок сборки перед обновлением"))
     return parser
 
 
@@ -111,15 +112,14 @@ def run(argv: List[str]) -> int:
     if args.list_profiles:
         for name, prof in cfg["profiles"].items():
             mark = "*" if name == cfg["current_profile"] else " "
-            _print(f"{mark} {name}: {prof.get('mods_path') or '(путь не задан)'} "
-                   f"[{prof.get('game_version')}, {prof.get('loader')}, канал {prof.get('channel')}]")
+            _print(tr('{0} {1}: {2} [{3}, {4}, канал {5}]', mark, name, prof.get('mods_path') or tr('(путь не задан)'), prof.get('game_version'), prof.get('loader'), prof.get('channel')))
         return EXIT_OK
 
     profile_name = args.profile or cfg["current_profile"]
     profile = cfg["profiles"].get(profile_name)
     if profile is None:
         if not args.game_dir or args.profile:
-            _print(f"Профиль '{profile_name}' не найден. Доступные: {', '.join(cfg['profiles'])}")
+            _print(tr("Профиль '{0}' не найден. Доступные: {1}", profile_name, ', '.join(cfg['profiles'])))
             return EXIT_USAGE
         profile = app_config.default_profile()
     if args.game_dir:
@@ -130,7 +130,7 @@ def run(argv: List[str]) -> int:
     content = content_by_key(args.content)
     mods_path = content.path(profile.get("mods_path", ""))
     if not os.path.isdir(mods_path):
-        _print(f"Папка {content.folder} не найдена: {mods_path}")
+        _print(tr('Папка {0} не найдена: {1}', content.folder, mods_path))
         return EXIT_USAGE
 
     # Импорты здесь, чтобы --list-profiles работал без сетевых зависимостей
@@ -141,36 +141,36 @@ def run(argv: List[str]) -> int:
     if args.rollback:
         manifest = get_last_transaction(mods_path)
         if not manifest:
-            _print("Нет операций, которые можно откатить.")
+            _print(tr("Нет операций, которые можно откатить."))
             return EXIT_OK
         _print(describe_transaction(manifest))
         if not args.force and is_game_running(mods_path):
-            _print("Файлы модов заблокированы — закройте игру/сервер или используйте --force.")
+            _print(tr("Файлы модов заблокированы — закройте игру/сервер или используйте --force."))
             return EXIT_LOCKED
         errors = rollback_transaction(mods_path, manifest)
         for error in errors:
             _print(f"  ! {error}")
-        _print("Откат выполнен." if not errors else "Откат выполнен частично.")
+        _print(tr("Откат выполнен.") if not errors else tr("Откат выполнен частично."))
         return EXIT_PARTIAL if errors else EXIT_OK
 
     game_version, loader = _resolve_versions(profile, args)
     if not game_version or not loader:
-        _print("Не удалось определить версию игры или загрузчик. Укажите --game-version и --loader.")
+        _print(tr("Не удалось определить версию игры или загрузчик. Укажите --game-version и --loader."))
         return EXIT_USAGE
     channel = UpdateChannel.from_value(args.channel or profile.get("channel"), app_config.DEFAULT_CHANNEL)
 
-    _print(f"Профиль: {profile_name} | Minecraft {game_version} ({loader}) | канал: {channel.display_name}")
-    _print(f"Папка: {mods_path}")
+    _print(tr('Профиль: {0} | Minecraft {1} ({2}) | канал: {3}', profile_name, game_version, loader, channel.display_name))
+    _print(tr('Папка: {0}', mods_path))
     mods_data = scan_mods(mods_path, game_version, loader, app_config.CACHE_FILE, channel,
                           progress=lambda msg: logging.info(msg), content=content)
     pinned = set(profile.get("pinned") or {})
     updates = _collect_updates(mods_data, include_deps=not args.no_deps, pinned=pinned)
     skipped = [m['name'] for m in mods_data if m.get('download_url') and (m.get('disabled') or m.get('project_id') in pinned)]
     if skipped:
-        _print(f"Пропущены (закреплены или выключены): {', '.join(skipped)}")
+        _print(tr('Пропущены (закреплены или выключены): {0}', ', '.join(skipped)))
     not_found = sum(1 for m in mods_data if m['status'] == ModStatus.NOT_FOUND)
     files = {e['filepath'] for m in mods_data for e in [m] + m.get('dependencies', []) if e.get('filepath')}
-    _print(f"{content.title}: {len(files)}, не найдено на Modrinth: {not_found}, к установке/обновлению: {len(updates)}")
+    _print(tr('{0}: {1}, не найдено на Modrinth: {2}, к установке/обновлению: {3}', content.title, len(files), not_found, len(updates)))
     for entry in updates:
         current = entry.get('current_version') or "—"
         _print(f"  • {entry['name']}: {current} -> {entry['new_version']} [{entry['status']}]")
@@ -181,14 +181,14 @@ def run(argv: List[str]) -> int:
     if not args.force:
         locked = find_locked_files([e.get('filepath') for e in updates])
         if locked or is_game_running(mods_path):
-            _print("Файлы модов заблокированы — похоже, игра или сервер запущены. Остановите их или используйте --force.")
+            _print(tr("Файлы модов заблокированы — похоже, игра или сервер запущены. Остановите их или используйте --force."))
             return EXIT_LOCKED
 
     settings = cfg.get("settings") or {}
     if not args.no_snapshot and settings.get("auto_snapshot", True):
         if create_snapshot(mods_path, "update_all", content):
             prune_snapshots(mods_path, int(settings.get("snapshots_keep", 10)))
-            _print("Снимок сборки сохранён (вернуть можно на странице «История» в программе).")
+            _print(tr("Снимок сборки сохранён (вернуть можно на странице «История» в программе)."))
 
     transaction = UpdateTransaction(mods_path, "update")
     failed = []
@@ -205,9 +205,9 @@ def run(argv: List[str]) -> int:
             if status.is_error:
                 failed.append(entry['name'])
 
-    _print(f"Готово: успешно {len(updates) - len(failed)}, ошибок {len(failed)}.")
+    _print(tr('Готово: успешно {0}, ошибок {1}.', len(updates) - len(failed), len(failed)))
     if not transaction.is_empty:
-        _print("Отменить изменения: --rollback")
+        _print(tr("Отменить изменения: --rollback"))
     return EXIT_PARTIAL if failed else EXIT_OK
 
 
@@ -220,5 +220,5 @@ def main(argv: Optional[List[str]] = None) -> int:
         return int(e.code or 0) if isinstance(e.code, int) else EXIT_USAGE
     except Exception as e:
         logging.exception("Непредвиденная ошибка в консольном режиме")
-        _print(f"Ошибка: {e}")
+        _print(tr('Ошибка: {0}', e))
         return EXIT_USAGE

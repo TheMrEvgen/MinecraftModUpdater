@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 import icons
 from ui.dialogs import FramelessDialog
 from ui.widgets import button, label
+from i18n import tr
 
 
 def _clear(layout):
@@ -33,20 +34,20 @@ class CrashDialog(FramelessDialog):
 
     def __init__(self, parent, tokens: dict, files: List[str], entries: List[Dict], run_task: Callable,
                  preferred: str = None):
-        super().__init__(parent, "Почему упала игра", 680)
+        super().__init__(parent, tr("Почему упала игра"), 680)
         self.resize(760, 620)
         self.tokens = tokens
         self.entries = entries
         self.run_task = run_task
-        self.body.addWidget(label("Программа читает последний краш-репорт или лог игры и ищет моды, которые "
+        self.body.addWidget(label(tr("Программа читает последний краш-репорт или лог игры и ищет моды, которые "
                                   "упоминаются в ошибке. Это подсказка, а не приговор: виновника надёжнее всего "
-                                  "находит поиск перебором.", "Muted", wrap=True))
+                                  "находит поиск перебором."), "Muted", wrap=True))
         row = QHBoxLayout()
-        row.addWidget(QLabel("Файл:"))
+        row.addWidget(QLabel(tr("Файл:")))
         self.file_combo = QComboBox()
         for path in files:
             name = os.path.basename(path)
-            self.file_combo.addItem(name if name != "latest.log" else "latest.log — лог последнего запуска", path)
+            self.file_combo.addItem(name if name != "latest.log" else tr("latest.log — лог последнего запуска"), path)
         if preferred:
             index = self.file_combo.findData(preferred)
             if index < 0 and os.path.isfile(preferred):
@@ -55,7 +56,7 @@ class CrashDialog(FramelessDialog):
             self.file_combo.setCurrentIndex(max(0, index))
         self.file_combo.currentIndexChanged.connect(self._analyze)
         row.addWidget(self.file_combo, 1)
-        self.open_btn = button("", "IconButton", "external", tokens, "text_muted", "Открыть файл")
+        self.open_btn = button("", "IconButton", "external", tokens, "text_muted", tr("Открыть файл"))
         self.open_btn.clicked.connect(self._open_file)
         row.addWidget(self.open_btn)
         self.body.addLayout(row)
@@ -67,7 +68,7 @@ class CrashDialog(FramelessDialog):
         mono.setPointSizeF(9)
         self.summary.setFont(mono)
         self.body.addWidget(self.summary)
-        self.body.addWidget(label("Подозреваемые моды", "SectionTitle"))
+        self.body.addWidget(label(tr("Подозреваемые моды"), "SectionTitle"))
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         holder = QWidget()
@@ -77,14 +78,14 @@ class CrashDialog(FramelessDialog):
         scroll.setWidget(holder)
         self.body.addWidget(scroll, 1)
 
-        bisect = self.add_button("Найти виновника перебором…", False, lambda: (self.bisect_requested.emit(), self.accept()))
-        bisect.setToolTip("Программа будет выключать половину модов, а вы — проверять запуск игры")
-        self.add_button("Закрыть", True, self.accept)
+        bisect = self.add_button(tr("Найти виновника перебором…"), False, lambda: (self.bisect_requested.emit(), self.accept()))
+        bisect.setToolTip(tr("Программа будет выключать половину модов, а вы — проверять запуск игры"))
+        self.add_button(tr("Закрыть"), True, self.accept)
         self.finish_layout()
         if files:
             self._analyze()
         else:
-            self.summary.setPlainText("Краш-репортов и лога нет: игра с этой сборкой ещё не запускалась.")
+            self.summary.setPlainText(tr("Краш-репортов и лога нет: игра с этой сборкой ещё не запускалась."))
 
     def _open_file(self):
         from PyQt6.QtCore import QUrl
@@ -98,34 +99,33 @@ class CrashDialog(FramelessDialog):
         path = self.file_combo.currentData()
         if not path:
             return
-        self.summary.setPlainText("Разбираем…")
+        self.summary.setPlainText(tr("Разбираем…"))
         _clear(self.suspects)
-        self.run_task(analyze_file, (path, self.entries), self._show, lambda e: self.summary.setPlainText(f"Ошибка: {e}"),
+        self.run_task(analyze_file, (path, self.entries), self._show, lambda e: self.summary.setPlainText(tr('Ошибка: {0}', e)),
                       None)
 
     def _show(self, report):
         t = self.tokens
-        self.summary.setPlainText("\n".join(report.summary) or "В файле не найдено описания ошибки.")
+        self.summary.setPlainText("\n".join(report.summary) or tr("В файле не найдено описания ошибки."))
         _clear(self.suspects)
         if not report.suspects:
-            self.suspects.addWidget(label("Ни один мод не упоминается явно. Попробуйте поиск перебором.", "Muted", wrap=True))
+            self.suspects.addWidget(label(tr("Ни один мод не упоминается явно. Попробуйте поиск перебором."), "Muted", wrap=True))
         top = report.suspects[0].score if report.suspects else 1
         for suspect in report.suspects:
             card = QFrame()
             card.setObjectName("Card")
             row = QHBoxLayout(card)
             row.setContentsMargins(12, 8, 8, 8)
-            level = "высокая" if suspect.score >= top * 0.6 else "средняя" if suspect.score >= top * 0.3 else "низкая"
-            color = t["danger"] if level == "высокая" else t["warning"] if level == "средняя" else t["text_muted"]
-            text = label(f"<b>{suspect.entry.get('name')}</b>   <span style='color:{color}'>● вероятность {level}</span>"
-                         f"<br><span style='color:{t['text_faint']}'>{'; '.join(suspect.reasons)}</span>", None, wrap=True)
+            level = tr("высокая") if suspect.score >= top * 0.6 else tr("средняя") if suspect.score >= top * 0.3 else tr("низкая")
+            color = t["danger"] if level == tr("высокая") else t["warning"] if level == tr("средняя") else t["text_muted"]
+            text = label(tr("<b>{0}</b>   <span style='color:{1}'>● вероятность {2}</span><br><span style='color:{3}'>{4}</span>", suspect.entry.get('name'), color, level, t['text_faint'], '; '.join(suspect.reasons)), None, wrap=True)
             text.setTextFormat(Qt.TextFormat.RichText)
             row.addWidget(text, 1)
-            show = button("", "IconButton", "search", t, "text_muted", "Показать в списке")
+            show = button("", "IconButton", "search", t, "text_muted", tr("Показать в списке"))
             show.clicked.connect(lambda _=False, e=suspect.entry: (self.show_requested.emit(e), self.accept()))
             row.addWidget(show)
             if not suspect.entry.get("disabled"):
-                off = button("Выключить", None, "power", t, "text")
+                off = button(tr("Выключить"), None, "power", t, "text")
                 off.clicked.connect(lambda _=False, e=suspect.entry: self._disable(e))
                 row.addWidget(off)
             self.suspects.addWidget(card)
@@ -136,7 +136,7 @@ class CrashDialog(FramelessDialog):
         self._show_after_disable(entry)
 
     def _show_after_disable(self, entry: Dict):
-        self.summary.appendPlainText(f"\n→ «{entry.get('name')}» выключен. Запустите игру и проверьте.")
+        self.summary.appendPlainText(tr('\n→ «{0}» выключен. Запустите игру и проверьте.', entry.get('name')))
 
 
 # --- Поиск проблемного мода: панель шагов над списком ---
@@ -161,12 +161,12 @@ class BisectBanner(QFrame):
         self.text = label("", None, wrap=True)
         self.text.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(self.text, 1)
-        self.yes = button("Проблема осталась", "DangerButton", "alert", tokens, "danger")
-        self.no = button("Всё работает", "PrimaryButton", "check", tokens, "accent_text")
-        self.stop = button("Прервать", "GhostButton", "x", tokens, "text_muted", "Вернуть все моды как было")
-        self.keep = button("Выключить его, остальное вернуть", "PrimaryButton", "power", tokens, "accent_text")
-        self.restore = button("Вернуть всё как было", None, "undo", tokens, "text")
-        self.auto_stop = button("Остановить автопоиск", "GhostButton", "square", tokens, "text_muted")
+        self.yes = button(tr("Проблема осталась"), "DangerButton", "alert", tokens, "danger")
+        self.no = button(tr("Всё работает"), "PrimaryButton", "check", tokens, "accent_text")
+        self.stop = button(tr("Прервать"), "GhostButton", "x", tokens, "text_muted", tr("Вернуть все моды как было"))
+        self.keep = button(tr("Выключить его, остальное вернуть"), "PrimaryButton", "power", tokens, "accent_text")
+        self.restore = button(tr("Вернуть всё как было"), None, "undo", tokens, "text")
+        self.auto_stop = button(tr("Остановить автопоиск"), "GhostButton", "square", tokens, "text_muted")
         self.auto_stop.clicked.connect(self.auto_stop_requested)
         self.yes.clicked.connect(lambda: self.answered.emit(True))
         self.no.clicked.connect(lambda: self.answered.emit(False))
@@ -179,9 +179,7 @@ class BisectBanner(QFrame):
         self.hide()
 
     def show_step(self, step: int, total_steps: int, disabled: int, suspects: int):
-        self.text.setText(f"<b>Поиск проблемного мода — шаг {step} из ~{total_steps}.</b> Выключено модов: {disabled}, "
-                          f"подозреваемых: {suspects}.<br>Запустите игру так же, как при ошибке, и ответьте, "
-                          "осталась ли проблема.")
+        self.text.setText(tr('<b>Поиск проблемного мода — шаг {0} из ~{1}.</b> Выключено модов: {2}, подозреваемых: {3}.<br>Запустите игру так же, как при ошибке, и ответьте, осталась ли проблема.', step, total_steps, disabled, suspects))
         for b in (self.yes, self.no, self.stop):
             b.show()
         for b in (self.keep, self.restore, self.auto_stop):
@@ -189,15 +187,14 @@ class BisectBanner(QFrame):
         self.show()
 
     def show_auto(self, step: int, total_steps: int, disabled: int, suspects: int, status: str):
-        self.text.setText(f"<b>Автоматический поиск — шаг {step} из ~{total_steps}.</b> Выключено модов: {disabled}, "
-                          f"подозреваемых: {suspects}.<br>Сейчас: {status} Ничего нажимать не нужно.")
+        self.text.setText(tr('<b>Автоматический поиск — шаг {0} из ~{1}.</b> Выключено модов: {2}, подозреваемых: {3}.<br>Сейчас: {4} Ничего нажимать не нужно.', step, total_steps, disabled, suspects, status))
         for b in (self.yes, self.no, self.stop, self.keep, self.restore):
             b.hide()
         self.auto_stop.show()
         self.show()
 
     def show_result(self, name: str):
-        self.text.setText(f"<b>Виновник найден: {name}.</b> Выключите его — остальные моды вернутся в прежнее состояние.")
+        self.text.setText(tr('<b>Виновник найден: {0}.</b> Выключите его — остальные моды вернутся в прежнее состояние.', name))
         for b in (self.yes, self.no, self.stop, self.auto_stop):
             b.hide()
         for b in (self.keep, self.restore):
@@ -209,10 +206,9 @@ class BisectBanner(QFrame):
 
 class CompareDialog(FramelessDialog):
     def __init__(self, parent, tokens: dict, left_name: str, right_name: str, diff: Dict[str, List]):
-        super().__init__(parent, "Сравнение сборок", 720)
+        super().__init__(parent, tr("Сравнение сборок"), 720)
         self.resize(780, 620)
-        summary = (f"«{left_name}» и «{right_name}»: совпадают {len(diff['same'])}, отличаются версии у "
-                   f"{len(diff['different'])}, только в одной — {len(diff['only_left'])} и {len(diff['only_right'])}.")
+        summary = (tr('«{0}» и «{1}»: совпадают {2}, отличаются версии у {3}, только в одной — {4} и {5}.', left_name, right_name, len(diff['same']), len(diff['different']), len(diff['only_left']), len(diff['only_right'])))
         self.body.addWidget(label(summary, "Muted", wrap=True))
         text = QPlainTextEdit()
         text.setReadOnly(True)
@@ -223,13 +219,13 @@ class CompareDialog(FramelessDialog):
             lines.extend(items or ["  —"])
             lines.append("")
 
-        section(f"Только в «{left_name}»", [f"  + {e.get('name')}  {e.get('current_version') or ''}" for e in diff["only_left"]])
-        section(f"Только в «{right_name}»", [f"  + {e.get('name')}  {e.get('current_version') or ''}" for e in diff["only_right"]])
-        section("Разные версии", [f"  ≠ {a.get('name')}:  {a.get('current_version') or '?'}  ↔  {b.get('current_version') or '?'}"
+        section(tr('Только в «{0}»', left_name), [f"  + {e.get('name')}  {e.get('current_version') or ''}" for e in diff["only_left"]])
+        section(tr('Только в «{0}»', right_name), [f"  + {e.get('name')}  {e.get('current_version') or ''}" for e in diff["only_right"]])
+        section(tr("Разные версии"), [f"  ≠ {a.get('name')}:  {a.get('current_version') or '?'}  ↔  {b.get('current_version') or '?'}"
                                   for a, b in diff["different"]])
         text.setPlainText("\n".join(lines))
         self.body.addWidget(text, 1)
-        self.add_button("Закрыть", True, self.accept)
+        self.add_button(tr("Закрыть"), True, self.accept)
         self.finish_layout()
 
 
@@ -239,25 +235,25 @@ class IntegrityDialog(FramelessDialog):
     fix_requested = pyqtSignal()
 
     def __init__(self, parent, tokens: dict, result: Dict[str, List[str]]):
-        super().__init__(parent, "Проверка целостности", 560)
+        super().__init__(parent, tr("Проверка целостности"), 560)
         problems = sum(len(v) for v in result.values())
         if not problems:
-            self.body.addWidget(label("✓ Все файлы в порядке: архивы открываются, остатков загрузки нет.", None, wrap=True))
+            self.body.addWidget(label(tr("✓ Все файлы в порядке: архивы открываются, остатков загрузки нет."), None, wrap=True))
         else:
             parts = []
-            for key, title in (("broken", "Повреждённые архивы — игра на них упадёт"), ("empty", "Пустые файлы"),
-                               ("partial", "Остатки прерванной загрузки")):
+            for key, title in (("broken", tr("Повреждённые архивы — игра на них упадёт")), ("empty", tr("Пустые файлы")),
+                               ("partial", tr("Остатки прерванной загрузки"))):
                 if result[key]:
                     parts.append(f"<b>{title}:</b><br>" + "<br>".join(f"&nbsp;&nbsp;• {os.path.basename(p)}" for p in result[key]))
             info = label("<br><br>".join(parts), None, wrap=True)
             info.setTextFormat(Qt.TextFormat.RichText)
             self.body.addWidget(info)
-            self.body.addWidget(label("Исправление уберёт эти файлы в бэкап — их можно вернуть на странице «История». "
-                                      "Повреждённый мод потом можно установить заново из каталога.", "Muted", wrap=True))
-            self.add_button("Отмена")
-            self.add_button(f"Исправить ({problems})", True, lambda: (self.fix_requested.emit(), self.accept()))
+            self.body.addWidget(label(tr("Исправление уберёт эти файлы в бэкап — их можно вернуть на странице «История». "
+                                      "Повреждённый мод потом можно установить заново из каталога."), "Muted", wrap=True))
+            self.add_button(tr("Отмена"))
+            self.add_button(tr('Исправить ({0})', problems), True, lambda: (self.fix_requested.emit(), self.accept()))
         if not problems:
-            self.add_button("Закрыть", True, self.accept)
+            self.add_button(tr("Закрыть"), True, self.accept)
         self.finish_layout()
 
 
@@ -265,38 +261,38 @@ class IntegrityDialog(FramelessDialog):
 
 class CloneDialog(FramelessDialog):
     def __init__(self, parent, profile_name: str, game_dir: str, existing_names=()):
-        super().__init__(parent, "Клонировать сборку", 560)
+        super().__init__(parent, tr("Клонировать сборку"), 560)
         self.existing = set(existing_names)
-        self.body.addWidget(label("Копия папки игры для экспериментов: моды, настройки модов, шейдеры, ресурспаки и "
-                                  "options.txt. Новая сборка появится в списке слева.", "Muted", wrap=True))
-        base = f"{profile_name} (копия)"
+        self.body.addWidget(label(tr("Копия папки игры для экспериментов: моды, настройки модов, шейдеры, ресурспаки и "
+                                  "options.txt. Новая сборка появится в списке слева."), "Muted", wrap=True))
+        base = tr('{0} (копия)', profile_name)
         name, n = base, 2
         while name in self.existing:
-            name, n = f"{profile_name} (копия {n})", n + 1
+            name, n = tr('{0} (копия {1})', profile_name, n), n + 1
         self.name_edit = QLineEdit(name)
-        self.body.addWidget(QLabel("Название"))
+        self.body.addWidget(QLabel(tr("Название")))
         self.body.addWidget(self.name_edit)
-        self.body.addWidget(QLabel("Папка новой сборки"))
+        self.body.addWidget(QLabel(tr("Папка новой сборки")))
         row = QHBoxLayout()
         parent_dir = os.path.dirname(os.path.normpath(game_dir)) if game_dir else ""
         self.path_edit = QLineEdit(os.path.join(parent_dir, f"{os.path.basename(os.path.normpath(game_dir))}-copy")
                                    if game_dir else "")
-        browse = QPushButton("Обзор…")
+        browse = QPushButton(tr("Обзор…"))
         browse.clicked.connect(self._browse)
         row.addWidget(self.path_edit, 1)
         row.addWidget(browse)
         self.body.addLayout(row)
-        self.saves = QCheckBox("Скопировать и миры (папка saves) — может занять много места")
+        self.saves = QCheckBox(tr("Скопировать и миры (папка saves) — может занять много места"))
         self.body.addWidget(self.saves)
         self.error = label("", "WarningText", wrap=True)
         self.error.hide()
         self.body.addWidget(self.error)
-        self.add_button("Отмена")
-        self.add_button("Клонировать", True, self._accept)
+        self.add_button(tr("Отмена"))
+        self.add_button(tr("Клонировать"), True, self._accept)
         self.finish_layout()
 
     def _browse(self):
-        path = QFileDialog.getExistingDirectory(self, "Папка для копии", os.path.dirname(self.path_edit.text()))
+        path = QFileDialog.getExistingDirectory(self, tr("Папка для копии"), os.path.dirname(self.path_edit.text()))
         if path:
             self.path_edit.setText(path)
 
@@ -304,11 +300,11 @@ class CloneDialog(FramelessDialog):
         name, path = self.name_edit.text().strip(), self.path_edit.text().strip()
         error = None
         if not name or name in self.existing:
-            error = "Введите новое название сборки."
+            error = tr("Введите новое название сборки.")
         elif not path:
-            error = "Укажите папку."
+            error = tr("Укажите папку.")
         elif os.path.isdir(path) and os.listdir(path):
-            error = "Эта папка не пустая — выберите другую."
+            error = tr("Эта папка не пустая — выберите другую.")
         if error:
             self.error.setText(error)
             self.error.show()

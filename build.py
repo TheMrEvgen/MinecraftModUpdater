@@ -100,6 +100,9 @@ def build_executable(onedir: bool = False):
     for module in EXCLUDED_MODULES:
         params.extend(['--exclude-module', module])
 
+    # Переводы интерфейса (locales/en.json и др.)
+    params.extend(['--add-data', f'locales{os.pathsep}locales'])
+
     if os.path.exists(ICON_FILE):
         # --icon задаёт иконку .exe, --add-data кладёт файл внутрь сборки для иконки окна
         params.extend(['--icon', ICON_FILE, '--add-data', f'{ICON_FILE}{os.pathsep}.'])

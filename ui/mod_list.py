@@ -20,6 +20,7 @@ from view_model import (
     CAT_ALL, DEP_TYPE_LABELS, GROUP_TITLES, entry_key, entry_tags, format_size, group_of, matches_category,
     side_tag, status_of, status_sort_key, status_style, subtitle_for, update_date,
 )
+from i18n import tr
 
 ENTRY_ROLE = Qt.ItemDataRole.UserRole + 1
 ROW_HEIGHT = 62
@@ -27,10 +28,10 @@ ROW_HEIGHT_COMPACT = 44
 TREE_INDENT = 30  # Сдвиг строки зависимости в режиме дерева
 HEADER_HEIGHT = 36  # Заголовок группы над первой строкой группы
 # Что можно показывать в строке мода (настройка «Колонки»)
-COLUMNS = (("description", "Описание"), ("versions", "Версии"), ("size", "Размер"), ("date", "Дата обновления"),
-           ("side", "Сторона (клиент/сервер)"), ("tags", "Метки"))
+COLUMNS = (("description", tr("Описание")), ("versions", tr("Версии")), ("size", tr("Размер")), ("date", tr("Дата обновления")),
+           ("side", tr("Сторона (клиент/сервер)")), ("tags", tr("Метки")))
 DEFAULT_COLUMNS = ("description", "versions")
-SIDE_SHORT = {"side:client": "клиент", "side:server": "сервер", "side:both": "клиент + сервер", "side:any": "любая"}
+SIDE_SHORT = {"side:client": tr("клиент"), "side:server": tr("сервер"), "side:both": tr("клиент + сервер"), "side:any": tr("любая")}
 
 
 def _timestamp(iso: str) -> float:
@@ -514,9 +515,9 @@ class ModDelegate(QStyledItemDelegate):
         if entry.get("_note"):
             badges.append(("pencil", "", t["info"]))
         if entry.get("_new"):
-            badges.append((None, "новое", t["accent"]))
+            badges.append((None, tr("новое"), t["accent"]))
         if self.abandoned_hint and entry.get("filepath") and is_abandoned(entry):
-            badges.append((None, "давно не обновлялся", t["warning"]))
+            badges.append((None, tr("давно не обновлялся"), t["warning"]))
         return badges
 
     def _paint_name_line(self, p: QPainter, rect: QRect, entry: Dict, name: str, fm: QFontMetrics) -> int:
@@ -562,7 +563,7 @@ class ModDelegate(QStyledItemDelegate):
         parts = []
         if dep_type:
             kind = DEP_TYPE_LABELS.get(dep_type, "")
-            parts.append(f"{kind[:1].upper()}{kind[1:]} зависимость")
+            parts.append(tr('{0}{1} зависимость', kind[:1].upper(), kind[1:]))
         if "description" in self.columns and entry.get("description"):
             parts.append(" ".join(entry["description"].split()))
         if "tags" in self.columns:
@@ -677,7 +678,7 @@ class ModDelegate(QStyledItemDelegate):
                 p.drawRoundedRect(QRectF(track.left(), track.top(), max(6.0, track.width() * progress), 6), 3, 3)
                 label = f"{int(progress * 100)}%"
             else:
-                label = "Скачивание…"
+                label = tr("Скачивание…")
             p.setFont(self.font_chip)
             p.setPen(qcolor(t["text_muted"]))
             p.drawText(QRect(r.left(), r.top() - 12, r.width(), 14), Qt.AlignmentFlag.AlignRight, label)
@@ -761,14 +762,14 @@ class ModDelegate(QStyledItemDelegate):
         lay = self._layout(self._content_rect(option.rect, index), meta.get("depth", 0) if self.tree else 0)
         tip = None
         if self.tree and meta.get("children") and lay["expander"].contains(pos):
-            tip = f"Зависимости: {len(meta['children'])}"
+            tip = tr('Зависимости: {0}', len(meta['children']))
         elif entry.get("download_url") and not entry.get("_pinned") and lay["update"].contains(pos):
-            verb = "Установить" if not entry.get("filepath") else "Обновить до"
+            verb = tr("Установить") if not entry.get("filepath") else tr("Обновить до")
             tip = f"{verb} {entry.get('new_version') or ''}".strip()
         elif lay["more"].contains(pos):
-            tip = "Действия"
+            tip = tr("Действия")
         elif lay["check"].adjusted(-8, -12, 8, 12).contains(pos):
-            tip = "Отметить для массовых действий"
+            tip = tr("Отметить для массовых действий")
         elif lay["status"].contains(pos):
             tip = str(entry.get("status") or "")
         elif lay["text"].contains(pos):

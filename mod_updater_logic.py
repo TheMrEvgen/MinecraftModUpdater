@@ -13,6 +13,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from packaging.version import InvalidVersion, parse as parse_version
+from i18n import tr
 
 # Константы для API Modrinth
 MODRINTH_API_BASE = "https://api.modrinth.com/v2"
@@ -116,7 +117,7 @@ def safe_filename(filename: str) -> str:
     """
     name = os.path.basename((filename or "").replace("\\", "/"))
     if not name or name in (".", "..") or name.startswith("."):
-        raise ValueError(f"Недопустимое имя файла: {filename!r}")
+        raise ValueError(tr('Недопустимое имя файла: {0!r}', filename))
     return name
 
 
@@ -468,9 +469,9 @@ def download_file(url: str, dest_path: str, expected_hashes: Optional[Dict[str, 
                                 progress_callback(downloaded_size, total_size)
 
             if os.path.getsize(dest_path) == 0:
-                raise DownloadError("Скачанный файл пуст")
+                raise DownloadError(tr("Скачанный файл пуст"))
             if not verify_file_hashes(dest_path, expected_hashes):
-                raise HashMismatchError(f"Хэш файла {filename} не совпадает с ожидаемым")
+                raise HashMismatchError(tr('Хэш файла {0} не совпадает с ожидаемым', filename))
             logging.info(f"Файл {filename} успешно скачан и проверен ({downloaded_size} байт).")
             return
 
@@ -498,7 +499,7 @@ def download_bytes(url: str, timeout: int = 15, max_size: int = 2 * 1024 * 1024)
         for chunk in r.iter_content(chunk_size=64 * 1024):
             data.extend(chunk)
             if len(data) > max_size:
-                raise DownloadError("Файл слишком большой")
+                raise DownloadError(tr("Файл слишком большой"))
         return bytes(data)
 
 

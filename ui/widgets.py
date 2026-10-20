@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 import icons
 from launchers import SOURCE_LABELS
 from theme import qcolor
+from i18n import tr
 
 
 def label(text: str = "", object_name: Optional[str] = None, wrap: bool = False) -> QLabel:
@@ -311,11 +312,11 @@ class SelectionBar(QFrame):
         self.count_label.setStyleSheet("font-weight: 700; background: transparent;")
         layout.addWidget(self.count_label)
         layout.addSpacing(10)
-        self.update_btn = button("Обновить", "PrimaryButton", "download", tokens, "accent_text")
-        self.disable_btn = button("Выключить", None, "power", tokens, "text")
-        self.delete_btn = button("Удалить", "DangerButton", "trash", tokens, "danger")
-        self.clear_btn = button("Снять выделение", "GhostButton", "x", tokens, "text_muted")
-        self.more_btn = button("Ещё", None, "more", tokens, "text", "Закрепить, избранное, метка, набор")
+        self.update_btn = button(tr("Обновить"), "PrimaryButton", "download", tokens, "accent_text")
+        self.disable_btn = button(tr("Выключить"), None, "power", tokens, "text")
+        self.delete_btn = button(tr("Удалить"), "DangerButton", "trash", tokens, "danger")
+        self.clear_btn = button(tr("Снять выделение"), "GhostButton", "x", tokens, "text_muted")
+        self.more_btn = button(tr("Ещё"), None, "more", tokens, "text", tr("Закрепить, избранное, метка, набор"))
         self.more_btn.clicked.connect(lambda: self.more_clicked.emit(
             self.more_btn.mapToGlobal(self.more_btn.rect().topLeft())))
         self.update_btn.clicked.connect(self.update_clicked)
@@ -328,13 +329,13 @@ class SelectionBar(QFrame):
         self.hide()
 
     def set_state(self, checked: int, updatable: int, deletable: int, install_mode: bool, all_disabled: bool = False):
-        self.count_label.setText(f"Выбрано: {checked}")
-        verb = "Установить" if install_mode else "Обновить"
+        self.count_label.setText(tr('Выбрано: {0}', checked))
+        verb = tr("Установить") if install_mode else tr("Обновить")
         self.update_btn.setText(f"{verb} ({updatable})" if updatable else verb)
         self.update_btn.setEnabled(updatable > 0)
         self.delete_btn.setVisible(deletable > 0)
         self.disable_btn.setVisible(deletable > 0)
-        self.disable_btn.setText("Включить" if all_disabled else "Выключить")
+        self.disable_btn.setText(tr("Включить") if all_disabled else tr("Выключить"))
         self.adjustSize()
 
 
@@ -346,9 +347,9 @@ class DropOverlay(QFrame):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_label = QLabel()
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.text_label = QLabel("Отпустите, чтобы добавить")
+        self.text_label = QLabel(tr("Отпустите, чтобы добавить"))
         self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.hint_label = QLabel(".jar — добавить моды · .mrpack — импорт сборки · строка или ссылка — синхронизация")
+        self.hint_label = QLabel(tr(".jar — добавить моды · .mrpack — импорт сборки · строка или ссылка — синхронизация"))
         self.hint_label.setObjectName("Muted")
         self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.icon_label)
@@ -473,8 +474,8 @@ class Sidebar(QFrame):
     page_changed = pyqtSignal(int)
     profiles_reordered = pyqtSignal(list)  # [(имя, группа)] в новом порядке
 
-    PAGES = (("package", "Моды"), ("compass", "Каталог"), ("history", "История"), ("bar_chart", "Статистика"),
-             ("terminal", "Журнал"), ("settings", "Настройки"))
+    PAGES = (("package", tr("Моды")), ("compass", tr("Каталог")), ("history", tr("История")), ("bar_chart", tr("Статистика")),
+             ("terminal", tr("Журнал")), ("settings", tr("Настройки")))
 
     def __init__(self, tokens: dict, app_version: str, parent=None):
         super().__init__(parent)
@@ -494,7 +495,7 @@ class Sidebar(QFrame):
         titles = QVBoxLayout()
         titles.setSpacing(0)
         titles.addWidget(label("Mod Updater", "AppTitle"))
-        titles.addWidget(label(f"ВЕРСИЯ {app_version}".upper(), "AppVersion"))
+        titles.addWidget(label(tr('ВЕРСИЯ {0}', app_version).upper(), "AppVersion"))
         brand.addLayout(titles)
         brand.addStretch()
         layout.addLayout(brand)
@@ -502,9 +503,9 @@ class Sidebar(QFrame):
 
         header = QHBoxLayout()
         header.setContentsMargins(8, 0, 0, 0)
-        header.addWidget(label("СБОРКИ", "SectionLabel"))
+        header.addWidget(label(tr("СБОРКИ"), "SectionLabel"))
         header.addStretch()
-        self.add_btn = button("", "IconButton", "plus", tokens, "text_muted", "Добавить сборку")
+        self.add_btn = button("", "IconButton", "plus", tokens, "text_muted", tr("Добавить сборку"))
         self.add_btn.setFixedSize(28, 28)
         self.add_btn.clicked.connect(self.add_profile_clicked)
         header.addWidget(self.add_btn)

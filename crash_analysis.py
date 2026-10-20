@@ -18,6 +18,7 @@ except ImportError:  # Python < 3.11
     tomllib = None
 
 from content import enabled_name
+from i18n import tr
 
 # Слова, которые встречаются в логах всегда и ничего не говорят о виновнике
 IGNORED_TOKENS = {"minecraft", "fabric", "fabricloader", "forge", "neoforge", "quilt", "java", "mixin", "mixins",
@@ -126,19 +127,19 @@ def analyze_crash(text: str, entries: List[Dict], path: str = "") -> CrashReport
             pattern = re.compile(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])")
             if any(pattern.search(line) for line in suspected_block):
                 score += 20
-                reasons.append("назван в «Suspected Mods»")
+                reasons.append(tr("назван в «Suspected Mods»"))
             for line in lowered:
                 if not pattern.search(line):
                     continue
                 if "mixin" in line or "from mod" in line:
                     score += 6
-                    reasons.append("ошибка Mixin этого мода")
+                    reasons.append(tr("ошибка Mixin этого мода"))
                 elif "exception" in line or "caused by" in line or "error" in line:
                     score += 4
-                    reasons.append("упоминается в ошибке")
+                    reasons.append(tr("упоминается в ошибке"))
                 elif line.lstrip().startswith("at "):
                     score += 1
-                    reasons.append("код мода в стеке вызовов")
+                    reasons.append(tr("код мода в стеке вызовов"))
                 else:
                     score += 1
         if score:

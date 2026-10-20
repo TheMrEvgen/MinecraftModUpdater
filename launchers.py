@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from game_detection import detect_game_versions, extract_loader_version
+from i18n import tr
 
 # uid компонентов Prism/MultiMC -> загрузчик
 _PRISM_LOADER_UIDS = {
@@ -22,7 +23,7 @@ _PRISM_LOADER_UIDS = {
 }
 
 SOURCE_LABELS = {
-    "manual": "Вручную",
+    "manual": tr("Вручную"),
     "official": "Minecraft Launcher",
     "prism": "Prism Launcher",
     "multimc": "MultiMC",

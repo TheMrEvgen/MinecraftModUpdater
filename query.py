@@ -16,6 +16,7 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
+from i18n import tr
 from view_model import entry_tags, group_of, search_text, side_tag
 
 SIZE_UNITS = {"b": 1, "kb": 1024, "кб": 1024, "mb": 1024 ** 2, "мб": 1024 ** 2, "gb": 1024 ** 3, "гб": 1024 ** 3}
@@ -25,12 +26,12 @@ ABANDONED_DAYS = 365
 
 # Подсказки для автодополнения в строке поиска
 QUERY_HINTS = [
-    ("tag:", "метка"), ("side:client", "только клиентские"), ("side:server", "нужные на сервере"),
-    ("side:both", "клиент и сервер"), ("is:fav", "избранные"), ("is:pinned", "закреплённые"),
-    ("is:disabled", "выключенные"), ("is:new", "новые обновления с прошлого раза"), ("is:note", "с заметкой"),
-    ("is:abandoned", "давно не обновлялись"), ("is:lib", "библиотеки"), ("status:update", "есть обновление"),
-    ("status:problem", "с проблемами"), ("status:notfound", "нет на Modrinth"), ("size>5mb", "больше 5 МБ"),
-    ("age>1y", "не обновлялись больше года"), ("-tag:", "без метки"),
+    ("tag:", tr("метка")), ("side:client", tr("только клиентские")), ("side:server", tr("нужные на сервере")),
+    ("side:both", tr("клиент и сервер")), ("is:fav", tr("избранные")), ("is:pinned", tr("закреплённые")),
+    ("is:disabled", tr("выключенные")), ("is:new", tr("новые обновления с прошлого раза")), ("is:note", tr("с заметкой")),
+    ("is:abandoned", tr("давно не обновлялись")), ("is:lib", tr("библиотеки")), ("status:update", tr("есть обновление")),
+    ("status:problem", tr("с проблемами")), ("status:notfound", tr("нет на Modrinth")), ("size>5mb", tr("больше 5 МБ")),
+    ("age>1y", tr("не обновлялись больше года")), ("-tag:", tr("без метки")),
 ]
 
 

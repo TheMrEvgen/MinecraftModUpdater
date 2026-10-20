@@ -15,8 +15,9 @@ from enums import UpdateChannel
 from ui.widgets import button, label
 from ui_components import DialogTitleBar
 from view_model import format_size
+from i18n import tr
 
-VERSION_TYPES = {"release": "релиз", "beta": "бета", "alpha": "альфа"}
+VERSION_TYPES = {"release": tr("релиз"), "beta": tr("бета"), "alpha": tr("альфа")}
 ENTRY_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
@@ -60,8 +61,8 @@ def ask_text(parent, title: str, prompt: str, placeholder: str = "", text: str =
     edit = QLineEdit(text)
     edit.setPlaceholderText(placeholder)
     dialog.body.addWidget(edit)
-    dialog.add_button("Отмена")
-    dialog.add_button("Готово", True, dialog.accept)
+    dialog.add_button(tr("Отмена"))
+    dialog.add_button(tr("Готово"), True, dialog.accept)
     dialog.finish_layout()
     edit.setFocus()
     if dialog.exec() and edit.text().strip():
@@ -87,7 +88,7 @@ def prepare_markdown(markdown: str) -> str:
     картинки убираем (картинка-ссылка становится обычной ссылкой), обёртки HTML снимаем, заголовки уменьшаем.
     """
     text = markdown or ""
-    text = _IMAGE_LINK_MD.sub(lambda m: f"[ссылка]({m.group(1)})", text)
+    text = _IMAGE_LINK_MD.sub(lambda m: tr('[ссылка]({0})', m.group(1)), text)
     text = _IMAGE_MD.sub("", text)
     text = _HTML_DROP.sub("", text)
     text = _SUMMARY.sub(lambda m: f"\n\n**{m.group(1).strip()}**\n\n", text)
@@ -100,12 +101,12 @@ def prepare_markdown(markdown: str) -> str:
 def changelog_markdown(versions: List[Dict], fallback: str = "") -> str:
     """Списки изменений нескольких версий одним документом (новые сверху)."""
     if not versions:
-        return prepare_markdown(fallback) or "_Автор не оставил описания изменений._"
+        return prepare_markdown(fallback) or tr("_Автор не оставил описания изменений._")
     parts = []
     for v in versions:
         kind = VERSION_TYPES.get(v.get("version_type"), v.get("version_type") or "")
         parts.append(f"### {v.get('version_number')}  ·  {kind}  ·  {v.get('date')}\n\n"
-                     f"{prepare_markdown(v.get('changelog') or '') or '_Без описания._'}")
+                     f"{prepare_markdown(v.get('changelog') or '') or tr('_Без описания._')}")
     return "\n\n---\n\n".join(parts)
 
 
@@ -116,16 +117,15 @@ class UpdateReviewDialog(FramelessDialog):
     """
 
     def __init__(self, parent, tokens: dict, entries: List[Dict], icon_provider: Callable[[Dict], Optional[QPixmap]],
-                 changelog_loader: Callable[[Callable[[Dict], None]], None], verb: str = "Обновить"):
-        super().__init__(parent, "Что нового", 900)
+                 changelog_loader: Callable[[Callable[[Dict], None]], None], verb: str = tr("Обновить")):
+        super().__init__(parent, tr("Что нового"), 900)
         self.resize(980, 640)
         self.tokens = tokens
         self.entries = entries
         self.verb = verb
         self.changelogs: Optional[Dict[str, List[Dict]]] = None
 
-        intro = label(f"Будет обновлено модов: {len(entries)}. Снимите отметку с тех, которые обновлять не нужно — "
-                      "закрепите их версию в меню мода, чтобы они не предлагались снова.", "Muted", wrap=True)
+        intro = label(tr('Будет обновлено модов: {0}. Снимите отметку с тех, которые обновлять не нужно — закрепите их версию в меню мода, чтобы они не предлагались снова.', len(entries)), "Muted", wrap=True)
         self.body.addWidget(intro)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
@@ -164,7 +164,7 @@ class UpdateReviewDialog(FramelessDialog):
 
         self.summary = label("", "Muted")
         self.buttons.insertWidget(0, self.summary)
-        self.add_button("Отмена")
+        self.add_button(tr("Отмена"))
         self.ok = self.add_button(verb, True, self.accept)
         self.finish_layout()
 
@@ -183,13 +183,13 @@ class UpdateReviewDialog(FramelessDialog):
             return
         entry = self.entries[row]
         self.title.setText(entry.get("name", ""))
-        current = entry.get("current_version") or "не установлен"
+        current = entry.get("current_version") or tr("не установлен")
         size = f"  ·  {format_size(entry['new_size'])}" if entry.get("new_size") else ""
         self.subtitle.setText(f"{current}  →  {entry.get('new_version') or ''}{size}")
         latest = (entry.get("_latest_info") or {}).get("changelog") or ""
         if self.changelogs is None:
-            text = (prepare_markdown(latest) + "\n\n_Загружаем изменения промежуточных версий…_") if latest \
-                else "_Загружаем список изменений…_"
+            text = (prepare_markdown(latest) + tr("\n\n_Загружаем изменения промежуточных версий…_")) if latest \
+                else tr("_Загружаем список изменений…_")
         else:
             text = changelog_markdown(self.changelogs.get(entry.get("project_id"), []), latest)
         self.changelog.setMarkdown(text[:60000])
@@ -201,7 +201,7 @@ class UpdateReviewDialog(FramelessDialog):
     def _update_summary(self):
         selected = self.selected_entries()
         size = sum(e.get("new_size") or 0 for e in selected)
-        self.summary.setText(f"Выбрано: {len(selected)} из {len(self.entries)}" + (f"  ·  {format_size(size)}" if size else ""))
+        self.summary.setText(tr('Выбрано: {0} из {1}', len(selected), len(self.entries)) + (f"  ·  {format_size(size)}" if size else ""))
         self.ok.setText(f"{self.verb} ({len(selected)})")
         self.ok.setEnabled(bool(selected))
 
@@ -214,7 +214,7 @@ class MigrationDialog(FramelessDialog):
 
     def __init__(self, parent, tokens: dict, entries: List[Dict], game_version: str, loader: str,
                  channel: UpdateChannel, run_task: Callable, content: ContentType = MODS, target: Optional[str] = None):
-        super().__init__(parent, "Переход на другую версию Minecraft", 640)
+        super().__init__(parent, tr("Переход на другую версию Minecraft"), 640)
         self._preselect = target
         self.resize(700, 600)
         self.tokens = tokens
@@ -226,16 +226,15 @@ class MigrationDialog(FramelessDialog):
         self.results: List[Dict] = []
         self.target = ""
 
-        self.body.addWidget(label(f"Сейчас: Minecraft {game_version} ({loader}). Выберите версию — программа проверит, "
-                                  "для каких модов уже есть совместимые версии.", "Muted", wrap=True))
+        self.body.addWidget(label(tr('Сейчас: Minecraft {0} ({1}). Выберите версию — программа проверит, для каких модов уже есть совместимые версии.', game_version, loader), "Muted", wrap=True))
         row = QHBoxLayout()
         self.version_combo = QComboBox()
         self.version_combo.setEditable(True)
         self.version_combo.setMinimumWidth(180)
-        self.version_combo.setPlaceholderText("Загрузка версий…")
-        self.check_btn = button("Проверить", None, "refresh", tokens, "text")
+        self.version_combo.setPlaceholderText(tr("Загрузка версий…"))
+        self.check_btn = button(tr("Проверить"), None, "refresh", tokens, "text")
         self.check_btn.clicked.connect(self._check)
-        row.addWidget(QLabel("Версия игры:"))
+        row.addWidget(QLabel(tr("Версия игры:")))
         row.addWidget(self.version_combo)
         row.addWidget(self.check_btn)
         row.addStretch()
@@ -249,22 +248,22 @@ class MigrationDialog(FramelessDialog):
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.list.setMinimumHeight(300)
         self.body.addWidget(self.list, 1)
-        self.disable_missing = QCheckBox("Выключить моды, для которых версии нет (их можно включить позже)")
+        self.disable_missing = QCheckBox(tr("Выключить моды, для которых версии нет (их можно включить позже)"))
         self.disable_missing.setChecked(True)
         self.disable_missing.hide()
         self.body.addWidget(self.disable_missing)
-        self.note = label("После перехода смените версию игры и загрузчика в лаунчере — программа обновляет только моды.",
+        self.note = label(tr("После перехода смените версию игры и загрузчика в лаунчере — программа обновляет только моды."),
                           "Faint", wrap=True)
         self.body.addWidget(self.note)
 
-        self.add_button("Отмена")
-        self.ok = self.add_button("Перейти", True, self.accept)
+        self.add_button(tr("Отмена"))
+        self.ok = self.add_button(tr("Перейти"), True, self.accept)
         self.ok.setEnabled(False)
         self.finish_layout()
 
         from mod_updater_logic import get_game_versions
         self.run_task(get_game_versions, (), self._on_versions,
-                      lambda e: self.version_combo.setPlaceholderText("Введите версию"), "Загружаем версии игры…")
+                      lambda e: self.version_combo.setPlaceholderText(tr("Введите версию")), tr("Загружаем версии игры…"))
         self._current = game_version
 
     def _on_versions(self, versions: List[str]):
@@ -284,26 +283,26 @@ class MigrationDialog(FramelessDialog):
             return
         from scanner import check_target_version
         self.check_btn.setEnabled(False)
-        self.check_btn.setText("Проверяем…")
+        self.check_btn.setText(tr("Проверяем…"))
         installed = [e for e in self.entries if e.get("filepath")]
         self.run_task(check_target_version, (installed, target, self.loader, self.channel, self.content),
                       lambda results: self._on_checked(target, results), self._on_failed,
-                      f"Проверяем совместимость с {target}…")
+                      tr('Проверяем совместимость с {0}…', target))
 
     def _on_failed(self, error: str):
         self.check_btn.setEnabled(True)
-        self.check_btn.setText("Проверить")
-        self.summary.setText(f"Не удалось проверить: {error}")
+        self.check_btn.setText(tr("Проверить"))
+        self.summary.setText(tr('Не удалось проверить: {0}', error))
         self.summary.show()
 
     def _on_checked(self, target: str, results: List[Dict]):
         t = self.tokens
         self.check_btn.setEnabled(True)
-        self.check_btn.setText("Проверить")
+        self.check_btn.setText(tr("Проверить"))
         self.target, self.results = target, results
         ready = [r for r in results if r["version"]]
         missing = [r for r in results if not r["version"]]
-        self.summary.setText(f"Готовы к {target}: {len(ready)} из {len(results)}")
+        self.summary.setText(tr('Готовы к {0}: {1} из {2}', target, len(ready), len(results)))
         self.summary.setStyleSheet(f"color: {t['accent'] if not missing else t['warning']};")
         self.summary.show()
         self.list.clear()
@@ -311,15 +310,15 @@ class MigrationDialog(FramelessDialog):
             entry, version = r["entry"], r["version"]
             if version and version.get("id") == (entry.get("installed_info") or {}).get("id"):
                 item = QListWidgetItem(icons.icon("check_circle", t["accent"], 16),
-                                       f"{entry.get('name')}   {entry.get('current_version') or ''} — уже подходит")
+                                       tr('{0}   {1} — уже подходит', entry.get('name'), entry.get('current_version') or ''))
             elif version:
                 text = f"{entry.get('name')}   {entry.get('current_version') or ''} → {version.get('version_number')}"
                 item = QListWidgetItem(icons.icon("check_circle", t["accent"], 16), text)
             else:
-                reason = "нет на Modrinth" if not entry.get("project_id") else f"нет версии под {target}"
+                reason = tr("нет на Modrinth") if not entry.get("project_id") else tr('нет версии под {0}', target)
                 item = QListWidgetItem(icons.icon("error", t["danger"], 16), f"{entry.get('name')}   — {reason}")
             self.list.addItem(item)
-        self.disable_missing.setText(f"Выключить моды без версии под {target} ({len(missing)}) — их можно включить позже")
+        self.disable_missing.setText(tr('Выключить моды без версии под {0} ({1}) — их можно включить позже', target, len(missing)))
         self.disable_missing.setVisible(bool(missing))
-        self.ok.setText(f"Перейти на {target}")
+        self.ok.setText(tr('Перейти на {0}', target))
         self.ok.setEnabled(bool(ready) and target != self._current)

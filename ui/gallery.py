@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 import icons
 from ui.dialogs import FramelessDialog
 from ui.widgets import label, rounded_pixmap
+from i18n import plural, tr
 
 THUMB = QSize(168, 96)
 MAX_ITEMS = 16
@@ -104,7 +105,7 @@ class GalleryStrip(QWidget):
         self.items = gallery_items(gallery)
         for index, item in enumerate(self.items):
             thumb = _Thumb()
-            thumb.setToolTip(item.get("title") or "Открыть скриншот")
+            thumb.setToolTip(item.get("title") or tr("Открыть скриншот"))
             thumb.clicked.connect(lambda i=index: self._open(i))
             key = self.thumb_loader.url_key(item["url"])
             self.thumbs[key] = thumb
@@ -115,8 +116,7 @@ class GalleryStrip(QWidget):
         self.row.addStretch()
         self.scroll.horizontalScrollBar().setValue(0)
         count = len(self.items)
-        self.hint.setText(f"{count} {'скриншот' if count == 1 else 'скриншота' if 2 <= count <= 4 else 'скриншотов'}"
-                          " · колесо мыши или стрелки — листать, щелчок — открыть")
+        self.hint.setText(tr('{0} {1} · колесо мыши или стрелки — листать, щелчок — открыть', count, plural(count, 'скриншот', 'скриншота', 'скриншотов')))
         self.setVisible(bool(self.items))
         self._update_arrows()
 
@@ -176,7 +176,7 @@ class ImageViewer(FramelessDialog):
     """Скриншот целиком; ← / → (кнопки, клавиши, колесо) — соседние, щелчок по картинке — следующий."""
 
     def __init__(self, parent, loader, items: List[Dict], index: int = 0, tokens: Optional[dict] = None):
-        super().__init__(parent, "Скриншоты", 720)
+        super().__init__(parent, tr("Скриншоты"), 720)
         self.loader = loader
         self.items = items
         self.index = index
@@ -185,11 +185,11 @@ class ImageViewer(FramelessDialog):
 
         row = QHBoxLayout()
         row.setSpacing(10)
-        self.prev = button_arrow("chevron_left", self.tokens, "Предыдущий (←)")
-        self.next = button_arrow("chevron_right", self.tokens, "Следующий (→)")
+        self.prev = button_arrow("chevron_left", self.tokens, tr("Предыдущий (←)"))
+        self.next = button_arrow("chevron_right", self.tokens, tr("Следующий (→)"))
         self.prev.clicked.connect(lambda: self.go(-1))
         self.next.clicked.connect(lambda: self.go(1))
-        self.image = QLabel("Загрузка…")
+        self.image = QLabel(tr("Загрузка…"))
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image.setMinimumSize(640, 360)
         self.image.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -203,7 +203,7 @@ class ImageViewer(FramelessDialog):
         self.body.addWidget(self.caption)
         self.counter = label("", "Faint")
         self.buttons.insertWidget(0, self.counter)
-        self.add_button("Закрыть", True, self.accept)
+        self.add_button(tr("Закрыть"), True, self.accept)
         self.finish_layout()
         loader.icon_ready.connect(self._on_loaded)
         self._fit_to_screen()
@@ -231,7 +231,7 @@ class ImageViewer(FramelessDialog):
         self.next.setVisible(multiple)
         self._pixmap = None
         self.image.setPixmap(QPixmap())
-        self.image.setText("Загрузка…")
+        self.image.setText(tr("Загрузка…"))
         path = self.loader.request_url(self._url(self.index))
         if path:
             self._set(path)
@@ -249,7 +249,7 @@ class ImageViewer(FramelessDialog):
     def _set(self, path: str):
         pm = QPixmap(path)
         if pm.isNull():
-            self.image.setText("Не удалось загрузить картинку")
+            self.image.setText(tr("Не удалось загрузить картинку"))
             return
         self._pixmap = pm
         self._rescale()

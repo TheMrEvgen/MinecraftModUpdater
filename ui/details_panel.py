@@ -23,6 +23,7 @@ def panel_width(available: int) -> int:
     return max(PANEL_MIN, min(PANEL_MAX, int(available * 0.42)))
 from query import days_since, is_abandoned
 from view_model import entry_tags, format_size, status_of, status_style
+from i18n import language, tr
 
 
 def demote_headings(markdown: str) -> str:
@@ -30,8 +31,8 @@ def demote_headings(markdown: str) -> str:
     from ui.dialogs import prepare_markdown  # dialogs импортирует widgets — избегаем цикла при загрузке
     return prepare_markdown(markdown)
 
-SIDE_LABELS = {"required": "нужен", "optional": "необязателен", "unsupported": "не поддерживается"}
-VERSION_TYPES = {"release": "релиз", "beta": "бета", "alpha": "альфа"}
+SIDE_LABELS = {"required": tr("нужен"), "optional": tr("необязателен"), "unsupported": tr("не поддерживается")}
+VERSION_TYPES = {"release": tr("релиз"), "beta": tr("бета"), "alpha": tr("альфа")}
 VERSION_TYPE_ROLES = {"release": "accent", "beta": "warning", "alpha": "danger"}
 VERSION_ROLE = Qt.ItemDataRole.UserRole
 INSTALLED_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -77,7 +78,7 @@ class VersionDelegate(QStyledItemDelegate):
         right = r.right() - 10
         if installed:
             fm = QFontMetrics(self.font_chip)
-            text = "установлена"
+            text = tr("установлена")
             w = fm.horizontalAdvance(text) + 30
             chip = QRectF(right - w, r.center().y() - 11, w, 22)
             p.setPen(Qt.PenStyle.NoPen)
@@ -156,12 +157,12 @@ class DetailsPanel(QFrame):
         self.layout_.setSpacing(12)
 
         top = QHBoxLayout()
-        self.favorite_btn = button("", "IconButton", "star", tokens, "text_muted", "В избранное")
+        self.favorite_btn = button("", "IconButton", "star", tokens, "text_muted", tr("В избранное"))
         self.favorite_btn.setFixedSize(30, 30)
         self.favorite_btn.clicked.connect(lambda: self.entry and self.favorite_toggled.emit(self.entry))
         top.addWidget(self.favorite_btn)
         top.addStretch()
-        self.close_btn = button("", "IconButton", "x", tokens, "text_muted", "Закрыть (Esc)")
+        self.close_btn = button("", "IconButton", "x", tokens, "text_muted", tr("Закрыть (Esc)"))
         self.close_btn.setFixedSize(30, 30)
         self.close_btn.clicked.connect(self.closed)
         top.addWidget(self.close_btn)
@@ -193,7 +194,7 @@ class DetailsPanel(QFrame):
         self.issues_label = label("", None, wrap=True)
         self.layout_.addWidget(self.issues_label)
 
-        self.install_btn = ElideButton("Обновить")
+        self.install_btn = ElideButton(tr("Обновить"))
         self.install_btn.setObjectName("PrimaryButton")
         self.install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.install_btn.setProperty("icon_name", "download")
@@ -204,13 +205,13 @@ class DetailsPanel(QFrame):
         actions = QHBoxLayout()
         actions.setSpacing(8)
         self.install_btn.clicked.connect(lambda: self.entry and self.install_requested.emit(self.entry))
-        self.page_btn = flex_button("Modrinth", None, "external", tokens, "text", "Открыть страницу мода")
+        self.page_btn = flex_button("Modrinth", None, "external", tokens, "text", tr("Открыть страницу мода"))
         self.page_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.page_btn.clicked.connect(lambda: self.entry and self.open_page_requested.emit(self.entry))
-        self.file_btn = flex_button("В папке", None, "folder", tokens, "text", "Показать файл в папке")
+        self.file_btn = flex_button(tr("В папке"), None, "folder", tokens, "text", tr("Показать файл в папке"))
         self.file_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.file_btn.clicked.connect(lambda: self.entry and self.open_file_requested.emit(self.entry))
-        self.delete_btn = flex_button("Удалить", "DangerButton", "trash", tokens, "danger", "Удалить мод (можно отменить)")
+        self.delete_btn = flex_button(tr("Удалить"), "DangerButton", "trash", tokens, "danger", tr("Удалить мод (можно отменить)"))
         self.delete_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.delete_btn.clicked.connect(lambda: self.entry and self.delete_requested.emit(self.entry))
         actions.addWidget(self.page_btn)
@@ -220,12 +221,12 @@ class DetailsPanel(QFrame):
 
         extra = QHBoxLayout()
         extra.setSpacing(8)
-        self.pin_btn = flex_button("Закрепить", None, "lock", tokens, "text",
-                                   "Не обновлять этот мод (в том числе в «Обновить все»)")
+        self.pin_btn = flex_button(tr("Закрепить"), None, "lock", tokens, "text",
+                                   tr("Не обновлять этот мод (в том числе в «Обновить все»)"))
         self.pin_btn.clicked.connect(lambda: self.entry and self.pin_toggled.emit(self.entry))
-        self.disable_btn = flex_button("Выключить", None, "power", tokens, "text", "Выключить мод без удаления (*.disabled)")
+        self.disable_btn = flex_button(tr("Выключить"), None, "power", tokens, "text", tr("Выключить мод без удаления (*.disabled)"))
         self.disable_btn.clicked.connect(lambda: self.entry and self.disable_toggled.emit(self.entry))
-        self.tags_btn = flex_button("Метки", None, "tag", tokens, "text", "Добавить или убрать свои метки")
+        self.tags_btn = flex_button(tr("Метки"), None, "tag", tokens, "text", tr("Добавить или убрать свои метки"))
         self.tags_btn.clicked.connect(lambda: self.entry and self.tags_menu_requested.emit(
             self.entry, self.tags_btn.mapToGlobal(self.tags_btn.rect().bottomLeft())))
         for b in (self.pin_btn, self.disable_btn, self.tags_btn):
@@ -245,15 +246,15 @@ class DetailsPanel(QFrame):
         box.setContentsMargins(12, 8, 8, 8)
         self.abandoned_label = label("", None, wrap=True)
         box.addWidget(self.abandoned_label, 1)
-        self.replace_btn = flex_button("Найти замену", "GhostButton", "compass", tokens, "text")
+        self.replace_btn = flex_button(tr("Найти замену"), "GhostButton", "compass", tokens, "text")
         self.replace_btn.clicked.connect(lambda: self.entry and self.replacement_requested.emit(self.entry))
         box.addWidget(self.replace_btn)
         self.layout_.addWidget(self.abandoned_box)
 
         # Заметка (сохраняется сама через полсекунды после ввода)
-        self.note_title = label("Заметка", "SectionTitle")
+        self.note_title = label(tr("Заметка"), "SectionTitle")
         self.note_edit = QPlainTextEdit()
-        self.note_edit.setPlaceholderText("Например: не обновлять до 1.21.4 — ломает мир")
+        self.note_edit.setPlaceholderText(tr("Например: не обновлять до 1.21.4 — ломает мир"))
         self.note_edit.setFixedHeight(64)
         self._note_timer = QTimer(self, singleShot=True, interval=500)
         self._note_timer.timeout.connect(self._save_note)
@@ -264,11 +265,11 @@ class DetailsPanel(QFrame):
 
         # Ссылки и галерея
         from ui.gallery import LinksRow
-        self.links_title = label("Ссылки", "SectionTitle")
+        self.links_title = label(tr("Ссылки"), "SectionTitle")
         self.links = LinksRow(tokens)
         self.layout_.addWidget(self.links_title)
         self.layout_.addWidget(self.links)
-        self.gallery_title = label("Скриншоты", "SectionTitle")
+        self.gallery_title = label(tr("Скриншоты"), "SectionTitle")
         self.gallery = None  # Создаётся в attach_gallery: нужны загрузчики картинок главного окна
         self.layout_.addWidget(self.gallery_title)
         self._gallery_index = self.layout_.count()
@@ -282,13 +283,13 @@ class DetailsPanel(QFrame):
         self.info_form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         self.layout_.addWidget(self.info_card)
 
-        self.deps_title = label("Зависимости", "SectionTitle")
+        self.deps_title = label(tr("Зависимости"), "SectionTitle")
         self.deps_box = QVBoxLayout()
         self.deps_box.setSpacing(6)
         self.layout_.addWidget(self.deps_title)
         self.layout_.addLayout(self.deps_box)
 
-        self.changelog_title = label("Что нового", "SectionTitle")
+        self.changelog_title = label(tr("Что нового"), "SectionTitle")
         self.changelog = QTextBrowser()
         self.changelog.setOpenExternalLinks(True)
         self.changelog.setMinimumHeight(160)
@@ -297,9 +298,9 @@ class DetailsPanel(QFrame):
         self.layout_.addWidget(self.changelog)
 
         versions_header = QHBoxLayout()
-        versions_header.addWidget(label("Другие версии", "SectionTitle"))
+        versions_header.addWidget(label(tr("Другие версии"), "SectionTitle"))
         versions_header.addStretch()
-        self.load_versions_btn = button("Показать", "GhostButton", "history", tokens, "text_muted")
+        self.load_versions_btn = button(tr("Показать"), "GhostButton", "history", tokens, "text_muted")
         self.load_versions_btn.clicked.connect(lambda: self.entry and self.versions_requested.emit(self.entry))
         versions_header.addWidget(self.load_versions_btn)
         self.versions_header_widget = QWidget()
@@ -315,7 +316,7 @@ class DetailsPanel(QFrame):
         self.versions_delegate = VersionDelegate(self.versions_list, tokens)
         self.versions_list.setItemDelegate(self.versions_delegate)
         self.versions_list.itemDoubleClicked.connect(self._install_selected_version)
-        self.version_install_btn = button("Установить выбранную версию", None, "download", tokens, "text")
+        self.version_install_btn = button(tr("Установить выбранную версию"), None, "download", tokens, "text")
         self.version_install_btn.clicked.connect(self._install_selected_version)
         self.layout_.addWidget(self.versions_list)
         self.layout_.addWidget(self.version_install_btn)
@@ -375,14 +376,14 @@ class DetailsPanel(QFrame):
 
         issues = list(entry.get("_issues") or [])
         if entry.get("_required_by"):
-            prefix = "Нужен для" if status == ModStatus.REQUIRED else "Используется модами"
+            prefix = tr("Нужен для") if status == ModStatus.REQUIRED else tr("Используется модами")
             issues.append(f"{prefix}: {', '.join(entry['_required_by'])}")
         self.issues_label.setText("\n".join(f"• {i}" for i in issues))
         self.issues_label.setStyleSheet(f"color: {t['warning'] if entry.get('_issues') or status == ModStatus.REQUIRED else t['text_muted']};")
         self.issues_label.setVisible(bool(issues))
 
         can_install = bool(entry.get("download_url")) and status not in (ModStatus.DOWNLOADING, ModStatus.FINISHING)
-        verb = "Обновить до" if entry.get("filepath") else "Установить"
+        verb = tr("Обновить до") if entry.get("filepath") else tr("Установить")
         self.install_btn.setText(f"{verb} {entry.get('new_version') or ''}".strip())
         self.install_btn.setVisible(can_install)
         self.page_btn.setVisible(bool(entry.get("project_id")))
@@ -391,12 +392,12 @@ class DetailsPanel(QFrame):
         has_file = bool(entry.get("filepath"))
         self.pin_btn.setVisible(has_file)
         pinned = bool(entry.get("_pinned"))
-        self.pin_btn.setText("Открепить" if pinned else "Закрепить")
+        self.pin_btn.setText(tr("Открепить") if pinned else tr("Закрепить"))
         self.pin_btn.setProperty("icon_name", "unlock" if pinned else "lock")
         self.pin_btn.setIcon(icons.icon("unlock" if pinned else "lock", t["text"], 16))
         self.disable_btn.setVisible(has_file)
         disabled = bool(entry.get("disabled"))
-        self.disable_btn.setText("Включить" if disabled else "Выключить")
+        self.disable_btn.setText(tr("Включить") if disabled else tr("Выключить"))
         self.tags_btn.setVisible(bool(entry.get("project_id") or has_file))
         tags = entry_tags(entry, self.custom_tags)
         chips = []
@@ -410,15 +411,15 @@ class DetailsPanel(QFrame):
         self.favorite_btn.setProperty("icon_name", "star_filled" if favorite else "star")
         self.favorite_btn.setProperty("icon_color_key", "warning" if favorite else "text_muted")
         self.favorite_btn.setIcon(icons.icon("star_filled" if favorite else "star", t["warning" if favorite else "text_muted"], 16))
-        self.favorite_btn.setToolTip("Убрать из избранного" if favorite else "В избранное")
+        self.favorite_btn.setToolTip(tr("Убрать из избранного") if favorite else tr("В избранное"))
         self.favorite_btn.setVisible(bool(has_file or entry.get("project_id")))
 
         age = days_since(entry.get("project_updated"))
         abandoned = bool(entry.get("filepath")) and is_abandoned(entry)
         if abandoned:
             years = age / 365
-            when = f"{years:.1f} года".replace(".", ",") if years < 5 else "больше 5 лет"
-            self.abandoned_label.setText(f"Автор не обновлял мод {when}. Он может не работать с новыми версиями игры.")
+            when = tr('{0} года', f"{years:.1f}".replace(".", "," if language() == "ru" else ".")) if years < 5 else tr("больше 5 лет")
+            self.abandoned_label.setText(tr('Автор не обновлял мод {0}. Он может не работать с новыми версиями игры.', when))
         self.abandoned_box.setVisible(abandoned and self.show_abandoned)
 
         if not same_entry:
@@ -441,7 +442,7 @@ class DetailsPanel(QFrame):
         self._fill_dependencies(entry)
 
         changelog = (entry.get("_latest_info") or {}).get("changelog") if entry.get("new_version") else None
-        self.changelog_title.setText(f"Что нового в {entry.get('new_version')}" if changelog else "Что нового")
+        self.changelog_title.setText(tr('Что нового в {0}', entry.get('new_version')) if changelog else tr("Что нового"))
         self.changelog_title.setVisible(bool(changelog))
         self.changelog.setVisible(bool(changelog))
         if changelog:
@@ -458,28 +459,28 @@ class DetailsPanel(QFrame):
         info = entry.get("installed_info") or {}
         rows = []
         if entry.get("current_version"):
-            rows.append(("Установлена", entry["current_version"]))
+            rows.append((tr("Установлена"), entry["current_version"]))
         if info.get("date_published"):
-            rows.append(("Выпущена", format_date(info["date_published"])))
+            rows.append((tr("Выпущена"), format_date(info["date_published"])))
         if entry.get("new_version"):
             date = f"  ·  {entry['new_version_date']}" if entry.get("new_version_date") else ""
-            rows.append(("Доступна", f"{entry['new_version']}{date}"))
-        sides = [f"клиент — {SIDE_LABELS.get(entry.get('client_side'), '?')}",
-                 f"сервер — {SIDE_LABELS.get(entry.get('server_side'), '?')}"]
+            rows.append((tr("Доступна"), f"{entry['new_version']}{date}"))
+        sides = [tr('клиент — {0}', SIDE_LABELS.get(entry.get('client_side'), '?')),
+                 tr('сервер — {0}', SIDE_LABELS.get(entry.get('server_side'), '?'))]
         if entry.get("client_side") or entry.get("server_side"):
-            rows.append(("Сторона", "\n".join(sides)))
+            rows.append((tr("Сторона"), "\n".join(sides)))
         size = entry.get("size") or 0
         if size:
             new_size = entry.get("new_size") or 0
-            rows.append(("Размер", format_size(size) + (f"  →  {format_size(new_size)}" if new_size and entry.get("new_version") else "")))
+            rows.append((tr("Размер"), format_size(size) + (f"  →  {format_size(new_size)}" if new_size and entry.get("new_version") else "")))
         elif entry.get("new_size"):
-            rows.append(("Размер", format_size(entry["new_size"])))
+            rows.append((tr("Размер"), format_size(entry["new_size"])))
         if entry.get("_pinned"):
-            rows.append(("Закреплён", "обновления не предлагаются"))
+            rows.append((tr("Закреплён"), tr("обновления не предлагаются")))
         if entry.get("disabled"):
-            rows.append(("Выключен", "файл переименован в *.disabled — игра его не загружает"))
+            rows.append((tr("Выключен"), tr("файл переименован в *.disabled — игра его не загружает")))
         if entry.get("project_id"):
-            rows.append(("ID проекта", entry["project_id"]))
+            rows.append((tr("ID проекта"), entry["project_id"]))
         for key, value in rows:
             key_label = label(key, "Faint")
             value_label = label(str(value), None, wrap=True)
@@ -502,8 +503,8 @@ class DetailsPanel(QFrame):
             lay.setContentsMargins(12, 8, 8, 8)
             text, role = status_style(dep)
             color = t.get(role, t["text_muted"])
-            kind = {"required": "обязательная", "optional": "необязательная",
-                    "incompatible": "несовместимая"}.get(dep.get("type"), "")
+            kind = {"required": tr("обязательная"), "optional": tr("необязательная"),
+                    "incompatible": tr("несовместимая")}.get(dep.get("type"), "")
             name = label(f"<b>{dep.get('name', '?')}</b><br><span style='color:{t['text_faint']}'>{kind}</span>")
             name.setTextFormat(Qt.TextFormat.RichText)
             lay.addWidget(name, 1)
@@ -511,11 +512,11 @@ class DetailsPanel(QFrame):
             status_label.setStyleSheet(f"color: {color}; font-weight: 600; background: transparent;")
             lay.addWidget(status_label)
             if dep.get("download_url") and not dep.get("filepath"):
-                install = button("", "IconButton", "download", t, "accent", "Установить зависимость")
+                install = button("", "IconButton", "download", t, "accent", tr("Установить зависимость"))
                 install.clicked.connect(lambda _=False, d=dep: self.install_requested.emit(d))
                 lay.addWidget(install)
             elif dep.get("filepath"):
-                go = button("", "IconButton", "external", t, "text_muted", "Перейти к моду в списке")
+                go = button("", "IconButton", "external", t, "text_muted", tr("Перейти к моду в списке"))
                 go.clicked.connect(lambda _=False, d=dep: self.select_entry_requested.emit(d))
                 lay.addWidget(go)
             self.deps_box.addWidget(row)
@@ -525,7 +526,7 @@ class DetailsPanel(QFrame):
     def _set_versions_visible(self, visible: bool):
         self.versions_list.setVisible(visible)
         self.version_install_btn.setVisible(visible)
-        self.load_versions_btn.setText("Обновить список" if visible else "Показать")
+        self.load_versions_btn.setText(tr("Обновить список") if visible else tr("Показать"))
 
     def set_versions(self, versions: List[Dict]):
         self._versions = versions
@@ -538,7 +539,7 @@ class DetailsPanel(QFrame):
             item.setData(INSTALLED_ROLE, v.get("version_number") == current)
             self.versions_list.addItem(item)
         if not versions:
-            self.versions_list.addItem("Нет версий для этой версии игры и загрузчика")
+            self.versions_list.addItem(tr("Нет версий для этой версии игры и загрузчика"))
         self._set_versions_visible(True)
 
     def _install_selected_version(self, *_):

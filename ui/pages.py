@@ -14,6 +14,7 @@ from ui.shortcuts import ShortcutEditor
 from ui.widgets import EmptyState, button, label, refresh_button_icons
 from updater import KIND_LABELS, SNAPSHOT_REASONS
 from view_model import format_size
+from i18n import LANGUAGES, language, tr
 
 KIND_ICONS = {"update": "download", "delete": "trash", "replace_all": "layers", "add": "plus", "restore": "camera",
               "migrate": "trending_up"}
@@ -42,12 +43,12 @@ class HistoryPage(QWidget):
         root.setContentsMargins(32, 28, 32, 24)
         root.setSpacing(18)
         head = QHBoxLayout()
-        head.addLayout(page_header("История изменений",
-                                   "Снимки сохраняют весь набор модов целиком, а каждая операция — заменённые файлы. "
-                                   "К любому снимку и любую операцию можно вернуть."), 1)
-        self.snapshot_btn = button("Создать снимок", "PrimaryButton", "camera", tokens, "accent_text")
+        head.addLayout(page_header(tr("История изменений"),
+                                   tr("Снимки сохраняют весь набор модов целиком, а каждая операция — заменённые файлы. "
+                                   "К любому снимку и любую операцию можно вернуть.")), 1)
+        self.snapshot_btn = button(tr("Создать снимок"), "PrimaryButton", "camera", tokens, "accent_text")
         self.snapshot_btn.clicked.connect(self.snapshot_create_requested)
-        self.open_btn = button("Папка бэкапов", None, "folder", tokens, "text")
+        self.open_btn = button(tr("Папка бэкапов"), None, "folder", tokens, "text")
         self.open_btn.clicked.connect(self.open_backups_requested)
         head.addWidget(self.snapshot_btn, 0, Qt.AlignmentFlag.AlignTop)
         head.addWidget(self.open_btn, 0, Qt.AlignmentFlag.AlignTop)
@@ -75,18 +76,18 @@ class HistoryPage(QWidget):
                 item.widget().deleteLater()
         if not transactions and not snapshots:
             empty = EmptyState()
-            empty.set_content(self.tokens, "history", "Пока пусто",
-                              "Здесь появятся снимки сборки, обновления, установки и удаления модов.")
+            empty.set_content(self.tokens, "history", tr("Пока пусто"),
+                              tr("Здесь появятся снимки сборки, обновления, установки и удаления модов."))
             self.list_layout.addWidget(empty)
             self.list_layout.addStretch()
             return
         if snapshots:
-            self.list_layout.addWidget(label("СНИМКИ СБОРКИ", "SectionLabel"))
+            self.list_layout.addWidget(label(tr("СНИМКИ СБОРКИ"), "SectionLabel"))
             for snapshot in snapshots:
                 self.list_layout.addWidget(self._snapshot_card(snapshot))
             self.list_layout.addSpacing(10)
         if transactions:
-            self.list_layout.addWidget(label("ОПЕРАЦИИ", "SectionLabel"))
+            self.list_layout.addWidget(label(tr("ОПЕРАЦИИ"), "SectionLabel"))
         for i, manifest in enumerate(transactions):
             self.list_layout.addWidget(self._card(manifest, latest=(i == 0)))
         self.list_layout.addStretch()
@@ -108,20 +109,19 @@ class HistoryPage(QWidget):
         text.setSpacing(3)
         reason = snapshot.get("title") or SNAPSHOT_REASONS.get(snapshot.get("reason"), snapshot.get("reason", ""))
         files = snapshot.get("files") or []
-        title_label = label(f"<b>Снимок: {len(files)} файлов</b>"
-                            f"   <span style='color:{t['text_faint']}'>{format_size(snapshot.get('total_size') or 0)}</span>")
+        title_label = label(tr("<b>Снимок: {0} файлов</b>   <span style='color:{1}'>{2}</span>", len(files), t['text_faint'], format_size(snapshot.get('total_size') or 0)))
         title_label.setTextFormat(Qt.TextFormat.RichText)
         text.addWidget(title_label)
         text.addWidget(label(f"{snapshot.get('created', '').replace('T', '  ')}   ·   {reason}", "Faint"))
         names = [f.get("name") for f in files]
-        files_label = label(", ".join(names[:4]) + (f" и ещё {len(names) - 4}" if len(names) > 4 else ""), "Muted", wrap=True)
+        files_label = label(", ".join(names[:4]) + (tr(' и ещё {0}', len(names) - 4) if len(names) > 4 else ""), "Muted", wrap=True)
         files_label.setToolTip("\n".join(names))
         text.addWidget(files_label)
         lay.addLayout(text, 1)
-        restore = button("Восстановить", None, "undo", t, "text")
-        restore.setToolTip("Вернуть папку к этому набору модов (текущие файлы уйдут в бэкап — это тоже можно отменить)")
+        restore = button(tr("Восстановить"), None, "undo", t, "text")
+        restore.setToolTip(tr("Вернуть папку к этому набору модов (текущие файлы уйдут в бэкап — это тоже можно отменить)"))
         restore.clicked.connect(lambda: self.snapshot_restore_requested.emit(snapshot))
-        delete = button("", "IconButton", "trash", t, "text_muted", "Удалить снимок")
+        delete = button("", "IconButton", "trash", t, "text_muted", tr("Удалить снимок"))
         delete.setFixedSize(34, 34)
         delete.clicked.connect(lambda: self.snapshot_delete_requested.emit(snapshot))
         lay.addWidget(restore, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -147,28 +147,28 @@ class HistoryPage(QWidget):
         text.setSpacing(3)
         installed, backed_up = manifest.get("installed", []), manifest.get("backed_up", [])
         title = KIND_LABELS.get(kind, kind).capitalize()
-        badge = f"   <span style='color:{t['accent']}; font-size:8pt'>● последняя</span>" if latest else ""
+        badge = tr("   <span style='color:{0}; font-size:8pt'>● последняя</span>", t['accent']) if latest else ""
         title_label = label(f"<b>{title}</b>{badge}")
         title_label.setTextFormat(Qt.TextFormat.RichText)
         text.addWidget(title_label)
         stats = []
         if installed:
-            stats.append(f"установлено: {len(installed)}")
+            stats.append(tr('установлено: {0}', len(installed)))
         if backed_up:
-            stats.append(f"сохранено в бэкап: {len(backed_up)}")
+            stats.append(tr('сохранено в бэкап: {0}', len(backed_up)))
         text.addWidget(label(f"{manifest.get('created', '').replace('T', '  ')}   ·   {', '.join(stats)}", "Faint"))
         names = installed or [e.get("name") for e in backed_up]
         preview = ", ".join(n for n in names[:4] if n)
         if len(names) > 4:
-            preview += f" и ещё {len(names) - 4}"
+            preview += tr(' и ещё {0}', len(names) - 4)
         files_label = label(preview, "Muted", wrap=True)
         files_label.setToolTip("\n".join(
             [f"+ {n}" for n in installed] + [f"↺ {e.get('name')}" for e in backed_up]))
         text.addWidget(files_label)
         lay.addLayout(text, 1)
 
-        rollback = button("Вернуть", None, "undo", t, "text")
-        rollback.setToolTip("Удалить файлы, установленные этой операцией, и вернуть прежние")
+        rollback = button(tr("Вернуть"), None, "undo", t, "text")
+        rollback.setToolTip(tr("Удалить файлы, установленные этой операцией, и вернуть прежние"))
         rollback.clicked.connect(lambda: self.rollback_requested.emit(manifest))
         lay.addWidget(rollback, 0, Qt.AlignmentFlag.AlignVCenter)
         return card
@@ -184,10 +184,10 @@ class LogPage(QWidget):
         root.setContentsMargins(32, 28, 32, 24)
         root.setSpacing(16)
         head = QHBoxLayout()
-        head.addLayout(page_header("Журнал", "Подробный ход операций. Пригодится, если что-то пошло не так."), 1)
-        self.copy_btn = button("Копировать", None, "copy", tokens, "text")
-        self.folder_btn = button("Папка логов", None, "folder", tokens, "text")
-        self.clear_btn = button("Очистить", "GhostButton", "x", tokens, "text_muted")
+        head.addLayout(page_header(tr("Журнал"), tr("Подробный ход операций. Пригодится, если что-то пошло не так.")), 1)
+        self.copy_btn = button(tr("Копировать"), None, "copy", tokens, "text")
+        self.folder_btn = button(tr("Папка логов"), None, "folder", tokens, "text")
+        self.clear_btn = button(tr("Очистить"), "GhostButton", "x", tokens, "text_muted")
         for b in (self.copy_btn, self.folder_btn, self.clear_btn):
             head.addWidget(b, 0, Qt.AlignmentFlag.AlignTop)
         root.addLayout(head)
@@ -212,8 +212,8 @@ class LogPage(QWidget):
 
 
 SCALES = (90, 100, 110, 125, 150)
-BACKUP_DAYS = ((7, "7 дней"), (14, "14 дней"), (30, "30 дней"), (90, "90 дней"), (0, "не удалять"))
-BACKUP_MB = ((256, "256 МБ"), (512, "512 МБ"), (1024, "1 ГБ"), (2048, "2 ГБ"), (0, "без ограничения"))
+BACKUP_DAYS = ((7, tr("7 дней")), (14, tr("14 дней")), (30, tr("30 дней")), (90, tr("90 дней")), (0, tr("не удалять")))
+BACKUP_MB = ((256, tr("256 МБ")), (512, tr("512 МБ")), (1024, tr("1 ГБ")), (2048, tr("2 ГБ")), (0, tr("без ограничения")))
 
 
 class SettingsPage(QWidget):
@@ -244,28 +244,28 @@ class SettingsPage(QWidget):
         root = QVBoxLayout(content)
         root.setContentsMargins(32, 28, 32, 24)
         root.setSpacing(16)
-        root.addLayout(page_header("Настройки", "Оформление, проверка обновлений и данные приложения."))
+        root.addLayout(page_header(tr("Настройки"), tr("Оформление, проверка обновлений и данные приложения.")))
 
         # Установка программы
-        card, body = self._card("Установка программы")
+        card, body = self._card(tr("Установка программы"))
         self.install_status = label("", None, wrap=True)
         self.install_status.setTextFormat(Qt.TextFormat.RichText)
         body.addWidget(self.install_status)
         self.install_info = label("", "Muted", wrap=True)
         self.install_info.setTextFormat(Qt.TextFormat.RichText)
         body.addWidget(self.install_info)
-        self.install_desktop = QCheckBox("Ярлык на рабочем столе")
-        self.install_mrpack = QCheckBox("Открывать файлы .mrpack двойным щелчком")
-        self.install_protocol = QCheckBox("Открывать ссылки modupdater:// (кнопки «Открыть в Mod Updater» на сайтах)")
+        self.install_desktop = QCheckBox(tr("Ярлык на рабочем столе"))
+        self.install_mrpack = QCheckBox(tr("Открывать файлы .mrpack двойным щелчком"))
+        self.install_protocol = QCheckBox(tr("Открывать ссылки modupdater:// (кнопки «Открыть в Mod Updater» на сайтах)"))
         for box in (self.install_desktop, self.install_mrpack, self.install_protocol):
             box.setChecked(True)
             body.addWidget(box)
         row = QHBoxLayout()
-        self.install_btn = button("Установить", "PrimaryButton", "download", tokens, "accent_text")
+        self.install_btn = button(tr("Установить"), "PrimaryButton", "download", tokens, "accent_text")
         self.install_btn.clicked.connect(lambda: self.install_requested.emit({
             "desktop": self.install_desktop.isChecked(), "associate_mrpack": self.install_mrpack.isChecked(),
             "protocol": self.install_protocol.isChecked()}))
-        self.uninstall_btn = button("Удалить программу…", "DangerButton", "trash", tokens, "danger")
+        self.uninstall_btn = button(tr("Удалить программу…"), "DangerButton", "trash", tokens, "danger")
         self.uninstall_btn.clicked.connect(self.uninstall_requested)
         row.addWidget(self.install_btn)
         row.addWidget(self.uninstall_btn)
@@ -274,7 +274,7 @@ class SettingsPage(QWidget):
         root.addWidget(card)
 
         # Оформление
-        card, body = self._card("Оформление")
+        card, body = self._card(tr("Оформление"))
         theme_row = QHBoxLayout()
         self.theme_group = QButtonGroup(self)
         for i, (key, text) in enumerate(THEME_TITLES.items()):
@@ -286,7 +286,7 @@ class SettingsPage(QWidget):
         self.theme_group.buttonClicked.connect(lambda b: not self._loading and self.theme_changed.emit(b.property("theme_key")))
         body.addLayout(theme_row)
 
-        body.addWidget(label("Акцентный цвет", "Muted"))
+        body.addWidget(label(tr("Акцентный цвет"), "Muted"))
         accent_row = QHBoxLayout()
         accent_row.setSpacing(8)
         self.accent_group = QButtonGroup(self)
@@ -302,7 +302,7 @@ class SettingsPage(QWidget):
             swatch.setStyleSheet(f"#Swatch {{ background: {dark}; }}")
             self.accent_group.addButton(swatch)
             accent_row.addWidget(swatch)
-        self.custom_accent = QPushButton("Свой цвет…")
+        self.custom_accent = QPushButton(tr("Свой цвет…"))
         self.custom_accent.setObjectName("GhostButton")
         self.custom_accent.clicked.connect(self._pick_accent)
         accent_row.addSpacing(6)
@@ -313,40 +313,50 @@ class SettingsPage(QWidget):
         self._accent = DEFAULT_ACCENT
 
         row = QHBoxLayout()
-        row.addWidget(label("Масштаб интерфейса:"))
+        row.addWidget(label(tr("Масштаб интерфейса:")))
         self.scale = QComboBox()
         for value in SCALES:
             self.scale.addItem(f"{value}%", value)
         self.scale.currentIndexChanged.connect(self._emit)
         row.addWidget(self.scale)
-        row.addWidget(label("применится после перезапуска", "Faint"))
+        row.addWidget(label(tr("применится после перезапуска"), "Faint"))
         row.addStretch()
         body.addLayout(row)
         row = QHBoxLayout()
-        row.addWidget(label("Картинка в боковой панели:"))
-        self.sidebar_image_btn = button("Выбрать…", None, "image", tokens, "text")
+        row.addWidget(label("Язык / Language:"))
+        self.language = QComboBox()
+        for code, title in LANGUAGES.items():
+            self.language.addItem(title, code)
+        self.language.currentIndexChanged.connect(self._emit)
+        row.addWidget(self.language)
+        row.addWidget(label(tr("применится после перезапуска"), "Faint"))
+        row.addStretch()
+        body.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(label(tr("Картинка в боковой панели:")))
+        self.sidebar_image_btn = button(tr("Выбрать…"), None, "image", tokens, "text")
         self.sidebar_image_btn.clicked.connect(self._pick_sidebar_image)
-        self.sidebar_image_clear = button("Убрать", "GhostButton", "x", tokens, "text_muted")
+        self.sidebar_image_clear = button(tr("Убрать"), "GhostButton", "x", tokens, "text_muted")
         self.sidebar_image_clear.clicked.connect(lambda: self._set_sidebar_image(""))
         row.addWidget(self.sidebar_image_btn)
         row.addWidget(self.sidebar_image_clear)
         row.addStretch()
         body.addLayout(row)
         self._sidebar_image = ""
-        self.minimal = QCheckBox("Режим «Минимум»")
+        self.minimal = QCheckBox(tr("Режим «Минимум»"))
         self.minimal.toggled.connect(self._emit)
-        self._add_with_hint(body, self.minimal, "Только список модов и большая кнопка «Обновить все».")
+        self._add_with_hint(body, self.minimal, tr("Только список модов и большая кнопка «Обновить все»."))
         root.addWidget(card)
 
         # Список модов
-        card, body = self._card("Список модов")
-        body.addWidget(label("Как показывать моды сборки.",
+        card, body = self._card(tr("Список модов"))
+        body.addWidget(label(tr("Как показывать моды сборки."),
                              "Muted", wrap=True))
         self.view_group = QButtonGroup(self)
         for i, (key, text, hint) in enumerate((
-                ("flat", "Все моды и зависимости", "установленные моды и недостающие зависимости одним списком"),
-                ("mine", "Только мои моды", "только файлы из папки mods, без недостающих зависимостей"),
-                ("tree", "Дерево с зависимостями", "у каждого мода раскрывается список его зависимостей"))):
+                ("flat", tr("Все моды и зависимости"), tr("установленные моды и недостающие зависимости одним списком")),
+                ("mine", tr("Только мои моды"), tr("только файлы из папки mods, без недостающих зависимостей")),
+                ("tree", tr("Дерево с зависимостями"), tr("у каждого мода раскрывается список его зависимостей")))):
             radio = QRadioButton(text)
             radio.setProperty("view_key", key)
             self.view_group.addButton(radio, i)
@@ -355,29 +365,29 @@ class SettingsPage(QWidget):
             hint_label.setContentsMargins(26, 0, 0, 4)
             body.addWidget(hint_label)
         self.view_group.buttonClicked.connect(self._emit)
-        self.expand_deps = QCheckBox("В дереве сразу раскрывать зависимости")
+        self.expand_deps = QCheckBox(tr("В дереве сразу раскрывать зависимости"))
         self.expand_deps.toggled.connect(self._emit)
-        self.compact_rows = QCheckBox("Компактные строки")
-        self.compact_rows.setProperty("hint", "Без описания — на экране помещается больше модов.")
+        self.compact_rows = QCheckBox(tr("Компактные строки"))
+        self.compact_rows.setProperty("hint", tr("Без описания — на экране помещается больше модов."))
         self.compact_rows.toggled.connect(self._emit)
-        self.details_on_select = QCheckBox("Открывать панель мода при выборе строки")
-        self.details_on_select.setProperty("hint", "Иначе — двойной щелчок, Enter или «Подробнее» в меню мода.")
+        self.details_on_select = QCheckBox(tr("Открывать панель мода при выборе строки"))
+        self.details_on_select.setProperty("hint", tr("Иначе — двойной щелчок, Enter или «Подробнее» в меню мода."))
         self.details_on_select.toggled.connect(self._emit)
-        self.group_by_status = QCheckBox("Заголовки групп")
-        self.group_by_status.setProperty("hint", "«Обновления», «Актуальные»… при сортировке «Сначала важные».")
+        self.group_by_status = QCheckBox(tr("Заголовки групп"))
+        self.group_by_status.setProperty("hint", tr("«Обновления», «Актуальные»… при сортировке «Сначала важные»."))
         self.group_by_status.toggled.connect(self._emit)
-        self.animations = QCheckBox("Анимации")
-        self.animations.setProperty("hint", "Плавное раскрытие зависимостей в дереве.")
+        self.animations = QCheckBox(tr("Анимации"))
+        self.animations.setProperty("hint", tr("Плавное раскрытие зависимостей в дереве."))
         self.animations.toggled.connect(self._emit)
-        self.per_profile = QCheckBox("Вид и сортировка — свои у каждой сборки")
+        self.per_profile = QCheckBox(tr("Вид и сортировка — свои у каждой сборки"))
         self.per_profile.toggled.connect(self._emit)
-        self.abandoned = QCheckBox("Помечать давно не обновлявшиеся моды")
-        self.abandoned.setProperty("hint", "Автор не выпускал версий больше года.")
+        self.abandoned = QCheckBox(tr("Помечать давно не обновлявшиеся моды"))
+        self.abandoned.setProperty("hint", tr("Автор не выпускал версий больше года."))
         self.abandoned.toggled.connect(self._emit)
         for widget in (self.expand_deps, self.compact_rows, self.details_on_select, self.group_by_status, self.animations,
                        self.per_profile, self.abandoned):
             self._add_with_hint(body, widget, widget.property("hint"))
-        body.addWidget(label("Что показывать в строке мода:", "Muted"))
+        body.addWidget(label(tr("Что показывать в строке мода:"), "Muted"))
         from ui.mod_list import COLUMNS
         grid = QGridLayout()
         grid.setHorizontalSpacing(18)
@@ -391,15 +401,15 @@ class SettingsPage(QWidget):
         root.addWidget(card)
 
         # Обновления
-        card, body = self._card("Проверка обновлений")
-        self.auto_check = QCheckBox("Проверять обновления автоматически при открытии сборки")
+        card, body = self._card(tr("Проверка обновлений"))
+        self.auto_check = QCheckBox(tr("Проверять обновления автоматически при открытии сборки"))
         self.auto_check.toggled.connect(self._emit)
         body.addWidget(self.auto_check)
-        self.changelog_before = QCheckBox("Показывать «Что нового» перед «Обновить все»")
+        self.changelog_before = QCheckBox(tr("Показывать «Что нового» перед «Обновить все»"))
         self.changelog_before.toggled.connect(self._emit)
         body.addWidget(self.changelog_before)
         row = QHBoxLayout()
-        row.addWidget(label("Одновременных загрузок:"))
+        row.addWidget(label(tr("Одновременных загрузок:")))
         self.parallel = QComboBox()
         self.parallel.addItems([str(i) for i in range(1, 7)])
         self.parallel.currentIndexChanged.connect(self._emit)
@@ -409,14 +419,14 @@ class SettingsPage(QWidget):
         root.addWidget(card)
 
         # Снимки
-        card, body = self._card("Снимки и бэкапы")
-        body.addWidget(label("Снимок сохраняет весь набор модов, чтобы вернуться к нему со страницы «История». "
-                             "Файлы связываются жёсткими ссылками и почти не занимают места.", "Muted", wrap=True))
-        self.auto_snapshot = QCheckBox("Снимок перед большими изменениями")
+        card, body = self._card(tr("Снимки и бэкапы"))
+        body.addWidget(label(tr("Снимок сохраняет весь набор модов, чтобы вернуться к нему со страницы «История». "
+                             "Файлы связываются жёсткими ссылками и почти не занимают места."), "Muted", wrap=True))
+        self.auto_snapshot = QCheckBox(tr("Снимок перед большими изменениями"))
         self.auto_snapshot.toggled.connect(self._emit)
-        self._add_with_hint(body, self.auto_snapshot, "Перед «Обновить все», заменой сборки и сменой версии игры.")
+        self._add_with_hint(body, self.auto_snapshot, tr("Перед «Обновить все», заменой сборки и сменой версии игры."))
         row = QHBoxLayout()
-        row.addWidget(label("Хранить автоматических снимков:"))
+        row.addWidget(label(tr("Хранить автоматических снимков:")))
         self.snapshots_keep = QComboBox()
         self.snapshots_keep.addItems(["3", "5", "10", "20", "50"])
         self.snapshots_keep.currentIndexChanged.connect(self._emit)
@@ -424,14 +434,14 @@ class SettingsPage(QWidget):
         row.addStretch()
         body.addLayout(row)
         row = QHBoxLayout()
-        row.addWidget(label("Удалять бэкапы операций старше:"))
+        row.addWidget(label(tr("Удалять бэкапы операций старше:")))
         self.backup_days = QComboBox()
         for value, title in BACKUP_DAYS:
             self.backup_days.addItem(title, value)
         self.backup_days.currentIndexChanged.connect(self._emit)
         row.addWidget(self.backup_days)
         row.addSpacing(14)
-        row.addWidget(label("Не больше:"))
+        row.addWidget(label(tr("Не больше:")))
         self.backup_mb = QComboBox()
         for value, title in BACKUP_MB:
             self.backup_mb.addItem(title, value)
@@ -443,23 +453,23 @@ class SettingsPage(QWidget):
         self.backup_usage = label("", "Faint")
         row.addWidget(self.backup_usage)
         row.addStretch()
-        self.prune_btn = button("Очистить сейчас", None, "trash", tokens, "text")
+        self.prune_btn = button(tr("Очистить сейчас"), None, "trash", tokens, "text")
         self.prune_btn.clicked.connect(self.prune_backups_requested)
         row.addWidget(self.prune_btn)
         body.addLayout(row)
         root.addWidget(card)
 
         # Игра
-        card, body = self._card("Игра")
-        self.auto_crash = QCheckBox("Открывать разбор, если игра вылетела")
+        card, body = self._card(tr("Игра"))
+        self.auto_crash = QCheckBox(tr("Открывать разбор, если игра вылетела"))
         self.auto_crash.toggled.connect(self._emit)
-        self._add_with_hint(body, self.auto_crash, "Программа следит за игрой этой сборки (по занятым файлам модов и логу) "
-                            "и после вылета сама показывает, какие моды упоминаются в ошибке.")
+        self._add_with_hint(body, self.auto_crash, tr("Программа следит за игрой этой сборки (по занятым файлам модов и логу) "
+                            "и после вылета сама показывает, какие моды упоминаются в ошибке."))
         row = QHBoxLayout()
-        row.addWidget(label("Автопоиск проблемного мода: ждать загрузку игры до"))
+        row.addWidget(label(tr("Автопоиск проблемного мода: ждать загрузку игры до")))
         self.bisect_timeout = QComboBox()
         for minutes in (2, 3, 5, 8, 12):
-            self.bisect_timeout.addItem(f"{minutes} мин", minutes)
+            self.bisect_timeout.addItem(tr('{0} мин', minutes), minutes)
         self.bisect_timeout.currentIndexChanged.connect(self._emit)
         row.addWidget(self.bisect_timeout)
         row.addStretch()
@@ -467,36 +477,36 @@ class SettingsPage(QWidget):
         root.addWidget(card)
 
         # Лаунчеры
-        card, body = self._card("Лаунчеры")
-        body.addWidget(label("Сборки из Prism Launcher, MultiMC, Modrinth App, CurseForge и официального "
-                             "лаунчера добавляются в список автоматически.", "Muted", wrap=True))
-        self.discover = QCheckBox("Искать сборки при запуске")
+        card, body = self._card(tr("Лаунчеры"))
+        body.addWidget(label(tr("Сборки из Prism Launcher, MultiMC, Modrinth App, CurseForge и официального "
+                             "лаунчера добавляются в список автоматически."), "Muted", wrap=True))
+        self.discover = QCheckBox(tr("Искать сборки при запуске"))
         self.discover.toggled.connect(self._emit)
         body.addWidget(self.discover)
-        self.discover_btn = button("Найти сборки сейчас", None, "box_search", tokens, "text")
+        self.discover_btn = button(tr("Найти сборки сейчас"), None, "box_search", tokens, "text")
         self.discover_btn.clicked.connect(self.discover_requested)
         body.addWidget(self.discover_btn, 0, Qt.AlignmentFlag.AlignLeft)
         root.addWidget(card)
 
         # Данные
-        card, body = self._card("Данные")
-        body.addWidget(label("Кэш хранит хэши файлов, информацию о модах и иконки — с ним проверка "
-                             "занимает секунды. Очистка безопасна.", "Muted", wrap=True))
+        card, body = self._card(tr("Данные"))
+        body.addWidget(label(tr("Кэш хранит хэши файлов, информацию о модах и иконки — с ним проверка "
+                             "занимает секунды. Очистка безопасна."), "Muted", wrap=True))
         row = QHBoxLayout()
-        self.clear_btn = button("Очистить кэш", None, "trash", tokens, "text")
+        self.clear_btn = button(tr("Очистить кэш"), None, "trash", tokens, "text")
         self.clear_btn.clicked.connect(self.clear_cache_requested)
-        self.data_btn = button("Папка данных", None, "folder", tokens, "text")
+        self.data_btn = button(tr("Папка данных"), None, "folder", tokens, "text")
         self.data_btn.clicked.connect(self.open_data_requested)
         row.addWidget(self.clear_btn)
         row.addWidget(self.data_btn)
         row.addStretch()
         body.addLayout(row)
-        body.addWidget(label("Перенос на другой компьютер: сборки, настройки, метки, заметки, избранное и "
-                             "закреплённые версии в одном файле.", "Muted", wrap=True))
+        body.addWidget(label(tr("Перенос на другой компьютер: сборки, настройки, метки, заметки, избранное и "
+                             "закреплённые версии в одном файле."), "Muted", wrap=True))
         row = QHBoxLayout()
-        self.export_btn = button("Экспорт настроек…", None, "share", tokens, "text")
+        self.export_btn = button(tr("Экспорт настроек…"), None, "share", tokens, "text")
         self.export_btn.clicked.connect(self.export_requested)
-        self.import_btn = button("Импорт настроек…", None, "import", tokens, "text")
+        self.import_btn = button(tr("Импорт настроек…"), None, "import", tokens, "text")
         self.import_btn.clicked.connect(self.import_requested)
         row.addWidget(self.export_btn)
         row.addWidget(self.import_btn)
@@ -505,20 +515,20 @@ class SettingsPage(QWidget):
         root.addWidget(card)
 
         # Горячие клавиши
-        card, body = self._card("Горячие клавиши")
-        body.addWidget(label("Щёлкните по полю и нажмите новое сочетание. Крестик — убрать сочетание.", "Muted", wrap=True))
+        card, body = self._card(tr("Горячие клавиши"))
+        body.addWidget(label(tr("Щёлкните по полю и нажмите новое сочетание. Крестик — убрать сочетание."), "Muted", wrap=True))
         self.shortcut_editor = ShortcutEditor()
         self.shortcut_editor.changed.connect(self._emit)
         body.addWidget(self.shortcut_editor)
-        body.addWidget(label("Всегда работают:", "Muted"))
-        shortcuts = label("<table cellspacing='4'>"
+        body.addWidget(label(tr("Всегда работают:"), "Muted"))
+        shortcuts = label(tr("<table cellspacing='4'>"
                           "<tr><td><b>Пробел</b></td><td>&nbsp;&nbsp;отметить мод</td></tr>"
                           "<tr><td><b>Enter</b></td><td>&nbsp;&nbsp;открыть панель мода</td></tr>"
                           "<tr><td><b>→ / ←</b></td><td>&nbsp;&nbsp;раскрыть / свернуть зависимости (дерево)</td></tr>"
                           "<tr><td><b>Delete</b></td><td>&nbsp;&nbsp;удалить отмеченные</td></tr>"
                           "<tr><td><b>Esc</b></td><td>&nbsp;&nbsp;закрыть панель / сбросить поиск</td></tr>"
                           "<tr><td><b>Перетаскивание</b></td><td>&nbsp;&nbsp;.jar, .mrpack или строка сборки в окно</td></tr>"
-                          "</table>", "Muted")
+                          "</table>"), "Muted")
         shortcuts.setTextFormat(Qt.TextFormat.RichText)
         body.addWidget(shortcuts)
         root.addWidget(card)
@@ -568,8 +578,9 @@ class SettingsPage(QWidget):
         self._accent = settings.get("accent") or DEFAULT_ACCENT
         for b in self.accent_group.buttons():
             b.setChecked(b.property("accent_key") == self._accent)
-        self.custom_accent.setText("Свой цвет ✓" if self._accent.startswith("#") else "Свой цвет…")
+        self.custom_accent.setText(tr("Свой цвет ✓") if self._accent.startswith("#") else tr("Свой цвет…"))
         self.scale.setCurrentIndex(max(0, self.scale.findData(int(settings.get("ui_scale", 100)))))
+        self.language.setCurrentIndex(max(0, self.language.findData(settings.get("language") or language())))
         self.minimal.setChecked(bool(settings.get("minimal_mode", False)))
         self.auto_crash.setChecked(bool(settings.get("auto_crash_analysis", True)))
         self.bisect_timeout.setCurrentIndex(max(0, self.bisect_timeout.findData(int(settings.get("auto_bisect_timeout", 5)))))
@@ -587,7 +598,7 @@ class SettingsPage(QWidget):
 
     def set_install_state(self, supported: bool, state=None):
         """Раздел «Установка»: что даёт установка сейчас, что появится дальше, и текущее состояние."""
-        benefits = ("<b>Что даёт установка:</b><br>"
+        benefits = (tr("<b>Что даёт установка:</b><br>"
                     "• ярлыки в меню «Пуск» и на рабочем столе;<br>"
                     "• пункт в «Установке и удалении программ» Windows;<br>"
                     "• файлы .mrpack открываются двойным щелчком — сразу в режиме импорта;<br>"
@@ -596,30 +607,30 @@ class SettingsPage(QWidget):
                     "<b>Что появится в следующих версиях:</b><br>"
                     "• автообновление самой программы (проверка, загрузка и замена в один клик);<br>"
                     "• проверка обновлений модов в фоне со значком в трее и уведомлениями Windows;<br>"
-                    "• кнопки «Установить в Mod Updater» по ссылкам с сайтов и из сборок друзей.")
+                    "• кнопки «Установить в Mod Updater» по ссылкам с сайтов и из сборок друзей."))
         self.install_info.setText(benefits)
         boxes = (self.install_desktop, self.install_mrpack, self.install_protocol)
         if not supported:
-            self.install_status.setText("Установка доступна в собранной программе (.exe) для Windows. "
-                                        "Сейчас программа запущена из исходников.")
+            self.install_status.setText(tr("Установка доступна в собранной программе (.exe) для Windows. "
+                                        "Сейчас программа запущена из исходников."))
             for widget in (*boxes, self.install_btn, self.uninstall_btn):
                 widget.setEnabled(False)
             return
         for widget in (*boxes, self.install_btn):
             widget.setEnabled(True)
         if state and state.installed:
-            where = "эта копия" if state.running_installed else f"версия {state.installed_version}"
-            self.install_status.setText(f"<b>✓ Установлено</b> ({where}): {state.exe}")
-            self.install_btn.setText("Применить изменения" if state.running_installed else "Обновить установленную версию")
+            where = tr("эта копия") if state.running_installed else tr('версия {0}', state.installed_version)
+            self.install_status.setText(tr('<b>✓ Установлено</b> ({0}): {1}', where, state.exe))
+            self.install_btn.setText(tr("Применить изменения") if state.running_installed else tr("Обновить установленную версию"))
             self.install_desktop.setChecked(state.desktop)
             self.install_mrpack.setChecked(state.mrpack)
             self.install_protocol.setChecked(state.protocol)
             self.uninstall_btn.setEnabled(True)
             self.uninstall_btn.show()
         else:
-            self.install_status.setText("Программа запущена без установки — это просто .exe-файл. Установка займёт "
-                                        "пару секунд и не требует прав администратора.")
-            self.install_btn.setText("Установить")
+            self.install_status.setText(tr("Программа запущена без установки — это просто .exe-файл. Установка займёт "
+                                        "пару секунд и не требует прав администратора."))
+            self.install_btn.setText(tr("Установить"))
             self.uninstall_btn.hide()
 
     def set_backup_usage(self, text: str):
@@ -627,8 +638,8 @@ class SettingsPage(QWidget):
 
     def _pick_sidebar_image(self):
         from PyQt6.QtWidgets import QFileDialog
-        path, _ = QFileDialog.getOpenFileName(self, "Картинка для боковой панели", "",
-                                              "Картинки (*.png *.jpg *.jpeg *.webp *.bmp)")
+        path, _ = QFileDialog.getOpenFileName(self, tr("Картинка для боковой панели"), "",
+                                              tr("Картинки (*.png *.jpg *.jpeg *.webp *.bmp)"))
         if path:
             self._set_sidebar_image(path)
 
@@ -639,12 +650,12 @@ class SettingsPage(QWidget):
 
     def _set_accent(self, accent: str):
         self._accent = accent
-        self.custom_accent.setText("Свой цвет ✓" if accent.startswith("#") else "Свой цвет…")
+        self.custom_accent.setText(tr("Свой цвет ✓") if accent.startswith("#") else tr("Свой цвет…"))
         self._emit()
 
     def _pick_accent(self):
         start = QColor(self._accent) if self._accent.startswith("#") else QColor(ACCENTS[DEFAULT_ACCENT][1])
-        color = QColorDialog.getColor(start, self, "Акцентный цвет")
+        color = QColorDialog.getColor(start, self, tr("Акцентный цвет"))
         if color.isValid():
             for b in self.accent_group.buttons():
                 b.setChecked(False)
@@ -669,6 +680,7 @@ class SettingsPage(QWidget):
                 "parallel_downloads": int(self.parallel.currentText()),
                 "accent": self._accent,
                 "ui_scale": self.scale.currentData(),
+                "language": self.language.currentData(),
                 "minimal_mode": self.minimal.isChecked(),
                 "auto_crash_analysis": self.auto_crash.isChecked(),
                 "auto_bisect_timeout": self.bisect_timeout.currentData(),

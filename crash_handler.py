@@ -19,6 +19,7 @@ from PyQt6.QtGui import QFontDatabase, QGuiApplication
 from PyQt6.QtWidgets import QApplication, QFileDialog, QPlainTextEdit
 
 import config as app_config
+from i18n import tr
 
 LOG_TAIL_LINES = 80
 
@@ -26,8 +27,8 @@ LOG_TAIL_LINES = 80
 def build_report(exc_type, exc, tb) -> str:
     lines = [
         f"Minecraft Mod Updater {app_config.APP_VERSION}",
-        f"Время: {datetime.datetime.now().isoformat(timespec='seconds')}",
-        f"Система: {platform.platform()} · Python {platform.python_version()}",
+        tr('Время: {0}', datetime.datetime.now().isoformat(timespec='seconds')),
+        tr('Система: {0} · Python {1}', platform.platform(), platform.python_version()),
         "",
         "".join(traceback.format_exception(exc_type, exc, tb)).rstrip(),
     ]
@@ -36,7 +37,7 @@ def build_report(exc_type, exc, tb) -> str:
         try:
             with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                 tail = f.readlines()[-LOG_TAIL_LINES:]
-            lines += ["", f"--- Последние строки лога ({os.path.basename(log_path)}) ---", "".join(tail).rstrip()]
+            lines += ["", tr('--- Последние строки лога ({0}) ---', os.path.basename(log_path)), "".join(tail).rstrip()]
         except OSError:
             pass
     return "\n".join(lines)
@@ -57,8 +58,8 @@ def issue_url(exc_type, exc, report: str) -> Optional[str]:
     """Ссылка на новый issue с заполненным заголовком и отчётом (обрезается под ограничение длины адреса)."""
     if not app_config.GITHUB_REPOSITORY:
         return None
-    title = f"Сбой: {exc_type.__name__}: {str(exc)[:80]}"
-    body = f"**Что я делал перед сбоем:**\n\n\n**Отчёт:**\n```\n{report[:5500]}\n```"
+    title = tr('Сбой: {0}: {1}', exc_type.__name__, str(exc)[:80])
+    body = tr('**Что я делал перед сбоем:**\n\n\n**Отчёт:**\n```\n{0}\n```', report[:5500])
     query = urllib.parse.urlencode({"title": title, "body": body})
     return f"https://github.com/{app_config.GITHUB_REPOSITORY}/issues/new?{query}"
 
@@ -106,10 +107,10 @@ def CrashDialog(exc_type, exc, report: str, saved_path: Optional[str]):
     from ui.dialogs import FramelessDialog
     from ui.widgets import label
     parent = QApplication.activeWindow()
-    dialog = FramelessDialog(parent, "Программа столкнулась с ошибкой", 620)
+    dialog = FramelessDialog(parent, tr("Программа столкнулась с ошибкой"), 620)
     dialog.resize(720, 560)
-    dialog.body.addWidget(label("Что-то пошло не так, но ваши моды в безопасности: все изменения папок "
-                                "выполняются с бэкапом. Можно продолжить работу или перезапустить программу.",
+    dialog.body.addWidget(label(tr("Что-то пошло не так, но ваши моды в безопасности: все изменения папок "
+                                "выполняются с бэкапом. Можно продолжить работу или перезапустить программу."),
                                 None, wrap=True))
     error = label(f"{exc_type.__name__}: {exc}", "WarningText", wrap=True)
     error.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -121,14 +122,14 @@ def CrashDialog(exc_type, exc, report: str, saved_path: Optional[str]):
     details.setFont(mono)
     dialog.body.addWidget(details, 1)
     if saved_path:
-        dialog.body.addWidget(label(f"Отчёт сохранён: {saved_path}", "Faint", wrap=True))
+        dialog.body.addWidget(label(tr('Отчёт сохранён: {0}', saved_path), "Faint", wrap=True))
 
     def copy():
         QGuiApplication.clipboard().setText(report)
-        copy_btn.setText("Скопировано ✓")
+        copy_btn.setText(tr("Скопировано ✓"))
 
     def save_as():
-        path, _ = QFileDialog.getSaveFileName(dialog, "Сохранить отчёт", "mod-updater-crash.txt", "Текст (*.txt)")
+        path, _ = QFileDialog.getSaveFileName(dialog, tr("Сохранить отчёт"), "mod-updater-crash.txt", tr("Текст (*.txt)"))
         if path:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(report)
@@ -139,13 +140,13 @@ def CrashDialog(exc_type, exc, report: str, saved_path: Optional[str]):
         QProcess.startDetached(sys.executable, args)
         QApplication.instance().quit()
 
-    copy_btn = dialog.add_button("Скопировать отчёт", False, copy)
-    dialog.add_button("Сохранить…", False, save_as)
+    copy_btn = dialog.add_button(tr("Скопировать отчёт"), False, copy)
+    dialog.add_button(tr("Сохранить…"), False, save_as)
     url = issue_url(exc_type, exc, report)
     if url:
-        dialog.add_button("Сообщить на GitHub", False, lambda: (copy(), webbrowser.open(url)))
-    dialog.add_button("Перезапустить", False, restart)
-    dialog.add_button("Продолжить работу", True, dialog.accept)
+        dialog.add_button(tr("Сообщить на GitHub"), False, lambda: (copy(), webbrowser.open(url)))
+    dialog.add_button(tr("Перезапустить"), False, restart)
+    dialog.add_button(tr("Продолжить работу"), True, dialog.accept)
     dialog.finish_layout()
     return dialog
 

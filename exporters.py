@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional, Union
 
 from mod_updater_logic import select_primary_file
+from i18n import tr
 
 SHARE_FORMAT_VERSION = 2
 
@@ -45,7 +46,7 @@ def decode_share_string(share_string: str) -> Dict:
         decoded = base64.urlsafe_b64decode(share_string.strip())
         return json.loads(zlib.decompress(decoded).decode('utf-8'))
     except (ValueError, TypeError, zlib.error, UnicodeDecodeError) as e:
-        raise ValueError(f"Некорректная строка: {e}") from e
+        raise ValueError(tr('Некорректная строка: {0}', e)) from e
 
 
 @dataclass
@@ -64,20 +65,20 @@ class ImportRequest:
 def parse_share_data(share_data) -> ImportRequest:
     """Проверяет и разбирает данные сборки (форматы v1 и v2). Выбрасывает ValueError."""
     if not isinstance(share_data, dict) or not {'v', 'mc', 'l'} <= share_data.keys():
-        raise ValueError("Неверный формат данных.")
+        raise ValueError(tr("Неверный формат данных."))
     version = share_data['v']
     if version == 1:
         target_mods = share_data.get('p', [])
         if not isinstance(target_mods, list):
-            raise ValueError("Неверный формат списка модов.")
+            raise ValueError(tr("Неверный формат списка модов."))
         strict = False
     elif version == 2:
         target_mods = share_data.get('mods', {})
         if not isinstance(target_mods, dict):
-            raise ValueError("Неверный формат списка модов.")
+            raise ValueError(tr("Неверный формат списка модов."))
         strict = bool(share_data.get('strict', False))
     else:
-        raise ValueError("Неподдерживаемая версия формата данных.")
+        raise ValueError(tr("Неподдерживаемая версия формата данных."))
     return ImportRequest(version, str(share_data['mc']), str(share_data['l']), target_mods, strict)
 
 

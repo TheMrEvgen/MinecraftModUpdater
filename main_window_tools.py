@@ -36,6 +36,7 @@ from ui.widgets import make_action
 from ui_components import ask_choice, confirm, show_message
 from updater import UpdateTransaction, set_disabled
 from view_model import collect_tags, iter_all_entries, pin_key
+from i18n import tr
 
 UNDO_LIMIT = 30
 
@@ -52,10 +53,10 @@ class ToolsMixin:
 
     def _undo_last(self):
         if self._busy:
-            self.toasts.show("Дождитесь окончания текущей операции.", "warning")
+            self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
             return
         if not self._undo:
-            self.toasts.show("Отменять нечего.", "info")
+            self.toasts.show(tr("Отменять нечего."), "info")
             return
         description, action = self._undo.pop()
         self._undoing = True
@@ -63,7 +64,7 @@ class ToolsMixin:
             action()
         finally:
             self._undoing = False
-        self.toasts.show(f"Отменено: {description}", "success")
+        self.toasts.show(tr('Отменено: {0}', description), "success")
 
     # ================================================================== Избранное и заметки
 
@@ -86,10 +87,10 @@ class ToolsMixin:
             self.favorites.extend(k for k in keys if k not in self.favorites)
         else:
             self.favorites[:] = [k for k in self.favorites if k not in keys]
-        self._push_undo("избранное", lambda: self._restore_favorites(before))
+        self._push_undo(tr("избранное"), lambda: self._restore_favorites(before))
         self._after_personal_change(entries)
-        what = f"«{entries[0].get('name')}»" if len(entries) == 1 else f"{len(entries)} модов"
-        self.toasts.show(f"{what} {'в избранном' if make_favorite else 'убран из избранного'}", "success")
+        what = f"«{entries[0].get('name')}»" if len(entries) == 1 else tr('{0} модов', len(entries))
+        self.toasts.show(f"{what} {tr('в избранном') if make_favorite else tr('убран из избранного')}", "success")
 
     def _restore_favorites(self, favorites: List[str]):
         self.favorites[:] = favorites
@@ -144,13 +145,13 @@ class ToolsMixin:
         all_fav = all(e.get("_favorite") for e in checked)
         if files:
             menu.addAction(make_action(menu, t, "unlock" if all_pinned else "lock",
-                                       "Открепить" if all_pinned else "Закрепить версии",
+                                       tr("Открепить") if all_pinned else tr("Закрепить версии"),
                                        lambda: self._set_pins(files, not all_pinned)))
-        menu.addAction(make_action(menu, t, "star", "Убрать из избранного" if all_fav else "В избранное",
+        menu.addAction(make_action(menu, t, "star", tr("Убрать из избранного") if all_fav else tr("В избранное"),
                                    lambda: self._toggle_favorite(checked)))
-        menu.addAction(make_action(menu, t, "tag", "Добавить метку…", lambda: self._add_tag_many(checked)))
+        menu.addAction(make_action(menu, t, "tag", tr("Добавить метку…"), lambda: self._add_tag_many(checked)))
         if files:
-            menu.addAction(make_action(menu, t, "camera", "Сохранить как набор модов…",
+            menu.addAction(make_action(menu, t, "camera", tr("Сохранить как набор модов…"),
                                        lambda: self._save_preset(files)))
         menu.exec(pos)
 
@@ -163,10 +164,10 @@ class ToolsMixin:
                 pins[key] = entry.get("current_version") or ""
             else:
                 pins.pop(key, None)
-        self._push_undo("закрепление", lambda: self._restore_pins(before))
+        self._push_undo(tr("закрепление"), lambda: self._restore_pins(before))
         self._set_data(self.mods_data)
         self.save_config()
-        self.toasts.show(f"{'Закреплено' if pinned else 'Откреплено'}: {len(entries)}", "success")
+        self.toasts.show(f"{tr('Закреплено') if pinned else tr('Откреплено')}: {len(entries)}", "success")
 
     def _restore_pins(self, pins: Dict[str, str]):
         profile_pins = self._profile().setdefault("pinned", {})
@@ -176,7 +177,7 @@ class ToolsMixin:
         self.save_config()
 
     def _add_tag_many(self, entries: List[dict]):
-        tag = ask_text(self, "Новая метка", f"Метка для {len(entries)} модов", "Название метки")
+        tag = ask_text(self, tr("Новая метка"), tr('Метка для {0} модов', len(entries)), tr("Название метки"))
         if not tag:
             return
         before = copy.deepcopy(self.mod_tags)
@@ -184,7 +185,7 @@ class ToolsMixin:
             tags = self.mod_tags.setdefault(pin_key(entry), [])
             if tag.lower() not in (t.lower() for t in tags):
                 tags.append(tag)
-        self._push_undo("метки", lambda: self._restore_tags(before))
+        self._push_undo(tr("метки"), lambda: self._restore_tags(before))
         self._after_tags_changed(entries[0])
 
     def _restore_tags(self, tags: Dict[str, List[str]]):
@@ -228,8 +229,8 @@ class ToolsMixin:
 
     def _set_profile_group(self, name: str):
         groups = self._profile_groups()
-        hint = "Пусто — без группы" + (f"\nУже есть: {', '.join(groups)}" if groups else "")
-        group = ask_text(self, "Группа сборки", hint, "Например: Серверы", self.profiles[name].get("group") or "")
+        hint = tr("Пусто — без группы") + (tr('\nУже есть: {0}', ', '.join(groups)) if groups else "")
+        group = ask_text(self, tr("Группа сборки"), hint, tr("Например: Серверы"), self.profiles[name].get("group") or "")
         if group is None and not self.profiles[name].get("group"):
             return
         self.profiles[name]["group"] = group or ""
@@ -251,12 +252,12 @@ class ToolsMixin:
                                        "manual_mode": True, "pinned": dict(profile.get("pinned") or {})}
             self._refresh_sidebar()
             self.save_config()
-            self.toasts.show(f"Сборка «{new_name}» создана: скопировано {', '.join(copied)}.", "success",
-                             "Сравнить", lambda: self._compare_profiles(name, new_name), timeout=9000)
+            self.toasts.show(tr('Сборка «{0}» создана: скопировано {1}.', new_name, ', '.join(copied)), "success",
+                             tr("Сравнить"), lambda: self._compare_profiles(name, new_name), timeout=9000)
 
         self._run_task(clone_game_dir, (profile["mods_path"], target, with_saves), done,
-                       lambda e: show_message(self, QMessageBox.Icon.Critical, "Не удалось клонировать", e),
-                       "Копируем сборку…")
+                       lambda e: show_message(self, QMessageBox.Icon.Critical, tr("Не удалось клонировать"), e),
+                       tr("Копируем сборку…"))
 
     def _profile_entries_task(self, name: str) -> List[dict]:
         """Записи модов сборки: из памяти или быстрым локальным сканированием (из потока)."""
@@ -273,7 +274,7 @@ class ToolsMixin:
             return compare_entries(self._profile_entries_task(left), self._profile_entries_task(right))
 
         self._run_task(collect, (), lambda diff: CompareDialog(self, self.tokens, left, right, diff).exec(),
-                       lambda e: show_message(self, QMessageBox.Icon.Warning, "Сравнение", e), "Сравниваем сборки…")
+                       lambda e: show_message(self, QMessageBox.Icon.Warning, tr("Сравнение"), e), tr("Сравниваем сборки…"))
 
     # ================================================================== Наборы модов
 
@@ -286,7 +287,7 @@ class ToolsMixin:
         self.preset_combo.blockSignals(True)
         self.preset_combo.clear()
         active = next((name for name, keys in presets.items() if sorted(keys) == current), None)
-        self.preset_combo.addItem("Набор: свой" if not active else f"Набор: {active}", None)
+        self.preset_combo.addItem(tr("Набор: свой") if not active else tr('Набор: {0}', active), None)
         for name in presets:
             self.preset_combo.addItem(name, name)
         self.preset_combo.setCurrentIndex(0)
@@ -298,38 +299,38 @@ class ToolsMixin:
     def _show_preset_menu(self):
         t = self.tokens
         menu = QMenu(self)
-        menu.addAction(make_action(menu, t, "camera", "Сохранить включённые моды как набор…",
+        menu.addAction(make_action(menu, t, "camera", tr("Сохранить включённые моды как набор…"),
                                    lambda: self._save_preset([e for e in self._count_items if e.get("filepath")])))
         presets = self._presets()
         if presets:
             menu.addSeparator()
             for name in presets:
                 sub = menu.addMenu(name)
-                sub.addAction(make_action(sub, t, "check", "Применить", lambda _=False, n=name: self._apply_preset(n)))
-                sub.addAction(make_action(sub, t, "refresh", "Перезаписать текущими",
+                sub.addAction(make_action(sub, t, "check", tr("Применить"), lambda _=False, n=name: self._apply_preset(n)))
+                sub.addAction(make_action(sub, t, "refresh", tr("Перезаписать текущими"),
                                           lambda _=False, n=name: self._overwrite_preset(n)))
-                sub.addAction(make_action(sub, t, "trash", "Удалить", lambda _=False, n=name: self._delete_preset(n), "danger"))
+                sub.addAction(make_action(sub, t, "trash", tr("Удалить"), lambda _=False, n=name: self._delete_preset(n), "danger"))
         menu.exec(self.preset_btn.mapToGlobal(self.preset_btn.rect().bottomLeft()))
 
     def _save_preset(self, entries: List[dict]):
-        name = ask_text(self, "Новый набор", "Название набора — например, «Для записи видео» или «Слабый ПК».\n"
-                        "В набор попадут моды, которые сейчас включены.", "Название")
+        name = ask_text(self, tr("Новый набор"), tr("Название набора — например, «Для записи видео» или «Слабый ПК».\n"
+                        "В набор попадут моды, которые сейчас включены."), tr("Название"))
         if not name:
             return
         keys = enabled_keys(entries)
         self._presets()[name] = keys
         self._refresh_presets()
         self.save_config()
-        self.toasts.show(f"Набор «{name}» сохранён: {len(keys)} модов.", "success")
+        self.toasts.show(tr('Набор «{0}» сохранён: {1} модов.', name, len(keys)), "success")
 
     def _overwrite_preset(self, name: str):
         self._presets()[name] = enabled_keys(self._count_items)
         self._refresh_presets()
         self.save_config()
-        self.toasts.show(f"Набор «{name}» обновлён.", "success")
+        self.toasts.show(tr('Набор «{0}» обновлён.', name), "success")
 
     def _delete_preset(self, name: str):
-        if confirm(self, "Удалить набор", f"Удалить набор «{name}»? Моды не изменятся.", "Удалить", "Отмена"):
+        if confirm(self, tr("Удалить набор"), tr('Удалить набор «{0}»? Моды не изменятся.', name), tr("Удалить"), tr("Отмена")):
             self._presets().pop(name, None)
             self._refresh_presets()
             self.save_config()
@@ -340,7 +341,7 @@ class ToolsMixin:
             return
         plan = preset_plan(self._count_items, keys)
         if not plan["enable"] and not plan["disable"]:
-            self.toasts.show(f"Набор «{name}» уже применён.", "info")
+            self.toasts.show(tr('Набор «{0}» уже применён.', name), "info")
             return
         changed = plan["enable"] + plan["disable"]
         if not self._confirm_game_not_running([e["filepath"] for e in changed]):
@@ -349,11 +350,11 @@ class ToolsMixin:
         errors = self._rename_entries(plan["disable"], True) + self._rename_entries(plan["enable"], False)
         self._set_data(self.mods_data)
         self.sessions[self._skey()] = self.mods_data
-        self._push_undo(f"набор «{name}»", lambda: self._apply_keys(before))
-        self.toasts.show(f"Набор «{name}»: включено {len(plan['enable'])}, выключено {len(plan['disable'])}.", "success",
-                         "Отменить", self._undo_last, timeout=8000)
+        self._push_undo(tr('набор «{0}»', name), lambda: self._apply_keys(before))
+        self.toasts.show(tr('Набор «{0}»: включено {1}, выключено {2}.', name, len(plan['enable']), len(plan['disable'])), "success",
+                         tr("Отменить"), self._undo_last, timeout=8000)
         if errors:
-            show_message(self, QMessageBox.Icon.Warning, "Не всё переключилось", "\n".join(errors[:10]))
+            show_message(self, QMessageBox.Icon.Warning, tr("Не всё переключилось"), "\n".join(errors[:10]))
 
     def _apply_keys(self, keys: List[str]):
         plan = preset_plan(self._count_items, keys)
@@ -394,14 +395,11 @@ class ToolsMixin:
         mods = self._installed_mods()
         enabled = [e for e in mods if not e.get("disabled")]
         if len(enabled) < 2:
-            self.toasts.show("Для поиска нужно хотя бы два включённых мода.", "warning")
+            self.toasts.show(tr("Для поиска нужно хотя бы два включённых мода."), "warning")
             return
         steps = max(1, math.ceil(math.log2(len(enabled))))
-        if not confirm(self, "Поиск проблемного мода",
-                       "Программа будет по очереди выключать половину модов, а вы — запускать игру и отвечать, "
-                       f"осталась ли проблема. Понадобится около {steps} запусков игры.\n\n"
-                       "Моды, которые нужны выключенным, выключаются вместе с ними — ложных ошибок из-за "
-                       "зависимостей не будет. В конце всё вернётся как было. Начать?", "Начать", "Отмена"):
+        if not confirm(self, tr("Поиск проблемного мода"),
+                       tr('Программа будет по очереди выключать половину модов, а вы — запускать игру и отвечать, осталась ли проблема. Понадобится около {0} запусков игры.\n\nМоды, которые нужны выключенным, выключаются вместе с ними — ложных ошибок из-за зависимостей не будет. В конце всё вернётся как было. Начать?', steps), tr("Начать"), tr("Отмена")):
             return
         name_of = {e["filepath"]: enabled_name(os.path.basename(e["filepath"])) for e in mods}
         by_pid = {e.get("project_id"): name_of[e["filepath"]] for e in mods if e.get("project_id")}
@@ -419,12 +417,9 @@ class ToolsMixin:
         auto = False
         if self._auto_bisect_available():
             plan = self._launch_plan()
-            choice = ask_choice(self, QMessageBox.Icon.Question, "Как проверять запуск?",
-                                f"<b>Автоматически</b> — программа сама запускает игру через {plan.title}, ждёт главного "
-                                "меню или вылета, закрывает игру и делает следующий шаг. Подходит, если игра "
-                                "<b>вылетает при запуске</b>.<br><br><b>Вручную</b> — игру запускаете вы и отвечаете "
-                                "кнопками. Подходит для любой проблемы, в том числе в мире.",
-                                ["Автоматически", "Вручную", "Отмена"], default=0, rich_text=True)
+            choice = ask_choice(self, QMessageBox.Icon.Question, tr("Как проверять запуск?"),
+                                tr('<b>Автоматически</b> — программа сама запускает игру через {0}, ждёт главного меню или вылета, закрывает игру и делает следующий шаг. Подходит, если игра <b>вылетает при запуске</b>.<br><br><b>Вручную</b> — игру запускаете вы и отвечаете кнопками. Подходит для любой проблемы, в том числе в мире.', plan.title),
+                                [tr("Автоматически"), tr("Вручную"), tr("Отмена")], default=0, rich_text=True)
             if choice not in (0, 1):
                 return
             auto = choice == 0
@@ -451,8 +446,8 @@ class ToolsMixin:
         self._set_data(self.mods_data)
         self.sessions[self._skey(content=MODS)] = self.mods_data
         if errors:
-            show_message(self, QMessageBox.Icon.Warning, "Не всё переключилось",
-                         "Закройте игру и повторите.\n\n" + "\n".join(errors[:10]))
+            show_message(self, QMessageBox.Icon.Warning, tr("Не всё переключилось"),
+                         tr("Закройте игру и повторите.\n\n") + "\n".join(errors[:10]))
 
     def _apply_bisect_state(self, session: BisectSession):
         if session.done:
@@ -490,11 +485,11 @@ class ToolsMixin:
         if keep_culprit_disabled and session.culprit:
             disabled.add(session.culprit)
         self._set_disabled_names(disabled)
-        self.toasts.show("Поиск завершён: " + (f"«{session.culprit}» выключен, остальное вернулось как было."
-                                               if keep_culprit_disabled else "все моды вернулись как были."), "success")
+        self.toasts.show(tr("Поиск завершён: ") + (tr('«{0}» выключен, остальное вернулось как было.', session.culprit)
+                                               if keep_culprit_disabled else tr("все моды вернулись как были.")), "success")
 
     def _cancel_bisect(self):
-        if confirm(self, "Прервать поиск", "Вернуть все моды в состояние до начала поиска?", "Вернуть", "Продолжить поиск"):
+        if confirm(self, tr("Прервать поиск"), tr("Вернуть все моды в состояние до начала поиска?"), tr("Вернуть"), tr("Продолжить поиск")):
             self._finish_bisect(False)
 
     def _restore_bisect_banner(self):
@@ -549,10 +544,10 @@ class ToolsMixin:
                 transaction.backup_file(path)
             except OSError as e:
                 errors.append(f"{os.path.basename(path)}: {e}")
-        self.toasts.show(f"Убрано в бэкап: {len(paths) - len(errors)}", "success", "Отменить",
+        self.toasts.show(tr('Убрано в бэкап: {0}', len(paths) - len(errors)), "success", tr("Отменить"),
                          lambda: self._rollback_dir(transaction.dir), timeout=9000)
         if errors:
-            show_message(self, QMessageBox.Icon.Warning, "Не всё удалось", "\n".join(errors[:10]))
+            show_message(self, QMessageBox.Icon.Warning, tr("Не всё удалось"), "\n".join(errors[:10]))
         self.sessions.pop(self._skey(), None)
         self.start_local_scan()
 
@@ -562,8 +557,7 @@ class ToolsMixin:
         from view_model import format_size
         usage = backups_usage(self.mods_path)
         total = sum(usage.values())
-        return (f"Бэкапы папки {self.content.folder} занимают {format_size(total)} "
-                f"(операции {format_size(usage['transactions'])}, снимки {format_size(usage['snapshots'])}).")
+        return (tr('Бэкапы папки {0} занимают {1} (операции {2}, снимки {3}).', self.content.folder, format_size(total), format_size(usage['transactions']), format_size(usage['snapshots'])))
 
     def _prune_backups(self, manual: bool = False):
         if not self.mods_path or not os.path.isdir(self.mods_path):
@@ -576,7 +570,7 @@ class ToolsMixin:
             logging.error(f"Очистка бэкапов: {e}")
             removed = 0
         if manual:
-            self.toasts.show(f"Удалено старых бэкапов: {removed}." if removed else "Нечего удалять — всё в пределах лимитов.",
+            self.toasts.show(tr('Удалено старых бэкапов: {0}.', removed) if removed else tr("Нечего удалять — всё в пределах лимитов."),
                              "success" if removed else "info")
             self.settings_page.set_backup_usage(self._backup_usage_text())
 
@@ -589,30 +583,28 @@ class ToolsMixin:
                 "last_seen": self.last_seen}
 
     def _export_settings(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Экспорт настроек", "mod-updater-settings.json", "JSON (*.json)")
+        path, _ = QFileDialog.getSaveFileName(self, tr("Экспорт настроек"), "mod-updater-settings.json", "JSON (*.json)")
         if not path:
             return
         try:
             app_config.export_config(self._config_snapshot(), path)
-            self.toasts.show(f"Настройки сохранены в {os.path.basename(path)}", "success")
+            self.toasts.show(tr('Настройки сохранены в {0}', os.path.basename(path)), "success")
         except OSError as e:
-            show_message(self, QMessageBox.Icon.Critical, "Ошибка", f"Не удалось сохранить файл:\n{e}")
+            show_message(self, QMessageBox.Icon.Critical, tr("Ошибка"), tr('Не удалось сохранить файл:\n{0}', e))
 
     def _import_settings(self):
         if self._busy:
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Импорт настроек", "", "JSON (*.json)")
+        path, _ = QFileDialog.getOpenFileName(self, tr("Импорт настроек"), "", "JSON (*.json)")
         if not path:
             return
         try:
             imported = app_config.import_config(path)
         except ValueError as e:
-            show_message(self, QMessageBox.Icon.Warning, "Импорт настроек", str(e))
+            show_message(self, QMessageBox.Icon.Warning, tr("Импорт настроек"), str(e))
             return
-        choice = ask_choice(self, QMessageBox.Icon.Question, "Импорт настроек",
-                            f"В файле {len(imported['profiles'])} сборок, {len(imported['mod_notes'])} заметок, "
-                            f"{len(imported['favorites'])} избранных.\n\nЗаменить текущие настройки или добавить сборки "
-                            "и заметки к имеющимся?", ["Добавить", "Заменить всё", "Отмена"], default=0)
+        choice = ask_choice(self, QMessageBox.Icon.Question, tr("Импорт настроек"),
+                            tr('В файле {0} сборок, {1} заметок, {2} избранных.\n\nЗаменить текущие настройки или добавить сборки и заметки к имеющимся?', len(imported['profiles']), len(imported['mod_notes']), len(imported['favorites'])), [tr("Добавить"), tr("Заменить всё"), tr("Отмена")], default=0)
         if choice not in (0, 1):
             return
         if choice == 1:
@@ -627,7 +619,7 @@ class ToolsMixin:
             self.config_theme = imported.get("theme", self.config_theme)
         else:
             for name, profile in imported["profiles"].items():
-                self.profiles.setdefault(name if name not in self.profiles else f"{name} (импорт)", profile)
+                self.profiles.setdefault(name if name not in self.profiles else tr('{0} (импорт)', name), profile)
             for key, tags in imported["mod_tags"].items():
                 self.mod_tags.setdefault(key, tags)
             for key, note in imported["mod_notes"].items():
@@ -641,7 +633,7 @@ class ToolsMixin:
         self._refresh_sidebar()
         self._load_profile(self.current_profile_name if self.current_profile_name in self.profiles
                            else next(iter(self.profiles)))
-        self.toasts.show("Настройки импортированы.", "success")
+        self.toasts.show(tr("Настройки импортированы."), "success")
 
     # ================================================================== Статистика и замена заброшенных модов
 
@@ -670,7 +662,7 @@ class ToolsMixin:
     def _install_many_from_catalog(self, hits: List[dict]):
         if self._busy or not hits:
             if self._busy:
-                self.toasts.show("Дождитесь окончания текущей операции.", "warning")
+                self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
             return
         content = self.catalog_page.content
         installed = self._installed_ids().get(content.key, set())
@@ -682,17 +674,17 @@ class ToolsMixin:
             self.catalog_page.set_installing(ids, False)
             if missing:
                 titles = [h.get("title") for h in hits if h.get("project_id") in missing]
-                self.toasts.show(f"Нет версии для вашей сборки: {', '.join(titles)}", "warning")
+                self.toasts.show(tr('Нет версии для вашей сборки: {0}', ', '.join(titles)), "warning")
             if entries:
                 self._start_catalog_install(entries, content)
 
         self._run_task(resolve_many_installs, (ids, self.game_version, self.loader, self._channel(), installed, content),
                        resolved, lambda e: (self.catalog_page.set_installing(ids, False),
-                                            self.toasts.show(f"Не удалось подготовить установку: {e}", "error")), None)
+                                            self.toasts.show(tr('Не удалось подготовить установку: {0}', e), "error")), None)
 
     def _install_catalog_version(self, hit: dict, version: dict):
         if self._busy:
-            self.toasts.show("Дождитесь окончания текущей операции.", "warning")
+            self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
             return
         content = self.catalog_page.content
         installed = self._installed_ids().get(content.key, set())
@@ -732,7 +724,7 @@ class ToolsMixin:
             self._select_entry(entry)
             self._open_current_details()
         else:
-            self.toasts.show("Мод установлен — список обновится после чтения папки.", "info")
+            self.toasts.show(tr("Мод установлен — список обновится после чтения папки."), "info")
 
     # ================================================================== Режим «Минимум»
 
@@ -774,7 +766,7 @@ class ToolsMixin:
         for key, sequence in effective_shortcuts(self.settings.get("shortcuts")).items():
             if sequence and key in callbacks:
                 self._shortcuts[key] = QShortcut(QKeySequence(sequence), self, activated=callbacks[key])
-        self.check_btn.setToolTip(f"Проверить обновления ({effective_shortcuts(self.settings.get('shortcuts'))['check']})")
+        self.check_btn.setToolTip(tr('Проверить обновления ({0})', effective_shortcuts(self.settings.get('shortcuts'))['check']))
 
     # ================================================================== Подсказки в строке поиска
 
@@ -786,8 +778,8 @@ class ToolsMixin:
         self._completer.setWidget(self.search)
         self._completer.activated[str].connect(self._insert_completion)
         self.search.textEdited.connect(self._on_search_edited)
-        self.search.setToolTip("Можно искать с условиями: tag:оптимизация, side:client, is:fav, is:pinned, "
-                               "status:update, size>5mb, age>1y. Минус в начале — «без»: -tag:библиотека")
+        self.search.setToolTip(tr("Можно искать с условиями: tag:оптимизация, side:client, is:fav, is:pinned, "
+                               "status:update, size>5mb, age>1y. Минус в начале — «без»: -tag:библиотека"))
 
     def _on_search_edited(self, text: str):
         token = text.split(" ")[-1] if text else ""
@@ -813,7 +805,7 @@ class ToolsMixin:
 
     def _restart_app(self):
         if self._busy:
-            self.toasts.show("Дождитесь окончания текущей операции.", "warning")
+            self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
             return
         args = sys.argv[1:] if getattr(sys, "frozen", False) else [os.path.abspath(sys.argv[0])] + sys.argv[1:]
         self.save_config()
@@ -834,36 +826,36 @@ class ToolsMixin:
             return
         self.settings["install_offered"] = True
         self.save_config()
-        self.toasts.show("Установите программу: ярлыки, открытие .mrpack двойным щелчком и ссылки modupdater://.",
-                         "info", "Подробнее", lambda: self._switch_page(self.PAGE_SETTINGS_INDEX), timeout=12000)
+        self.toasts.show(tr("Установите программу: ярлыки, открытие .mrpack двойным щелчком и ссылки modupdater://."),
+                         "info", tr("Подробнее"), lambda: self._switch_page(self.PAGE_SETTINGS_INDEX), timeout=12000)
 
     def _install_app(self, options: dict):
         import installer
         try:
             done = installer.install(sys.executable, **options)
         except Exception as e:
-            show_message(self, QMessageBox.Icon.Critical, "Установка не удалась", str(e))
+            show_message(self, QMessageBox.Icon.Critical, tr("Установка не удалась"), str(e))
             return
         self._refresh_install_ui()
         state = installer.state()
-        text = "Готово:\n" + "\n".join(f"• {step}" for step in done)
+        text = tr("Готово:\n") + "\n".join(f"• {step}" for step in done)
         if not state.running_installed:
-            if confirm(self, "Программа установлена", text + "\n\nЗапустить установленную копию и закрыть эту?",
-                       "Запустить", "Позже"):
+            if confirm(self, tr("Программа установлена"), text + tr("\n\nЗапустить установленную копию и закрыть эту?"),
+                       tr("Запустить"), tr("Позже")):
                 self.save_config()
                 if QProcess.startDetached(state.exe, []):
                     QApplication.instance().closeAllWindows()
         else:
-            show_message(self, QMessageBox.Icon.Information, "Настройки установки применены", text)
+            show_message(self, QMessageBox.Icon.Information, tr("Настройки установки применены"), text)
 
     def _uninstall_app(self):
         import installer
-        if not confirm(self, "Удалить программу", "Удалить ярлыки, связь с .mrpack и ссылками и саму программу? "
-                       "Сборки, моды и бэкапы не затрагиваются, настройки сохранятся.", "Удалить", "Отмена"):
+        if not confirm(self, tr("Удалить программу"), tr("Удалить ярлыки, связь с .mrpack и ссылками и саму программу? "
+                       "Сборки, моды и бэкапы не затрагиваются, настройки сохранятся."), tr("Удалить"), tr("Отмена")):
             return
         installer.uninstall(schedule_exe_removal=installer.state().running_installed)
-        show_message(self, QMessageBox.Icon.Information, "Программа удалена",
-                     "Ярлыки и записи удалены. Окно закроется — папка программы будет удалена следом.")
+        show_message(self, QMessageBox.Icon.Information, tr("Программа удалена"),
+                     tr("Ярлыки и записи удалены. Окно закроется — папка программы будет удалена следом."))
         QApplication.instance().closeAllWindows()
 
     def handle_external(self, args: List[str]):
@@ -901,17 +893,17 @@ class ToolsMixin:
             elif action == "mrpack" and query.get("url"):
                 self._open_remote_mrpack(query["url"][0])
             else:
-                self.toasts.show(f"Неизвестная ссылка: {arg}", "warning")
+                self.toasts.show(tr('Неизвестная ссылка: {0}', arg), "warning")
 
     def _open_remote_mrpack(self, url: str):
         if not url.lower().startswith("https://"):
-            self.toasts.show("Сборку можно открыть только по адресу https://", "warning")
+            self.toasts.show(tr("Сборку можно открыть только по адресу https://"), "warning")
             return
         import tempfile
         from mod_updater_logic import download_file
         target = os.path.join(tempfile.gettempdir(), "modupdater-import.mrpack")
         self._run_task(download_file, (url, target), lambda _: self._import_mrpack(target),
-                       lambda e: self.toasts.show(f"Не удалось скачать сборку: {e}", "error"), "Скачиваем сборку…")
+                       lambda e: self.toasts.show(tr('Не удалось скачать сборку: {0}', e), "error"), tr("Скачиваем сборку…"))
 
     # ================================================================== Готовность к новой версии Minecraft
 
@@ -944,12 +936,12 @@ class ToolsMixin:
             if result["total"] and result["ready"] == result["total"] and not result["notified_all"]:
                 result["notified_all"] = True
                 result["dismissed"] = False
-                self.toasts.show(f"Все моды сборки «{profile_name}» готовы к Minecraft {result['target']}!", "success",
-                                 "Перейти", lambda t=result["target"]: self.migrate_game_version(t), timeout=15000)
+                self.toasts.show(tr('Все моды сборки «{0}» готовы к Minecraft {1}!', profile_name, result['target']), "success",
+                                 tr("Перейти"), lambda t=result["target"]: self.migrate_game_version(t), timeout=15000)
                 QApplication.alert(self)
             elif not same_target:
-                self.toasts.show(f"Вышла Minecraft {result['target']}: готово {result['ready']} из {result['total']} модов.",
-                                 "info", "Подробнее", lambda t=result["target"]: self.migrate_game_version(t), timeout=10000)
+                self.toasts.show(tr('Вышла Minecraft {0}: готово {1} из {2} модов.', result['target'], result['ready'], result['total']),
+                                 "info", tr("Подробнее"), lambda t=result["target"]: self.migrate_game_version(t), timeout=10000)
             profile["readiness"] = result
         self.save_config()
         if profile_name == self.current_profile_name:
@@ -964,10 +956,9 @@ class ToolsMixin:
             ready, total = data["ready"], data["total"]
             color = t["accent"] if ready == total else t["warning"]
             missing = data.get("missing") or []
-            rest = f" Ещё не готовы: {', '.join(missing[:4])}" + (f" и ещё {len(missing) - 4}" if len(missing) > 4 else "") \
-                if missing else " Можно переходить."
-            self.readiness_text.setText(f"<b>Вышла Minecraft {data['target']}</b> — готово "
-                                        f"<span style='color:{color}'><b>{ready} из {total}</b></span> модов.{rest}")
+            rest = tr(' Ещё не готовы: {0}', ', '.join(missing[:4])) + (tr(' и ещё {0}', len(missing) - 4) if len(missing) > 4 else "") \
+                if missing else tr(" Можно переходить.")
+            self.readiness_text.setText(tr("<b>Вышла Minecraft {0}</b> — готово <span style='color:{1}'><b>{2} из {3}</b></span> модов.{4}", data['target'], color, ready, total, rest))
         self.readiness_banner.setVisible(visible)
 
     def _dismiss_readiness(self):
@@ -999,30 +990,30 @@ class ToolsMixin:
         running = self._game_running
         self.play_btn.setVisible(bool(self._game_dir()))
         if running:
-            self.play_btn.setText("Игра запущена")
+            self.play_btn.setText(tr("Игра запущена"))
             self.play_btn.setEnabled(False)
         else:
-            self.play_btn.setText("Играть")
+            self.play_btn.setText(tr("Играть"))
             self.play_btn.setEnabled(bool(plan) and not self._busy and not self._auto_bisect)
-        tip = (f"Запустить сборку ({plan.title})" if plan and plan.opens_instance else
-               f"Открыть {plan.title} (выберите сборку там)" if plan else
-               "Не удалось найти лаунчер — укажите команду запуска в настройках сборки")
+        tip = (tr('Запустить сборку ({0})', plan.title) if plan and plan.opens_instance else
+               tr('Открыть {0} (выберите сборку там)', plan.title) if plan else
+               tr("Не удалось найти лаунчер — укажите команду запуска в настройках сборки"))
         self.play_btn.setToolTip(tip)
 
     def _play(self):
         import game_runner
         plan = self._launch_plan()
         if not plan:
-            self.toasts.show("Не удалось найти лаунчер для этой сборки.", "warning", "Настроить", self._edit_current_profile)
+            self.toasts.show(tr("Не удалось найти лаунчер для этой сборки."), "warning", tr("Настроить"), self._edit_current_profile)
             return
         try:
             game_runner.launch(plan)
         except OSError as e:
-            show_message(self, QMessageBox.Icon.Critical, "Не удалось запустить", str(e))
+            show_message(self, QMessageBox.Icon.Critical, tr("Не удалось запустить"), str(e))
             return
         self._launched_at = time.time()
-        self.toasts.show(f"Запускаем игру через {plan.title}…" if plan.opens_instance else
-                         f"Открыт {plan.title} — запустите сборку «{self.current_profile_name}» там.", "info")
+        self.toasts.show(tr('Запускаем игру через {0}…', plan.title) if plan.opens_instance else
+                         tr('Открыт {0} — запустите сборку «{1}» там.', plan.title, self.current_profile_name), "info")
 
     def _poll_game(self):
         """Раз в несколько секунд: запущена ли игра этой сборки (файлы модов заняты) и не вылетела ли она."""
@@ -1065,19 +1056,19 @@ class ToolsMixin:
         logging.info(f"Игра завершилась с ошибкой: {state.reason}")
         QApplication.alert(self)
         if self.settings.get("auto_crash_analysis", True):
-            self.toasts.show("Игра вылетела — открываем разбор.", "warning")
+            self.toasts.show(tr("Игра вылетела — открываем разбор."), "warning")
             self._show_crash_dialog(preferred=state.crash_file)
         else:
-            self.toasts.show("Игра вылетела.", "warning", "Разобрать", lambda: self._show_crash_dialog(state.crash_file),
+            self.toasts.show(tr("Игра вылетела."), "warning", tr("Разобрать"), lambda: self._show_crash_dialog(state.crash_file),
                              timeout=12000)
 
     def _stop_game(self):
         import game_runner
-        if confirm(self, "Закрыть игру", "Закрыть Minecraft этой сборки? Несохранённый прогресс в мире может потеряться.",
-                   "Закрыть", "Отмена"):
+        if confirm(self, tr("Закрыть игру"), tr("Закрыть Minecraft этой сборки? Несохранённый прогресс в мире может потеряться."),
+                   tr("Закрыть"), tr("Отмена")):
             self._run_task(game_runner.stop_game, (self._game_dir(),),
-                           lambda n: self.toasts.show("Игра закрыта." if n else "Процесс игры не найден.", "info"),
-                           lambda e: self.toasts.show(f"Не удалось закрыть игру: {e}", "error"), None)
+                           lambda n: self.toasts.show(tr("Игра закрыта.") if n else tr("Процесс игры не найден."), "info"),
+                           lambda e: self.toasts.show(tr('Не удалось закрыть игру: {0}', e), "error"), None)
 
     # ================================================================== Автоматический поиск проблемного мода
 
@@ -1098,10 +1089,10 @@ class ToolsMixin:
             game_runner.launch(plan)
         except OSError as e:
             self._auto_bisect = None
-            show_message(self, QMessageBox.Icon.Critical, "Не удалось запустить игру", str(e))
+            show_message(self, QMessageBox.Icon.Critical, tr("Не удалось запустить игру"), str(e))
             self._restore_bisect_banner()
             return
-        self._show_auto_status("запускаем игру и ждём главного меню…")
+        self._show_auto_status(tr("запускаем игру и ждём главного меню…"))
 
     def _show_auto_status(self, text: str):
         session = self._bisect_session()
@@ -1118,23 +1109,23 @@ class ToolsMixin:
         state = game_runner.run_state(self._game_dir(), auto["since"])
         timeout = int(self.settings.get("auto_bisect_timeout", 5)) * 60
         if state.crashed:
-            self._auto_answer(True, f"вылет ({state.reason})")
+            self._auto_answer(True, tr('вылет ({0})', state.reason))
         elif state.reached_menu:
-            self._auto_answer(False, "игра дошла до меню")
+            self._auto_answer(False, tr("игра дошла до меню"))
         elif auto["seen_running"] and not running:
-            self._auto_answer(True, "игра закрылась, не дойдя до меню")
+            self._auto_answer(True, tr("игра закрылась, не дойдя до меню"))
         elif time.time() - auto["since"] > timeout:
             self._auto_bisect = None
-            self.toasts.show("Игра не загрузилась за отведённое время — ответьте на этот шаг вручную.", "warning")
+            self.toasts.show(tr("Игра не загрузилась за отведённое время — ответьте на этот шаг вручную."), "warning")
             self._restore_bisect_banner()
         elif auto["seen_running"]:
-            self._show_auto_status("игра загружается…")
+            self._show_auto_status(tr("игра загружается…"))
 
     def _auto_answer(self, problem_persists: bool, reason: str):
         import game_runner
         self._auto_bisect["phase"] = "stopping"
         logging.info(f"Автопоиск: {reason} → проблема {'осталась' if problem_persists else 'пропала'}")
-        self._show_auto_status(f"{reason}; закрываем игру…")
+        self._show_auto_status(tr('{0}; закрываем игру…', reason))
         game_dir = self._game_dir()
 
         def wait_closed():
@@ -1158,5 +1149,5 @@ class ToolsMixin:
 
     def _stop_auto_bisect(self):
         self._auto_bisect = None
-        self.toasts.show("Автоматический поиск остановлен — продолжайте вручную или прервите поиск.", "info")
+        self.toasts.show(tr("Автоматический поиск остановлен — продолжайте вручную или прервите поиск."), "info")
         self._restore_bisect_banner()

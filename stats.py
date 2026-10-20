@@ -3,9 +3,10 @@ from typing import Dict, List, Optional
 
 from query import ABANDONED_DAYS, days_since
 from view_model import entry_tags, group_of, side_tag
+from i18n import tr
 
-SIDE_TITLES = {"side:client": "Только клиент", "side:server": "Только сервер", "side:both": "Клиент и сервер",
-               "side:any": "Клиент или сервер", "unknown": "Неизвестно"}
+SIDE_TITLES = {"side:client": tr("Только клиент"), "side:server": tr("Только сервер"), "side:both": tr("Клиент и сервер"),
+               "side:any": tr("Клиент или сервер"), "unknown": tr("Неизвестно")}
 
 
 def build_stats(entries: List[Dict], custom_tags: Optional[Dict] = None, top: int = 10) -> Dict:
@@ -14,7 +15,7 @@ def build_stats(entries: List[Dict], custom_tags: Optional[Dict] = None, top: in
 
     by_category: Dict[str, List] = {}
     for entry in installed:
-        cats = [title for key, title in entry_tags(entry, custom_tags) if key.startswith("cat:")] or ["без категории"]
+        cats = [title for key, title in entry_tags(entry, custom_tags) if key.startswith("cat:")] or [tr("без категории")]
         for title in cats:
             slot = by_category.setdefault(title, [0, 0])
             slot[0] += 1
