@@ -392,6 +392,7 @@ class EmptyState(QWidget):
         while self.buttons.count():
             item = self.buttons.takeAt(0)
             if item.widget():
+                item.widget().hide()  # До отложенного удаления кнопка иначе висит поверх новых
                 item.widget().deleteLater()
         for btn in buttons:
             self.buttons.addWidget(btn)

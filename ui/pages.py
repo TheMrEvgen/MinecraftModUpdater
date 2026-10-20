@@ -246,32 +246,9 @@ class SettingsPage(QWidget):
         root.setSpacing(16)
         root.addLayout(page_header(tr("Настройки"), tr("Оформление, проверка обновлений и данные приложения.")))
 
-        # Установка программы
-        card, body = self._card(tr("Установка программы"))
-        self.install_status = label("", None, wrap=True)
-        self.install_status.setTextFormat(Qt.TextFormat.RichText)
-        body.addWidget(self.install_status)
-        self.install_info = label("", "Muted", wrap=True)
-        self.install_info.setTextFormat(Qt.TextFormat.RichText)
-        body.addWidget(self.install_info)
-        self.install_desktop = QCheckBox(tr("Ярлык на рабочем столе"))
-        self.install_mrpack = QCheckBox(tr("Открывать файлы .mrpack двойным щелчком"))
-        self.install_protocol = QCheckBox(tr("Открывать ссылки modupdater:// (кнопки «Открыть в Mod Updater» на сайтах)"))
-        for box in (self.install_desktop, self.install_mrpack, self.install_protocol):
-            box.setChecked(True)
-            body.addWidget(box)
-        row = QHBoxLayout()
-        self.install_btn = button(tr("Установить"), "PrimaryButton", "download", tokens, "accent_text")
-        self.install_btn.clicked.connect(lambda: self.install_requested.emit({
-            "desktop": self.install_desktop.isChecked(), "associate_mrpack": self.install_mrpack.isChecked(),
-            "protocol": self.install_protocol.isChecked()}))
-        self.uninstall_btn = button(tr("Удалить программу…"), "DangerButton", "trash", tokens, "danger")
-        self.uninstall_btn.clicked.connect(self.uninstall_requested)
-        row.addWidget(self.install_btn)
-        row.addWidget(self.uninstall_btn)
-        row.addStretch()
-        body.addLayout(row)
-        root.addWidget(card)
+        self._root = root
+        self.install_card = self._build_install_card(tokens)
+        root.addWidget(self.install_card)
 
         # Оформление
         card, body = self._card(tr("Оформление"))
@@ -516,6 +493,7 @@ class SettingsPage(QWidget):
 
         # Горячие клавиши
         card, body = self._card(tr("Горячие клавиши"))
+        self._hotkeys_card = card
         body.addWidget(label(tr("Щёлкните по полю и нажмите новое сочетание. Крестик — убрать сочетание."), "Muted", wrap=True))
         self.shortcut_editor = ShortcutEditor()
         self.shortcut_editor.changed.connect(self._emit)
@@ -533,6 +511,58 @@ class SettingsPage(QWidget):
         body.addWidget(shortcuts)
         root.addWidget(card)
         root.addStretch()
+
+    def _build_install_card(self, tokens: dict) -> QFrame:
+        """Компактная карточка: строка статуса с кнопками, параметры и описание — по кнопке «Параметры»."""
+        card, body = self._card(tr("Установка программы"))
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.install_status = label("", "Muted", wrap=True)
+        self.install_status.setTextFormat(Qt.TextFormat.RichText)
+        row.addWidget(self.install_status, 1)
+        self.install_more = button(tr("Параметры"), "GhostButton", "chevron_right", tokens, "text_muted")
+        self.install_more.clicked.connect(lambda: self._toggle_install_details(not self.install_details.isVisible()))
+        self.install_btn = button(tr("Установить"), "PrimaryButton", "download", tokens, "accent_text")
+        self.install_btn.clicked.connect(lambda: self.install_requested.emit({
+            "desktop": self.install_desktop.isChecked(), "associate_mrpack": self.install_mrpack.isChecked(),
+            "protocol": self.install_protocol.isChecked()}))
+        self.uninstall_btn = button(tr("Удалить программу…"), "DangerButton", "trash", tokens, "danger")
+        self.uninstall_btn.clicked.connect(self.uninstall_requested)
+        for widget in (self.install_more, self.install_btn, self.uninstall_btn):
+            row.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
+        body.addLayout(row)
+
+        self.install_details = QWidget()
+        details = QVBoxLayout(self.install_details)
+        details.setContentsMargins(0, 4, 0, 0)
+        details.setSpacing(8)
+        self.install_desktop = QCheckBox(tr("Ярлык на рабочем столе"))
+        self.install_mrpack = QCheckBox(tr("Открывать файлы .mrpack двойным щелчком"))
+        self.install_protocol = QCheckBox(tr("Открывать ссылки modupdater:// (кнопки «Открыть в Mod Updater» на сайтах)"))
+        for box in (self.install_desktop, self.install_mrpack, self.install_protocol):
+            box.setChecked(True)
+            details.addWidget(box)
+        self.install_info = label("", "Faint", wrap=True)
+        self.install_info.setTextFormat(Qt.TextFormat.RichText)
+        details.addWidget(self.install_info)
+        self.install_details.hide()
+        self._apply_only_with_details = False
+        body.addWidget(self.install_details)
+        return card
+
+    def _toggle_install_details(self, visible: bool):
+        self.install_details.setVisible(visible)
+        if self._apply_only_with_details:  # «Применить» нужна, только когда видны галочки
+            self.install_btn.setVisible(visible)
+        name = "chevron_down" if visible else "chevron_right"
+        self.install_more.setProperty("icon_name", name)
+        self.install_more.setIcon(icons.icon(name, self.tokens["text_muted"], 16))
+
+    def _place_install_card(self, top: bool):
+        """Не установлена — карточка вверху (это действие), установлена — внизу, рядом с «Данными»."""
+        self._root.removeWidget(self.install_card)
+        index = 1 if top else self._root.indexOf(self._hotkeys_card)
+        self._root.insertWidget(index, self.install_card)
 
     @staticmethod
     def _add_with_hint(body, widget, hint: str = None):
@@ -597,40 +627,47 @@ class SettingsPage(QWidget):
         self._loading = False
 
     def set_install_state(self, supported: bool, state=None):
-        """Раздел «Установка»: что даёт установка сейчас, что появится дальше, и текущее состояние."""
-        benefits = (tr("<b>Что даёт установка:</b><br>"
-                    "• ярлыки в меню «Пуск» и на рабочем столе;<br>"
-                    "• пункт в «Установке и удалении программ» Windows;<br>"
-                    "• файлы .mrpack открываются двойным щелчком — сразу в режиме импорта;<br>"
-                    "• ссылки modupdater:// — сборки и моды открываются из браузера и Discord;<br>"
-                    "• второй запуск не открывает второе окно, а передаёт файл уже открытой программе.<br><br>"
-                    "<b>Что появится в следующих версиях:</b><br>"
-                    "• автообновление самой программы (проверка, загрузка и замена в один клик);<br>"
-                    "• проверка обновлений модов в фоне со значком в трее и уведомлениями Windows;<br>"
-                    "• кнопки «Установить в Mod Updater» по ссылкам с сайтов и из сборок друзей."))
-        self.install_info.setText(benefits)
+        """Раздел «Установка»: одна строка состояния; что даёт установка — в «Параметрах»."""
+        self.install_info.setText(tr("<b>Что даёт установка:</b><br>"
+                                     "• ярлыки в меню «Пуск» и на рабочем столе;<br>"
+                                     "• пункт в «Установке и удалении программ» Windows;<br>"
+                                     "• файлы .mrpack открываются двойным щелчком — сразу в режиме импорта;<br>"
+                                     "• ссылки modupdater:// — сборки и моды открываются из браузера и Discord;<br>"
+                                     "• второй запуск не открывает второе окно, а передаёт файл уже открытой программе.<br><br>"
+                                     "<b>Что появится в следующих версиях:</b><br>"
+                                     "• автообновление самой программы (проверка, загрузка и замена в один клик);<br>"
+                                     "• проверка обновлений модов в фоне со значком в трее и уведомлениями Windows;<br>"
+                                     "• кнопки «Установить в Mod Updater» по ссылкам с сайтов и из сборок друзей."))
         boxes = (self.install_desktop, self.install_mrpack, self.install_protocol)
+        installed = bool(supported and state and state.installed)
+        self._place_install_card(top=supported and not installed)
         if not supported:
-            self.install_status.setText(tr("Установка доступна в собранной программе (.exe) для Windows. "
-                                        "Сейчас программа запущена из исходников."))
-            for widget in (*boxes, self.install_btn, self.uninstall_btn):
+            self.install_status.setText(tr("Доступна в собранной программе (.exe) для Windows."))
+            for widget in (*boxes, self.install_btn):
                 widget.setEnabled(False)
+            self.uninstall_btn.hide()
             return
         for widget in (*boxes, self.install_btn):
             widget.setEnabled(True)
-        if state and state.installed:
+        if installed:
             where = tr("эта копия") if state.running_installed else tr('версия {0}', state.installed_version)
-            self.install_status.setText(tr('<b>✓ Установлено</b> ({0}): {1}', where, state.exe))
-            self.install_btn.setText(tr("Применить изменения") if state.running_installed else tr("Обновить установленную версию"))
+            self.install_status.setText(tr("<span style='color:{0}'><b>✓ Установлена</b></span> · {1}",
+                                           self.tokens["success"], where))
+            self.install_status.setToolTip(state.exe)
+            self.install_btn.setText(tr("Применить") if state.running_installed else tr("Обновить"))
+            self._apply_only_with_details = bool(state.running_installed)
+            self.install_btn.setVisible(not state.running_installed or self.install_details.isVisible())
             self.install_desktop.setChecked(state.desktop)
             self.install_mrpack.setChecked(state.mrpack)
             self.install_protocol.setChecked(state.protocol)
-            self.uninstall_btn.setEnabled(True)
             self.uninstall_btn.show()
         else:
-            self.install_status.setText(tr("Программа запущена без установки — это просто .exe-файл. Установка займёт "
-                                        "пару секунд и не требует прав администратора."))
+            self.install_status.setText(tr("Ярлыки, .mrpack двойным щелчком и ссылки modupdater:// — "
+                                           "пара секунд, без прав администратора."))
+            self.install_status.setToolTip("")
+            self._apply_only_with_details = False
             self.install_btn.setText(tr("Установить"))
+            self.install_btn.show()
             self.uninstall_btn.hide()
 
     def set_backup_usage(self, text: str):
