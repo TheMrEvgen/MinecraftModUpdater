@@ -1,0 +1,58 @@
+name: Выпуск
+
+# Выпуск по тегу: git tag v3.0.0-beta && git push origin v3.0.0-beta
+# Тег должен совпадать с APP_VERSION в config.py, а в CHANGELOG.md должен быть раздел этой версии.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      PYTHONIOENCODING: utf-8
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+
+      - name: Тег совпадает с версией программы
+        shell: pwsh
+        run: |
+          $version = python -c "import build; print(build.VERSION)"
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Тег ${{ github.ref_name }} не совпадает с APP_VERSION $version" }
+
+      - name: Тесты
+        run: |
+          python -m pytest -q
+          python tools/i18n_check.py
+
+      - name: Сборка .exe
+        run: python build.py
+
+      - name: Файлы выпуска
+        shell: pwsh
+        run: |
+          Copy-Item "dist/Minecraft Mod Updater beta.exe" ModUpdater.exe
+          Copy-Item (Get-ChildItem "Minecraft Mod Updater beta_v*.zip" | Select-Object -First 1).FullName ModUpdater.zip
+          $hash = (Get-FileHash ModUpdater.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  ModUpdater.exe" | Out-File -Encoding ascii ModUpdater.exe.sha256
+          python tools/release_notes.py "${{ github.ref_name }}" notes.md
+
+      - name: Выпуск на GitHub
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $flags = @()
+          if ($tag.Contains("-")) { $flags += "--prerelease" }  # beta, rc — предварительный выпуск
+          gh release create $tag ModUpdater.exe ModUpdater.zip ModUpdater.exe.sha256 `
+            --title "Minecraft Mod Updater $($tag.TrimStart('v'))" --notes-file notes.md @flags

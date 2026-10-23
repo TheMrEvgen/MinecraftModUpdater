@@ -49,7 +49,7 @@ rollback. Switch the language in Settings → Appearance → «Язык / Langua
 
 ## Запуск
 
-Готовая программа — один файл `Minecraft Mod Updater beta.exe`, установка не обязательна.
+Скачайте `ModUpdater.exe` со страницы [выпусков](https://github.com/TheMrEvgen/MinecraftModUpdater/releases/latest) — это один файл, установка не обязательна.
 При первом запуске можно установить её в профиль пользователя: «Настройки → Установка программы»
 (права администратора не нужны).
 

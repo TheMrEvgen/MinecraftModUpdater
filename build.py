@@ -7,7 +7,15 @@ import datetime
 
 # --- НАСТРОЙКИ ---
 APP_NAME = "Minecraft Mod Updater beta"
-VERSION = "3.0.0-beta"  # Версия продукта. Может содержать текст.
+
+
+def _app_version() -> str:
+    """Версия берётся из config.APP_VERSION — одно место на программу, сборку и тег выпуска."""
+    with open("config.py", encoding="utf-8") as f:
+        return re.search(r'^APP_VERSION = "([^"]+)"', f.read(), re.MULTILINE).group(1)
+
+
+VERSION = _app_version()  # Например, 3.0.0-beta
 COPYRIGHT_INFO = f"Copyright (c) {datetime.datetime.now().year} TheMrEvgen" # Заменено © на (c) для совместимости
 COMPANY_NAME = "TheMrEvgen" # Укажите название компании
 # -----------------
