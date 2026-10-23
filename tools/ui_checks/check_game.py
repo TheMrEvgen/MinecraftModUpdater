@@ -79,4 +79,60 @@ w._finish_bisect(False) if w._bisect_session() else None
 # Вернуть песочницу: включить всё обратно
 w._set_disabled_names(set())
 print("Файлы:", sorted(f for f in os.listdir(f"{GAME}/mods") if f.endswith((".jar", ".disabled"))))
+
+# 3. История запусков и подсказка откатить изменение модов, после которого игра вылетает
+import shutil  # noqa: E402
+from updater import UpdateTransaction  # noqa: E402
+
+notes = []
+original_toast = w.toasts.show
+w.toasts.show = lambda text, kind="info", action_text=None, action=None, timeout=5000: (
+    notes.append((text, action)), original_toast(text, kind, action_text, action, timeout))
+
+
+def check(label, condition):
+    print(("OK   " if condition else "FAIL ") + label, flush=True)
+
+
+def set_culprit(name):
+    w._profile()["launch_command"] = f'"{sys.executable}" "{FAKE}" "{GAME}" {name}'
+
+
+def launch_and_wait(timeout=40):
+    before = len(w._profile().get("launches") or [])
+    w._play()
+    end = time.time() + timeout
+    while time.time() < end and len(w._profile().get("launches") or []) == before:
+        pump(0.3)
+    pump(0.5)
+    return (w._profile().get("launches") or [None])[-1]
+
+
+set_culprit("no-such-mod")
+good = launch_and_wait()
+check(f"удачный запуск записан: {good}", bool(good) and good["menu"] and not good["crashed"])
+check("время загрузки посчитано по логу (~2 с)", bool(good) and good.get("load") is not None and 1 <= good["load"] <= 4)
+
+time.sleep(1.5)  # Операция должна быть позже удачного запуска (время в журнале — с точностью до секунды)
+mods_dir = f"{GAME}/mods"
+source_jar = next(f for f in os.listdir(mods_dir) if f.endswith(".jar"))
+shutil.copy(os.path.join(mods_dir, source_jar), os.path.join(mods_dir, "broken-update-1.0.jar"))
+UpdateTransaction(mods_dir, "update").record_installed("broken-update-1.0.jar")
+
+set_culprit("broken-update")
+bad = launch_and_wait()
+check("вылет после изменения модов записан", bool(bad) and bad["crashed"])
+suggestion = next(((text, action) for text, action in notes if "Откатить это изменение" in text), None)
+check(f"предложено откатить изменение: {suggestion[0] if suggestion else None}",
+      bool(suggestion) and "broken-update-1.0" in suggestion[0])
+if suggestion:
+    suggestion[1]()
+    pump(1)
+check("откат убрал мод из того изменения", not os.path.exists(os.path.join(mods_dir, "broken-update-1.0.jar")))
+w._switch_page(mw.PAGE_STATS)
+w.sidebar.set_page(mw.PAGE_STATS)
+pump(1)
+check(f"статистика запусков: {w.stats_page.launch_summary.text()}", "Запусков" in w.stats_page.launch_summary.text())
+os.makedirs(f"{SP}/shots/g", exist_ok=True)
+w.stats_page.launch_chart.parentWidget().grab().save(f"{SP}/shots/g/launches.png")
 w.icon_loader.shutdown()

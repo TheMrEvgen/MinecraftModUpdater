@@ -2,6 +2,7 @@
 Страница «Статистика»: плитки с главными числами и горизонтальные столбцы (одна величина — один цвет).
 Подписи — цветами текста, столбцы — акцентом темы; при наведении подсказка, щелчок фильтрует список модов.
 """
+import datetime
 from typing import Callable, Dict, List, Optional
 
 from PyQt6.QtCore import QRect, QRectF, QSize, Qt, pyqtSignal
@@ -100,6 +101,75 @@ class BarChart(QWidget):
             self.item_clicked.emit(self.items[self._hover][3])
 
 
+class LaunchChart(QWidget):
+    """Последние запуски игры: высота столбца — время загрузки, вылеты — красным во всю высоту."""
+    HEIGHT = 120
+    MAX_RUNS = 25
+
+    def __init__(self, tokens: dict, parent=None):
+        super().__init__(parent)
+        self.tokens = tokens
+        self.runs: List[Dict] = []
+        self._hover = -1
+        self.setMouseTracking(True)
+        self.setFixedHeight(self.HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_runs(self, runs: List[Dict]):
+        self.runs = list(runs or [])[-self.MAX_RUNS:]
+        self._hover = -1
+        self.update()
+
+    def _slot(self) -> float:
+        return self.width() / max(len(self.runs), 8)
+
+    def paintEvent(self, event):
+        if not self.runs:
+            return
+        t = self.tokens
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        slot = self._slot()
+        bar_w = max(4.0, min(22.0, slot * 0.6))
+        top = max([r.get("load") or 0 for r in self.runs] + [1])
+        for i, run in enumerate(self.runs):
+            x = i * slot + (slot - bar_w) / 2
+            if run.get("crashed"):
+                height, color = self.HEIGHT - 6, qcolor(t["danger"], 0.85)
+            elif run.get("load"):
+                height, color = max(6.0, (self.HEIGHT - 6) * run["load"] / top), qcolor(t["accent"])
+            else:  # Закрыли до меню — время неизвестно
+                height, color = 6.0, qcolor(t["text_faint"])
+            if self._hover >= 0 and i != self._hover:
+                color.setAlphaF(color.alphaF() * 0.5)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(color)
+            p.drawRoundedRect(QRectF(x, self.HEIGHT - height, bar_w, height), 3, 3)
+        p.end()
+
+    def mouseMoveEvent(self, event):
+        index = int(event.position().x() // self._slot())
+        index = index if 0 <= index < len(self.runs) else -1
+        if index != self._hover:
+            self._hover = index
+            self.update()
+        if index >= 0:
+            run = self.runs[index]
+            when = datetime.datetime.fromtimestamp(run["start"]).strftime("%d.%m %H:%M")
+            if run.get("crashed"):
+                what = tr("вылет")
+            elif run.get("load"):
+                what = tr("загрузка {0} с", f"{run['load']:.0f}")
+            else:
+                what = tr("закрыта до главного меню")
+            QToolTip.showText(event.globalPosition().toPoint(), f"<b>{when}</b><br>{what}", self)
+
+    def leaveEvent(self, event):
+        self._hover = -1
+        self.update()
+        super().leaveEvent(event)
+
+
 class StatTile(QFrame):
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
@@ -178,6 +248,17 @@ class StatsPage(QWidget):
         self.abandoned_box.setContentsMargins(0, 0, 0, 0)
         self.sections.append(self._section(tr("Давно не обновлялись"), tr("Автор не выпускал версий больше года — "
                                            "такие моды стоит заменить живыми аналогами."), abandoned_widget))
+        launches = QWidget()
+        launches_layout = QVBoxLayout(launches)
+        launches_layout.setContentsMargins(0, 0, 0, 0)
+        launches_layout.setSpacing(8)
+        self.launch_summary = label("", None, wrap=True)
+        self.launch_chart = LaunchChart(tokens)
+        launches_layout.addWidget(self.launch_summary)
+        launches_layout.addWidget(self.launch_chart)
+        self.sections.append(self._section(tr("Запуски игры"), tr("Время загрузки до главного меню по логу игры, "
+                                           "красным — вылеты. Учитываются запуски, пока эта сборка открыта в программе."),
+                                           launches))
         self._columns = None
         self._arrange(2)
         self.grid_widget = QWidget()
@@ -222,10 +303,24 @@ class StatsPage(QWidget):
 
     def set_tokens(self, tokens: dict):
         self.tokens = tokens
-        for chart in (self.categories, self.heaviest, self.sides):
+        for chart in (self.categories, self.heaviest, self.sides, self.launch_chart):
             chart.tokens = tokens
             chart.update()
         refresh_button_icons(self, tokens)
+
+    def set_launches(self, runs: Optional[List[Dict]]):
+        import launch_history
+        stats = launch_history.stats(runs)
+        self.launch_chart.set_runs(runs or [])
+        self.launch_chart.setVisible(bool(runs))
+        if not stats["runs"]:
+            self.launch_summary.setText(tr("Запусков пока не было — нажмите «Играть» или запустите сборку в лаунчере."))
+            return
+        parts = [tr("Запусков: {0}", stats["runs"]), tr("вылетов: {0}", stats["crashes"])]
+        if stats["average_load"]:
+            parts.append(tr("загрузка в среднем {0} с (последняя {1} с)", f"{stats['average_load']:.0f}",
+                            f"{stats['last_load']:.0f}"))
+        self.launch_summary.setText(" · ".join(parts))
 
     def set_data(self, entries: List[Dict], profile_name: str, custom_tags: Optional[Dict] = None,
                  icon_provider: Optional[Callable] = None):

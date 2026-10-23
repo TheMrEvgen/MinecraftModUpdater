@@ -406,14 +406,15 @@ class OperationsMixin:
             return
         self._do_rollback(manifest, folder)
 
-    def _rollback_from_history(self, manifest: dict):
-        transactions = list_transactions(self.mods_path)
+    def _rollback_from_history(self, manifest: dict, folder: Optional[str] = None):
+        folder = folder or self.mods_path
+        transactions = list_transactions(folder)
         is_latest = bool(transactions) and transactions[0]["dir"] == manifest["dir"]
         warning = "" if is_latest else (tr("\n\n⚠ Это не последняя операция: более поздние изменения тех же файлов "
                                          "могут конфликтовать — такие файлы будут пропущены."))
         if confirm(self, tr("Вернуть изменения"), tr("Удалить файлы, установленные этой операцией, и вернуть прежние?")
                    + warning, tr("Вернуть"), tr("Отмена")):
-            self._do_rollback(manifest)
+            self._do_rollback(manifest, folder)
 
     def _do_rollback(self, manifest: dict, folder: Optional[str] = None):
         if self._busy:

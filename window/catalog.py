@@ -98,6 +98,7 @@ class CatalogMixin:
 
     def _refresh_stats(self):
         self.stats_page.set_data(self._count_items, self.current_profile_name, self.mod_tags)
+        self.stats_page.set_launches(self._profile().get("launches"))
 
     def _stats_filter(self, query: str):
         self._switch_page(self.PAGE_MODS_INDEX)

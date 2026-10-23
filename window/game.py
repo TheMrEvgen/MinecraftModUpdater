@@ -13,6 +13,7 @@ from bisect_session import BisectSession
 from content import MODS, enabled_name
 from crash_analysis import find_crash_files
 from i18n import tr
+from mod_updater_logic import format_date
 from ui.tools_dialogs import CrashDialog
 from ui_components import ask_choice, confirm, show_message
 from view_model import iter_all_entries
@@ -240,6 +241,7 @@ class GameMixin:
         self._launched_at = None
         game_dir = self._game_dir()
         state = state or game_runner.run_state(game_dir, started_at or time.time() - 3600)
+        self._record_launch(started_at, state)
         if not state.crashed:
             return
         logging.info(tr('Игра завершилась с ошибкой: {0}', state.reason))
@@ -250,6 +252,36 @@ class GameMixin:
         else:
             self.toasts.show(tr("Игра вылетела."), "warning", tr("Разобрать"), lambda: self._show_crash_dialog(state.crash_file),
                              timeout=12000)
+        # После окна разбора: если вылеты начались с конкретного изменения модов — предлагаем его откатить
+        self._suggest_rollback_after_crash()
+
+    def _record_launch(self, started_at: Optional[float], state):
+        """Запуск — в историю сборки: дошла ли игра до меню, вылетела ли, сколько грузилась."""
+        import game_runner
+        import launch_history
+        if not started_at or self._bisect_session():  # Запуски при поиске проблемного мода — не в счёт
+            return
+        run = {"start": started_at, "menu": bool(state.reached_menu), "crashed": bool(state.crashed),
+               "load": game_runner.load_seconds(self._game_dir(), started_at)}
+        profile = self._profile()
+        profile["launches"] = launch_history.record(profile.get("launches"), run)
+        self.save_config()
+        if run["load"]:
+            logging.info(tr("Игра загрузилась за {0} с", run["load"]))
+
+    def _suggest_rollback_after_crash(self) -> bool:
+        """До операции с модами игра запускалась, после — вылетает: предлагаем откатить именно её."""
+        import launch_history
+        from updater import list_transactions
+        mods_dir = MODS.path(self._game_dir())
+        manifest = launch_history.suspect_operation(self._profile().get("launches"), list_transactions(mods_dir))
+        if not manifest:
+            return False
+        when = format_date(manifest.get("created")) + " " + (manifest.get("created") or "")[11:16]
+        self.toasts.show(tr("До изменения модов {0} игра запускалась, а после — вылетает ({1}). Откатить это изменение?",
+                            when, launch_history.changed_mods(manifest)), "warning", tr("Откатить"),
+                         lambda: self._rollback_from_history(manifest, mods_dir), timeout=30000)
+        return True
 
     def _stop_game(self):
         import game_runner

@@ -9,6 +9,7 @@ import glob
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -146,6 +147,31 @@ def _read_since(path: str, since: float) -> Optional[str]:
             return f.read()[-3_000_000:]
     except OSError:
         return None
+
+
+# Время в начале строки лога: «[19:49:29]» (Fabric, ваниль) или «[30янв.2026 19:49:29.978]» (Forge, NeoForge)
+_LOG_TIME = re.compile(r"^\[(?:[^\]]*?\s)?(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d{1,3}))?\]")
+
+
+def load_seconds_from_log(text: str) -> Optional[float]:
+    """Сколько игра грузилась: от первой строки лога до главного меню (MENU_MARKERS). None — меню не было."""
+    first = None
+    for line in (text or "").splitlines():
+        match = _LOG_TIME.match(line)
+        if not match:
+            continue
+        hours, minutes, seconds, millis = match.groups()
+        moment = int(hours) * 3600 + int(minutes) * 60 + int(seconds) + int((millis or "0").ljust(3, "0")) / 1000
+        if first is None:
+            first = moment
+        if any(marker in line for marker in MENU_MARKERS):
+            return round((moment - first) % 86400, 1)  # Через полночь — время «перескакивает» на ноль
+    return None
+
+
+def load_seconds(game_dir: str, since: float) -> Optional[float]:
+    text = _read_since(os.path.join(game_dir, "logs", "latest.log"), since - 1)
+    return load_seconds_from_log(text) if text else None
 
 
 def newest_crash_report(game_dir: str, since: float) -> Optional[str]:
