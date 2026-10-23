@@ -189,8 +189,12 @@ class TransferMixin:
             show_message(self, QMessageBox.Icon.Warning, tr("Ошибка"),
                          tr('Не удалось определить версию загрузчика {0} для {1}.', self.loader, self.game_version))
             return
+        skipped: List[str] = []
         index = build_mrpack_index(self.mods_data, self.game_version, self.loader, loader_version,
-                                   name=self.current_profile_name)
+                                   name=self.current_profile_name, skipped=skipped)
+        if skipped:  # Формат .mrpack ссылается только на Modrinth и GitHub
+            self.toasts.show(tr("Не попадут в .mrpack (формат поддерживает только Modrinth): {0}", ", ".join(skipped[:6])
+                                + (f" (+{len(skipped) - 6})" if len(skipped) > 6 else "")), "warning", timeout=12000)
         if not index["files"]:
             self.toasts.show(tr("Нет модов с Modrinth — сначала проверьте обновления."), "warning")
             return

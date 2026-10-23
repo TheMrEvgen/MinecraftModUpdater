@@ -100,12 +100,26 @@ def mrpack_loader_key(loader: str) -> str:
     return f"{loader}-loader" if loader in ('fabric', 'quilt') else loader
 
 
+# Откуда .mrpack разрешает скачивать файлы (спецификация Modrinth); CurseForge сюда не входит
+MRPACK_HOSTS = ("cdn.modrinth.com", "github.com", "raw.githubusercontent.com", "gitlab.com")
+
+
+def mrpack_allowed(url: Optional[str]) -> bool:
+    from urllib.parse import urlparse
+    return bool(url) and urlparse(url).hostname in MRPACK_HOSTS
+
+
 def build_mrpack_index(mods_data: List[Dict], game_version: str, loader: str, loader_version: str,
-                       name: Optional[str] = None) -> Dict:
+                       name: Optional[str] = None, skipped: Optional[List[str]] = None) -> Dict:
+    """skipped — сюда попадают названия модов, которые формат .mrpack не позволяет сослать (например, с CurseForge)."""
     files = []
     for entry in iter_installed_entries(mods_data):
         primary_file = select_primary_file(entry.get('installed_info'))
         if not primary_file:
+            continue
+        if not mrpack_allowed(primary_file.get('url')):
+            if skipped is not None:
+                skipped.append(entry.get('name') or primary_file.get('filename') or "?")
             continue
         hashes = primary_file.get('hashes', {})
         files.append({

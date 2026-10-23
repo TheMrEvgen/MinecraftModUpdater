@@ -449,6 +449,7 @@
  "Не нужны.": "Not needed.",
  "Не обновлять этот мод (в том числе в «Обновить все»)": "Don't update this mod (including “Update all”)",
  "Не обновлять этот мод (закрепить)": "Don't update this mod (pin)",
+ "Не попадут в .mrpack (формат поддерживает только Modrinth): {0}": "Won't be included in .mrpack (the format supports only Modrinth): {0}",
  "Не проверено": "Not checked",
  "Не удалось восстановить {0}: {1}": "Couldn't restore {0}: {1}",
  "Не удалось выключить {0}: {1}": "Couldn't disable {0}: {1}",

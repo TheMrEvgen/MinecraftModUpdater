@@ -12,7 +12,7 @@ def _installed(pid, version="1.0", client="required", server="optional", deps=No
     return {
         "project_id": pid, "name": pid, "current_version": version, "filepath": f"/mods/{pid}.jar",
         "client_side": client, "server_side": server, "dependencies": deps or [],
-        "installed_info": {"files": [{"filename": f"{pid}.jar", "primary": True, "url": f"https://cdn/{pid}.jar",
+        "installed_info": {"files": [{"filename": f"{pid}.jar", "primary": True, "url": f"https://cdn.modrinth.com/data/x/versions/y/{pid}.jar",
                                       "size": 10, "hashes": {"sha1": "s1", "sha512": "s512"}}]},
     }
 
@@ -75,3 +75,20 @@ class TestGameDetection:
         result = detect_game_versions(str(tmp_path))
         assert result.versions == {("1.21.1", "fabric")}
         assert result.best_guess == ("1.21.1", "fabric")
+
+
+def test_mrpack_skips_files_outside_allowed_hosts():
+    from exporters import build_mrpack_index
+
+    def entry(name, url):
+        return {"name": name, "project_id": name, "filepath": f"/mods/{name}.jar",
+                "installed_info": {"files": [{"url": url, "filename": f"{name}.jar", "primary": True,
+                                              "hashes": {"sha1": "a" * 40, "sha512": "b" * 128}, "size": 1}]}}
+
+    mods = [entry("sodium", "https://cdn.modrinth.com/data/AANobbMI/versions/x/sodium.jar"),
+            entry("journeymap", "https://edge.forgecdn.net/files/8923/666/journeymap.jar"),
+            entry("blocked", None)]
+    skipped = []
+    index = build_mrpack_index(mods, "1.21.1", "fabric", "0.16.0", skipped=skipped)
+    assert [f["path"] for f in index["files"]] == ["mods/sodium.jar"]
+    assert skipped == ["journeymap", "blocked"]
