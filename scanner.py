@@ -119,6 +119,7 @@ class ModCache:
         self.conn.executescript('''
             CREATE TABLE IF NOT EXISTS mod_info (sha1 TEXT PRIMARY KEY, data TEXT);
             CREATE TABLE IF NOT EXISTS project_info (project_id TEXT PRIMARY KEY, data TEXT);
+            CREATE TABLE IF NOT EXISTS cf_fingerprint (sha1 TEXT PRIMARY KEY, fingerprint INTEGER);
             CREATE TABLE IF NOT EXISTS file_index (
                 path TEXT PRIMARY KEY, size INTEGER, mtime_ns INTEGER,
                 sha1 TEXT, name TEXT, version TEXT, project_hint TEXT
@@ -128,6 +129,21 @@ class ModCache:
 
     def close(self):
         self.conn.close()
+
+    def get_fingerprints(self, sha1s: List[str]) -> Dict[str, int]:
+        """Отпечатки CurseForge по SHA1: считать MurmurHash2 заново для неизменных файлов незачем."""
+        result: Dict[str, int] = {}
+        for chunk in (sha1s[i:i + 500] for i in range(0, len(sha1s), 500)):
+            marks = ",".join("?" * len(chunk))
+            for sha1, value in self.conn.execute(f"SELECT sha1, fingerprint FROM cf_fingerprint WHERE sha1 IN ({marks})", chunk):
+                result[sha1] = int(value)
+        return result
+
+    def put_fingerprints(self, values: Dict[str, int]):
+        if values:
+            self.conn.executemany("INSERT OR REPLACE INTO cf_fingerprint (sha1, fingerprint) VALUES (?, ?)",
+                                  list(values.items()))
+            self.conn.commit()
 
     def __enter__(self):
         return self
@@ -281,6 +297,7 @@ def apply_install_info(entry: Dict, version_info: Optional[Dict]) -> bool:
     entry["new_hashes"] = primary_file.get('hashes')
     entry["new_size"] = primary_file.get('size') or 0
     entry["_latest_info"] = version_info
+    entry["manual_url"] = version_info.get('manual_url') or ""  # CurseForge: скачивание только с сайта
     return True
 
 
@@ -330,6 +347,9 @@ def _apply_project_info(entry: Dict, project: Optional[Dict]):
     entry["downloads"] = project.get('downloads')
     entry["links"] = project_links(project)
     entry["gallery"] = list(project.get('gallery') or [])
+    if project.get('page_url'):  # Мод с CurseForge: своя страница и источник
+        entry["page_url"] = project['page_url']
+        entry["source"] = project.get('source')
 
 
 def scan_local(mods_path: str, cache_file: Optional[str], content: ContentType = MODS) -> List[Dict]:
@@ -554,18 +574,91 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
                 entry["duplicate_of"] = main_name
                 mods_data.append(entry)
 
-        # --- Моды, не найденные на Modrinth ---
-        for local in local_files:
-            info = installed_infos.get(local['sha1'])
-            if not info or not info.get('project_id'):
+        # --- Моды, не найденные на Modrinth: спрашиваем CurseForge ---
+        unknown = [local for local in local_files
+                   if not (installed_infos.get(local['sha1']) or {}).get('project_id')]
+        check_cancel()
+        from_curseforge = _curseforge_entries(unknown, game_version, loader if content is MODS else None, channel,
+                                              cache, progress, check_cancel)
+        for local in unknown:
+            entry = from_curseforge.get(local['path'])
+            if entry is None:
                 entry = make_local_entry(local, ModStatus.NOT_FOUND)
                 entry["project_id"] = None
-                mods_data.append(entry)
+            mods_data.append(entry)
 
         return mods_data
     finally:
         if cache:
             cache.close()
+
+
+def _curseforge_entries(locals_: List[Dict], game_version: str, loader: Optional[str], channel: UpdateChannel,
+                        cache: Optional["ModCache"], progress: ProgressCallback = lambda msg: None,
+                        check_cancel: Callable[[], None] = lambda: None) -> Dict[str, Dict]:
+    """
+    Файлы, которых нет на Modrinth, — по отпечатку на CurseForge. Путь → запись мода (как у Modrinth):
+    установленная версия, страница, иконка и последняя подходящая версия. Без ключа API — пусто.
+    """
+    import curseforge
+    if not locals_ or not curseforge.available():
+        return {}
+    progress(tr("Ищем {0} модов на CurseForge…", len(locals_)))
+    known = cache.get_fingerprints([l['sha1'] for l in locals_]) if cache else {}
+    fresh = {}
+    prints: Dict[int, Dict] = {}
+    for local in locals_:
+        value = known.get(local['sha1'])
+        if value is None:
+            try:
+                value = curseforge.file_fingerprint(local['path'])
+            except OSError:
+                continue
+            fresh[local['sha1']] = value
+        prints[value] = local
+    if cache:
+        cache.put_fingerprints(fresh)
+    try:
+        matches = curseforge.match_fingerprints(prints)
+        mods = curseforge.get_mods({m["mod_id"] for m in matches.values()})
+    except requests.RequestException as e:
+        logging.warning(tr("CurseForge недоступен: {0}", e))
+        return {}
+    check_cancel()
+
+    def build(item):
+        value, match = item
+        mod = mods.get(int(match["mod_id"] or 0))
+        if not mod or mod.get("isAvailable") is False:  # Удалённые проекты (перезаливы чужих модов) не считаем
+            return None
+        local, file = prints[value], match["file"]
+        installed = curseforge.to_version(file, mod)
+        entry = make_local_entry(local, ModStatus.UP_TO_DATE)
+        entry["project_id"] = curseforge.project_id(mod["id"])
+        entry["current_version"] = installed["version_number"]
+        entry["installed_info"] = installed
+        _apply_project_info(entry, curseforge.to_project(mod))
+        try:
+            files = curseforge.files_for(mod["id"], game_version, loader) if game_version else []
+        except requests.RequestException as e:
+            logging.warning(tr("CurseForge: версии «{0}» не получены: {1}", entry["name"], e))
+            files = []
+        newest = curseforge.latest_file(files, game_version, loader or "", channel.value)
+        if newest and newest.get("id") != file.get("id") and (newest.get("fileDate") or "") > (file.get("fileDate") or ""):
+            latest = curseforge.to_version(newest, mod)
+            if apply_install_info(entry, latest):
+                entry["status"] = ModStatus.UPDATE_AVAILABLE
+                entry["manual_url"] = latest["manual_url"]  # Автор запретил скачивание программами — вручную
+                logging.info(tr("Найдено обновление для '{0}': {1} -> {2}.", entry['name'], entry['current_version'], entry['new_version']))
+        return local['path'], entry
+
+    result = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        for built in executor.map(build, matches.items()):
+            if built:
+                result[built[0]] = built[1]
+    logging.info(tr("CurseForge: узнано {0} из {1} модов, которых нет на Modrinth.", len(result), len(locals_)))
+    return result
 
 
 # --- Импорт .mrpack ---
@@ -688,8 +781,12 @@ def collect_changelogs(entries: List[Dict], game_version: str, loader: Optional[
         for v in get_all_versions(entry["project_id"], game_version, loaders):
             date = v.get("date_published") or ""
             if installed < date <= latest:
+                changelog = v.get("changelog") or ""
+                if not changelog and v.get("cf_file_id") and len(result) < 8:  # У CurseForge — отдельный запрос
+                    import curseforge
+                    changelog = curseforge.file_changelog(entry["project_id"], v["cf_file_id"])
                 result.append({"version_number": v.get("version_number"), "version_type": v.get("version_type"),
-                               "date": format_date(date), "changelog": v.get("changelog") or ""})
+                               "date": format_date(date), "changelog": changelog})
         return result
 
     result: Dict[str, List[Dict]] = {}
@@ -710,13 +807,22 @@ def check_target_version(entries: List[Dict], target_version: str, loader: Optio
                          content: ContentType = MODS) -> List[Dict]:
     """
     Для каждого установленного мода — есть ли версия под target_version.
-    Возвращает [{entry, version}] (version = None, если версии нет или мод не с Modrinth).
+    Возвращает [{entry, version}] (version = None, если версии нет или мод не опознан ни на Modrinth, ни на CurseForge).
     """
-    with_hash = [e for e in entries if e.get("sha1") and e.get("project_id")]
+    with_hash = [e for e in entries if e.get("sha1") and e.get("project_id") and not str(e["project_id"]).startswith("cf:")]
     latest = get_latest_versions_from_hashes([e["sha1"] for e in with_hash], target_version,
                                              content.loaders(loader), channel.version_types) if with_hash else {}
     result = []
     for entry in entries:
+        if str(entry.get("project_id") or "").startswith("cf:"):  # Мод с CurseForge: Modrinth его не знает
+            try:
+                version = get_latest_version(entry["project_id"], target_version, content.loaders(loader), None,
+                                             channel.version_types)
+            except requests.RequestException as e:
+                logging.warning(tr("CurseForge: версии «{0}» не получены: {1}", entry.get("name"), e))
+                version = None
+            result.append({"entry": entry, "version": version})
+            continue
         version = latest.get(entry.get("sha1")) if entry.get("sha1") else None
         if version and target_version not in (version.get("game_versions") or [target_version]):
             version = None

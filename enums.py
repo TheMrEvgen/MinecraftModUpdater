@@ -11,7 +11,7 @@ class ModStatus(str, Enum):
     UP_TO_DATE = tr("Актуально")
     UPDATE_AVAILABLE = tr("Доступно обновление")
     READY_TO_INSTALL = tr("Готов к установке")
-    NOT_FOUND = tr("Не найден на Modrinth")
+    NOT_FOUND = tr("Нет в каталогах")
     REQUIRED = tr("Требуется")
     OPTIONAL = tr("Опционально")
     INCOMPATIBLE = tr("⛔ Несовместим")

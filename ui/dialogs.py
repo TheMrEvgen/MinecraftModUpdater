@@ -315,7 +315,7 @@ class MigrationDialog(FramelessDialog):
                 text = f"{entry.get('name')}   {entry.get('current_version') or ''} → {version.get('version_number')}"
                 item = QListWidgetItem(icons.icon("check_circle", t["accent"], 16), text)
             else:
-                reason = tr("нет на Modrinth") if not entry.get("project_id") else tr('нет версии под {0}', target)
+                reason = tr("нет в каталогах") if not entry.get("project_id") else tr('нет версии под {0}', target)
                 item = QListWidgetItem(icons.icon("error", t["danger"], 16), f"{entry.get('name')}   — {reason}")
             self.list.addItem(item)
         self.disable_missing.setText(tr('Выключить моды без версии под {0} ({1}) — их можно включить позже', target, len(missing)))

@@ -517,6 +517,8 @@ class ModDelegate(QStyledItemDelegate):
         """Значки после названия: (иконка или None, текст, цвет)."""
         t = self.tokens
         badges = []
+        if entry.get("source") == "curseforge":
+            badges.append((None, "CurseForge", t["text_muted"]))
         if entry.get("_pinned"):
             badges.append(("lock", "", t["text_muted"]))
         if entry.get("_note"):

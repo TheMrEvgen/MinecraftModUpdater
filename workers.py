@@ -318,8 +318,12 @@ class IconLoader(QObject):
         self._signals = _IconSignals()
         self._signals.loaded.connect(self._on_loaded)
 
+    def _icon_path(self, project_id: str) -> str:
+        # «cf:32274» — двоеточие в имени файла Windows не допускает
+        return os.path.join(self.cache_dir, project_id.replace(":", "_") + ".png")
+
     def cached_path(self, project_id: str) -> Optional[str]:
-        path = os.path.join(self.cache_dir, f"{project_id}.png")
+        path = self._icon_path(project_id)
         return path if os.path.exists(path) else None
 
     def request(self, project_id: Optional[str], url: Optional[str]) -> Optional[str]:
@@ -331,7 +335,7 @@ class IconLoader(QObject):
             return cached
         if url and project_id not in self._pending:
             self._pending.add(project_id)
-            path = os.path.join(self.cache_dir, f"{project_id}.png")
+            path = self._icon_path(project_id)
             self.pool.start(_IconTask(project_id, url, path, self.size, self._signals))
         return None
 

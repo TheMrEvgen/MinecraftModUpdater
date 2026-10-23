@@ -28,7 +28,7 @@ import requests
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(os.path.dirname(HERE))
-SCENARIOS = ["flow", "features", "tools", "audit", "game", "app_update", "tray"]
+SCENARIOS = ["flow", "features", "tools", "audit", "game", "app_update", "tray", "curseforge"]
 SMALL_PACK = ("sodium", "lithium", "modmenu")  # Самые старые версии под 1.21.1 — для них точно есть обновления
 SMALL_GAME_VERSION = "1.21.1"
 LOADER_VERSION_ID = "fabric-loader-0.16.0-1.21.1"
@@ -126,10 +126,11 @@ def run_scenario(name: str, work: str) -> Dict:
     with open(log_path, "w", encoding="utf-8") as f:
         f.write(output)
     problems = [line for line in output.splitlines() if line.startswith("FAIL ") or line.startswith("Traceback")]
+    skipped = next((line for line in output.splitlines() if line.startswith("SKIP ")), None)
     if code != 0 and not problems:
         problems = output.strip().splitlines()[-3:]
     return {"name": name, "ok": code == 0 and not problems, "seconds": time.monotonic() - started,
-            "problems": problems, "log": log_path}
+            "problems": problems, "log": log_path, "skipped": skipped}
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -153,7 +154,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"• {name} …", end=" ", flush=True)
         result = run_scenario(name, work)
         results.append(result)
-        print(f"{'OK' if result['ok'] else 'ОШИБКА'} ({result['seconds']:.0f} с)")
+        state = "пропущен" if result["skipped"] else "OK" if result["ok"] else "ОШИБКА"
+        print(f"{state} ({result['seconds']:.0f} с)" + (f" — {result['skipped'][5:]}" if result["skipped"] else ""))
         for line in result["problems"]:
             print(f"    {line}")
     failed = [r for r in results if not r["ok"]]

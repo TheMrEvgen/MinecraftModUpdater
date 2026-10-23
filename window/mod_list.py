@@ -2,6 +2,7 @@
 
 Примесь к главному окну (ModUpdaterApp): методы работают с его атрибутами."""
 import os
+import webbrowser
 from typing import Iterator, List, Optional
 
 from PyQt6.QtCore import QEasingCurve, QItemSelectionModel, QVariantAnimation, Qt
@@ -433,7 +434,11 @@ class ModListMixin:
         if entry.get("project_id"):
             menu.addAction(make_action(menu, t, "history", tr("Выбрать другую версию…"),
                                        lambda: (self._select_entry(entry), self._load_versions(entry))))
-            menu.addAction(make_action(menu, t, "external", tr("Открыть на Modrinth"), lambda: self._open_mod_page(entry)))
+            site = "CurseForge" if entry.get("source") == "curseforge" else "Modrinth"
+            menu.addAction(make_action(menu, t, "external", tr("Открыть на {0}", site), lambda: self._open_mod_page(entry)))
+            if entry.get("manual_url") and not entry.get("download_url"):
+                menu.addAction(make_action(menu, t, "download", tr("Скачать новую версию с CurseForge"),
+                                           lambda: webbrowser.open(entry["manual_url"])))
         if entry.get("filepath") and not self.is_import_mode:
             menu.addSeparator()
             pinned = bool(entry.get("_pinned"))

@@ -217,6 +217,9 @@ def get_versions_by_ids(version_ids: List[str]) -> Dict[str, Dict]:
 
 def get_all_versions(project_id: str, game_version: str, loader: Loaders) -> List[Dict]:
     """Список всех версий мода для указанной версии игры и загрузчика (новые первыми)."""
+    if str(project_id).startswith("cf:"):  # Мод с CurseForge — версии оттуда, в том же формате
+        import curseforge
+        return curseforge.get_versions(project_id, game_version, loader)
     url = f"{MODRINTH_API_BASE}/project/{project_id}/version"
     params = {"game_versions": json.dumps([game_version])}
     if _loader_list(loader):
@@ -252,9 +255,14 @@ def get_latest_version(project_id: str, game_version: str, loader: Loaders, targ
 def get_projects_info_from_ids(ids: Iterable[str]) -> Dict[str, Dict]:
     """Информация о нескольких проектах по их ID (название, иконка, client_side/server_side)."""
     ids = list(dict.fromkeys(i for i in ids if i))
-    if not ids:
-        return {}
     projects_dict: Dict[str, Dict] = {}
+    curse_ids = [i for i in ids if str(i).startswith("cf:")]
+    if curse_ids:
+        import curseforge
+        projects_dict.update(curseforge.get_projects(curse_ids))
+        ids = [i for i in ids if i not in curse_ids]
+    if not ids:
+        return projects_dict
     for chunk in _chunks(ids, IDS_CHUNK_SIZE):
         for p in _get_json(f"{MODRINTH_API_BASE}/projects", params={"ids": json.dumps(chunk)}):
             projects_dict[p['id']] = p
@@ -291,6 +299,9 @@ def search_projects(query: str, project_type: str = "mod", game_version: Optiona
 
 def get_project(project_id: str) -> Dict:
     """Полная информация о проекте (GET /project/{id}): описание body, галерея, ссылки."""
+    if str(project_id).startswith("cf:"):
+        import curseforge
+        return curseforge.get_project(project_id)
     return _get_json(f"{MODRINTH_API_BASE}/project/{project_id}")
 
 

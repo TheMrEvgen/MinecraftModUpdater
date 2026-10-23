@@ -204,7 +204,7 @@ class DetailsPanel(QFrame):
         self.layout_.addWidget(self.install_btn)
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        self.install_btn.clicked.connect(lambda: self.entry and self.install_requested.emit(self.entry))
+        self.install_btn.clicked.connect(self._on_install_clicked)
         self.page_btn = flex_button("Modrinth", None, "external", tokens, "text", tr("Открыть страницу мода"))
         self.page_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.page_btn.clicked.connect(lambda: self.entry and self.open_page_requested.emit(self.entry))
@@ -347,6 +347,15 @@ class DetailsPanel(QFrame):
 
     # --- Заполнение ---
 
+    def _on_install_clicked(self):
+        if not self.entry:
+            return
+        if self.entry.get("manual_url") and not self.entry.get("download_url"):
+            import webbrowser
+            webbrowser.open(self.entry["manual_url"])  # Скачивание запрещено автором — страница файла в браузере
+            return
+        self.install_requested.emit(self.entry)
+
     def set_entry(self, entry: Dict, icon_pm: Optional[QPixmap]):
         t = self.tokens
         same_entry = self.entry is entry
@@ -383,9 +392,12 @@ class DetailsPanel(QFrame):
         self.issues_label.setVisible(bool(issues))
 
         can_install = bool(entry.get("download_url")) and status not in (ModStatus.DOWNLOADING, ModStatus.FINISHING)
+        manual = bool(entry.get("manual_url")) and not entry.get("download_url")  # Автор запретил скачивание программами
         verb = tr("Обновить до") if entry.get("filepath") else tr("Установить")
-        self.install_btn.setText(f"{verb} {entry.get('new_version') or ''}".strip())
-        self.install_btn.setVisible(can_install)
+        self.install_btn.setText(tr("Скачать {0} с CurseForge", entry.get("new_version") or "") if manual
+                                 else f"{verb} {entry.get('new_version') or ''}".strip())
+        self.install_btn.setVisible(can_install or manual)
+        self.page_btn.setText("CurseForge" if entry.get("source") == "curseforge" else "Modrinth")
         self.page_btn.setVisible(bool(entry.get("project_id")))
         self.file_btn.setVisible(bool(entry.get("filepath")))
         self.delete_btn.setVisible(bool(entry.get("filepath")))

@@ -19,3 +19,6 @@ file_version_info.txt
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Ключи сервисов (создаётся build.py из секретов GitHub, локально — вручную)
+_build_secrets.py

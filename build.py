@@ -105,6 +105,8 @@ def build_executable(onedir: bool = False):
         '--noconfirm',
         '--version-file', VERSION_FILE # Добавляем информацию о версии
     ]
+    if os.path.exists("_build_secrets.py"):
+        params.extend(['--hidden-import', '_build_secrets'])  # Импортируется внутри функции — подсказываем PyInstaller
     for module in EXCLUDED_MODULES:
         params.extend(['--exclude-module', module])
 
@@ -170,9 +172,21 @@ def cleanup():
         print(f"Удален файл '{VERSION_FILE}'")
     print("--- Очистка завершена ---")
 
+def write_secrets():
+    """Ключ CurseForge из переменной окружения (в выпусках — секрет GitHub) → _build_secrets.py внутри сборки.
+    Без переменной остаётся локальный файл, если он есть; без ключа программа работает только с Modrinth."""
+    key = os.environ.get("CURSEFORGE_API_KEY", "").strip()
+    if key:
+        with open("_build_secrets.py", "w", encoding="utf-8") as f:
+            f.write('"""Ключи сервисов для сборки. Создан build.py, в git не хранится."""\n')
+            f.write(f"CURSEFORGE_API_KEY = {key!r}\n")
+    print("CurseForge: " + ("ключ есть" if os.path.exists("_build_secrets.py") else "ключа нет — только Modrinth"))
+
+
 if __name__ == '__main__':
     import sys
     onedir_mode = '--onedir' in sys.argv
+    write_secrets()
     create_version_file()
     success = build_executable(onedir_mode)
     if success:

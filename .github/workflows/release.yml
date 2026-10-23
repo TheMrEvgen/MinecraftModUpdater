@@ -35,6 +35,8 @@ jobs:
           python tools/i18n_check.py
 
       - name: Сборка .exe
+        env:
+          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}  # Встраивается в .exe; в git ключа нет
         run: python build.py
 
       - name: Файлы выпуска

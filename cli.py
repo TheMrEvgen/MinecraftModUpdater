@@ -150,7 +150,7 @@ def run(argv: List[str]) -> int:
         _print(tr('Пропущены (закреплены или выключены): {0}', ', '.join(skipped)))
     not_found = sum(1 for m in mods_data if m['status'] == ModStatus.NOT_FOUND)
     files = {e['filepath'] for m in mods_data for e in [m] + m.get('dependencies', []) if e.get('filepath')}
-    _print(tr('{0}: {1}, не найдено на Modrinth: {2}, к установке/обновлению: {3}', content.title, len(files), not_found, len(updates)))
+    _print(tr('{0}: {1}, нет в каталогах (Modrinth, CurseForge): {2}, к установке/обновлению: {3}', content.title, len(files), not_found, len(updates)))
     for entry in updates:
         current = entry.get('current_version') or "—"
         _print(f"  • {entry['name']}: {current} -> {entry['new_version']} [{entry['status']}]")

@@ -63,6 +63,12 @@ class CatalogMixin:
             self.toasts.show(tr('У «{0}» нет версии для Minecraft {1}', hit.get('title'), self.game_version)
                              + (f" ({self.loader})" if content is MODS else "") + ".", "warning")
             return
+        manual = [e for e in entries if not e.get("download_url") and e.get("manual_url")]
+        if manual:
+            self._offer_manual_downloads(manual)
+            entries = [e for e in entries if e.get("download_url")]
+            if not entries:
+                return
         if len(entries) > 1:
             deps = ", ".join(e.get("name") for e in entries[1:])
             self.toasts.show(tr('Вместе с «{0}» будут установлены зависимости: {1}', entries[0].get('name'), deps), "info")
@@ -74,6 +80,14 @@ class CatalogMixin:
         if not self.update_worker:  # Установка не началась (игра запущена или отмена)
             self.catalog_page.set_installing(self._catalog_installing, False)
             self._catalog_installing = []
+
+    def _offer_manual_downloads(self, entries: List[dict]):
+        """Автор разрешает скачивать мод только с сайта CurseForge — открываем страницу файла в браузере."""
+        import webbrowser
+        names = ", ".join(e.get("name") or "?" for e in entries)
+        self.toasts.show(tr("{0}: автор разрешает скачивать только с сайта CurseForge. Скачайте файл и перетащите его "
+                            "в окно программы.", names), "info", tr("Открыть страницу"),
+                         lambda: [webbrowser.open(e["manual_url"]) for e in entries], timeout=20000)
 
     def _finish_catalog_install(self, worker):
         installing, self._catalog_installing = self._catalog_installing, []
@@ -135,6 +149,10 @@ class CatalogMixin:
             if missing:
                 titles = [h.get("title") for h in hits if h.get("project_id") in missing]
                 self.toasts.show(tr('Нет версии для вашей сборки: {0}', ', '.join(titles)), "warning")
+            manual = [e for e in entries if not e.get("download_url") and e.get("manual_url")]
+            if manual:
+                self._offer_manual_downloads(manual)
+                entries = [e for e in entries if e.get("download_url")]
             if entries:
                 self._start_catalog_install(entries, content)
 

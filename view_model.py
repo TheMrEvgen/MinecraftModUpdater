@@ -251,6 +251,8 @@ def _subtitle(entry: Dict) -> tuple[str, Optional[str]]:
     if entry.get("_issues"):
         text = ", ".join(entry["_issues"])
         return "⚠ " + text[:1].upper() + text[1:], "warning"
+    if entry.get("manual_url") and not entry.get("download_url") and entry.get("new_version"):
+        return tr("Новая версия {0} — автор разрешает скачивать её только с сайта CurseForge", entry["new_version"]), "info"
     if status_of(entry) == ModStatus.REQUIRED and entry.get("_required_by"):
         return tr("Нужен для: ") + ", ".join(entry["_required_by"]), "warning"
     if entry.get("description"):
@@ -271,7 +273,7 @@ def search_text(entry: Dict, custom_tags: Optional[Dict[str, List[str]]] = None)
 # --- Группы (заголовки в списке при сортировке «Сначала важные») ---
 
 GROUPS = (("problems", tr("Проблемы")), ("updates", tr("Обновления")), ("install", tr("К установке")), ("ok", tr("Актуальные")),
-          ("not_found", tr("Нет на Modrinth")), ("disabled", tr("Выключенные")))
+          ("not_found", tr("Нет в каталогах")), ("disabled", tr("Выключенные")))
 GROUP_TITLES = dict(GROUPS)
 _GROUP_ORDER = {key: i for i, (key, _) in enumerate(GROUPS)}
 

@@ -1,7 +1,8 @@
 # Minecraft Mod Updater
 
-Программа для Windows, которая следит за модами Minecraft: находит обновления на [Modrinth](https://modrinth.com),
-ставит их вместе с зависимостями и позволяет откатить любое изменение. Интерфейс на русском и английском.
+Программа для Windows, которая следит за модами Minecraft: находит обновления на [Modrinth](https://modrinth.com)
+и [CurseForge](https://www.curseforge.com/minecraft), ставит их вместе с зависимостями и позволяет откатить любое
+изменение. Интерфейс на русском и английском.
 
 *English: a Windows app that keeps Minecraft mods up to date via Modrinth, with dependencies, snapshots and one-click
 rollback. Switch the language in Settings → Appearance → «Язык / Language».*
@@ -34,8 +35,10 @@ rollback. Switch the language in Settings → Appearance → «Язык / Langua
 - Поиск проблемного мода перебором, вручную или полностью автоматически: программа сама запускает игру,
   ждёт меню или вылета и выключает половину модов, пока не найдёт виновника.
 
-**Каталог Modrinth**
+**Каталог Modrinth и CurseForge**
 - Поиск с фильтрами по категориям и версиям, страница проекта со скриншотами и версиями, массовая установка.
+- Моды, которых нет на Modrinth, опознаются на CurseForge по отпечатку файла и обновляются так же.
+  Если автор запретил скачивание сторонними программами, программа откроет страницу файла на сайте.
 
 **Удобство**
 - Список модов: плоский, «только мои», дерево зависимостей; выбор колонок, компактные строки.
@@ -87,6 +90,10 @@ python tools/ui_checks/run.py             :: проверка интерфейс
 python tools/i18n_check.py                :: все ли строки переведены на английский
 build.bat                                 :: тесты и сборка .exe в dist/
 ```
+
+**CurseForge.** Нужен ключ API (console.curseforge.com). В выпусках он встраивается из секрета GitHub
+`CURSEFORGE_API_KEY`, локально — переменная окружения `CURSEFORGE_API_KEY` или файл `_build_secrets.py`
+(в git не хранится). Без ключа программа работает только с Modrinth.
 
 **Перевод.** Строки интерфейса пишутся по-русски и оборачиваются в `tr("…")`, английский перевод лежит в
 `locales/en.json` (ключ — русская строка). `tools/i18n_wrap.py` размечает новые строки автоматически,

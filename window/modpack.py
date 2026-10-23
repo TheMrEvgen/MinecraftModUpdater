@@ -41,7 +41,9 @@ class ModpackMixin:
             self._open_path(os.path.dirname(path))
 
     def _open_mod_page(self, entry: dict):
-        if entry.get("project_id"):
+        if entry.get("page_url"):  # Мод с CurseForge
+            webbrowser.open(entry["page_url"])
+        elif entry.get("project_id"):
             kind = {"shader": "shader", "resourcepack": "resourcepack"}.get(entry.get("project_type"), "mod")
             webbrowser.open(f"https://modrinth.com/{kind}/{entry.get('slug') or entry['project_id']}")
 

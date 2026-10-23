@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+import curseforge
 import icons
 from content import CONTENT_TYPES, MODS, ContentType
 from mod_updater_logic import format_date, get_all_versions, get_categories, get_project, get_projects_info_from_ids, search_projects
@@ -43,6 +44,8 @@ def format_count(n: int) -> str:
 
 
 def hit_url(hit: Dict) -> str:
+    if hit.get("page_url"):  # CurseForge
+        return hit["page_url"]
     return f"https://modrinth.com/{hit.get('project_type', 'mod')}/{hit.get('slug') or hit.get('project_id')}"
 
 
@@ -360,7 +363,6 @@ class CatalogDetails(QFrame):
         refresh_button_icons(self, tokens)
 
     def show_hit(self, hit: Dict):
-        from ui.details_panel import demote_headings
         t = self.page.tokens
         same = self.hit is not None and self.hit.get("project_id") == hit.get("project_id")
         self.hit = hit
@@ -379,8 +381,20 @@ class CatalogDetails(QFrame):
         self.mine_btn.setVisible(state == "installed")
         cats = [CATEGORY_LABELS.get(c, c) for c in hit.get("display_categories") or hit.get("categories") or []
                 if c not in LOADER_CATEGORIES]
+        self.page_btn.setText("CurseForge" if hit.get("source") == "curseforge" else "Modrinth")
+        if hit.get("source") == "curseforge":  # Сторону и лицензию CurseForge не сообщает
+            text = tr("<span style='color:{0}'>Категории:</span> {1}", t['text_faint'], ', '.join(cats) or '—')
+            if not hit.get("allow_distribution", True):
+                text += "<br>" + tr("<span style='color:{0}'>Скачивание:</span> только с сайта CurseForge (так решил автор)",
+                                    t['warning'])
+            self.info.setText(text)
+            return self._finish_show(hit, same)
         side = (tr('клиент — {0}, сервер — {1}', SIDE_TEXT.get(hit.get('client_side'), '?'), SIDE_TEXT.get(hit.get('server_side'), '?')))
         self.info.setText(tr("<span style='color:{0}'>Категории:</span> {1}<br><span style='color:{2}'>Сторона:</span> {3}<br><span style='color:{4}'>Лицензия:</span> {5}", t['text_faint'], ', '.join(cats) or '—', t['text_faint'], side, t['text_faint'], hit.get('license') or '—'))
+        self._finish_show(hit, same)
+
+    def _finish_show(self, hit: Dict, same: bool):
+        from ui.details_panel import demote_headings
         if same:
             return
         self.body.setMarkdown(tr("_Загружаем описание…_"))
@@ -487,6 +501,7 @@ class CatalogPage(QWidget):
         self.total = 0
         self._request = 0
         self._loading = False
+        self.source = "modrinth"  # Где искать: modrinth или curseforge (если есть ключ API)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 22, 28, 18)
@@ -509,6 +524,17 @@ class CatalogPage(QWidget):
         self.tab_group.buttons()[0].setChecked(True)
         self.tab_group.idClicked.connect(lambda i: self._set_content(CONTENT_TYPES[i]))
         tabs.addStretch()
+        # Источник: Modrinth или CurseForge (переключатель — только если у сборки программы есть ключ CurseForge)
+        self.source_group = QButtonGroup(self)
+        for i, (key, title) in enumerate((("modrinth", "Modrinth"), ("curseforge", "CurseForge"))):
+            tab = button(title, "Segment", None, tokens, "text_muted")
+            tab.setCheckable(True)
+            tab.setProperty("source_key", key)
+            tab.setVisible(curseforge.available())
+            self.source_group.addButton(tab, i)
+            tabs.addWidget(tab)
+        self.source_group.buttons()[0].setChecked(True)
+        self.source_group.idClicked.connect(lambda i: self._set_source(("modrinth", "curseforge")[i]))
         root.addLayout(tabs)
 
         toolbar = QHBoxLayout()
@@ -617,7 +643,8 @@ class CatalogPage(QWidget):
         self.game_version, self.loader, self.installed = game_version, loader, installed
         loader_title = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge", "quilt": "Quilt"}.get(loader, loader)
         filters = f"Minecraft {game_version or '?'}" + (f" · {loader_title}" if self.content is MODS and loader else "")
-        self.context_label.setText(tr('Моды, шейдеры и ресурспаки с Modrinth для текущей сборки: {0}. Обязательные зависимости ставятся автоматически.', filters))
+        site = "CurseForge" if self.source == "curseforge" else "Modrinth"
+        self.context_label.setText(tr('Моды, шейдеры и ресурспаки с {0} для текущей сборки: {1}. Обязательные зависимости ставятся автоматически.', site, filters))
         if changed and self.isVisible():
             self.refresh()
         self._apply_hidden()
@@ -734,7 +761,8 @@ class CatalogPage(QWidget):
         menu.addAction(make_action(menu, t, "info", tr("Подробнее"), lambda: self.list.setCurrentItem(item)))
         menu.addAction(make_action(menu, t, "compass", tr("Похожие проекты"), lambda: self.show_similar(hit)))
         menu.addSeparator()
-        menu.addAction(make_action(menu, t, "external", tr("Открыть на Modrinth"), lambda: webbrowser.open(hit_url(hit))))
+        site = "CurseForge" if hit.get("source") == "curseforge" else "Modrinth"
+        menu.addAction(make_action(menu, t, "external", tr("Открыть на {0}", site), lambda: webbrowser.open(hit_url(hit))))
         menu.addAction(make_action(menu, t, "copy", tr("Копировать ссылку"),
                                    lambda: QGuiApplication.clipboard().setText(hit_url(hit))))
         menu.exec(self.list.viewport().mapToGlobal(pos))
@@ -764,13 +792,47 @@ class CatalogPage(QWidget):
         self.set_context(self.game_version, self.loader, self.installed)
         self.refresh()
 
+    def _set_source(self, source: str):
+        if source == self.source:
+            return
+        self.source = source
+        style_segments(self.source_group, self.tokens)
+        self.search.setPlaceholderText(tr("Найти на CurseForge: название, описание…") if source == "curseforge"
+                                       else tr("Найти на Modrinth: название, описание…"))
+        self.side_combo.setEnabled(source == "modrinth")  # Сторону (клиент/сервер) знает только Modrinth
+        self.set_context(self.game_version, self.loader, self.installed)
+        self.checked.clear()
+        self._refresh_selection()
+        self.details.hide()
+        self.category_combo.blockSignals(True)
+        self.category_combo.clear()
+        self.category_combo.addItem(tr("Все категории"), None)
+        self.category_combo.blockSignals(False)
+        self._load_categories()
+        self.refresh()
+
     def _load_categories(self):
         project_type = self.content.project_type
+        if self.source == "curseforge":
+            key = self.content.key
+            self.run_task(curseforge.categories, (key,), lambda cats: self._on_curseforge_categories(key, cats),
+                          lambda e: None, None)
+            return
         self.run_task(get_categories, (project_type,), lambda cats: self._on_categories(project_type, cats),
                       lambda e: None, None)
 
+    def _on_curseforge_categories(self, content_key: str, categories: List[Dict]):
+        if content_key != self.content.key or self.source != "curseforge":
+            return
+        self.category_combo.blockSignals(True)
+        self.category_combo.clear()
+        self.category_combo.addItem(tr("Все категории"), None)
+        for category in categories:
+            self.category_combo.addItem(category["name"], category["id"])
+        self.category_combo.blockSignals(False)
+
     def _on_categories(self, project_type: str, categories: List[Dict]):
-        if project_type != self.content.project_type:
+        if project_type != self.content.project_type or self.source != "modrinth":
             return
         current = self.category_combo.currentData()
         self.category_combo.blockSignals(True)
@@ -790,6 +852,7 @@ class CatalogPage(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         style_segments(self.tab_group, self.tokens)
+        style_segments(self.source_group, self.tokens)
         if self.category_combo.count() <= 1:
             self._load_categories()
         if not self.hits:
@@ -814,8 +877,17 @@ class CatalogPage(QWidget):
             return
         request = self._request
         self._loading = True
-        self.status.setText(tr("Ищем на Modrinth…"))
         compatible = self.compatible.isChecked()
+        category = self.category_combo.currentData()
+        if self.source == "curseforge":
+            self.status.setText(tr("Ищем на CurseForge…"))
+            args = (self.search.text().strip(), self.content.key, self.game_version if compatible else None,
+                    self.loader if self.content is MODS and compatible else None, self.sort_combo.currentData(),
+                    offset, PAGE_SIZE, category)
+            self.run_task(curseforge.search_hits, args, lambda result: self._on_results(request, result),
+                          lambda error: self._on_error(request, error), None)
+            return
+        self.status.setText(tr("Ищем на Modrinth…"))
         loaders = self.content.loaders(self.loader) if self.content is MODS and compatible else None
         category = self.category_combo.currentData()
         args = (self.search.text().strip(), self.content.project_type, self.game_version if compatible else None, loaders,

@@ -390,7 +390,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self.cards: Dict[str, StatCard] = {}
         for category, title, color in ((CAT_ALL, tr("Все моды"), "text"), (CAT_UPDATES, tr("Обновления"), "accent"),
                                        (CAT_INSTALL, tr("К установке"), "info"), (CAT_PROBLEMS, tr("Проблемы"), "warning"),
-                                       (CAT_NOT_FOUND, tr("Нет на Modrinth"), "text_muted"), (CAT_DISABLED, tr("Выключены"), "text_muted")):
+                                       (CAT_NOT_FOUND, tr("Нет в каталогах"), "text_muted"), (CAT_DISABLED, tr("Выключены"), "text_muted")):
             card = StatCard(title, category, color, t)
             card.clicked.connect(lambda _=False, c=category: self._set_category(c))
             self.card_group.addButton(card)

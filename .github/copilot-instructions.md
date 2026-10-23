@@ -49,6 +49,7 @@
 | `workers.py` | Тонкие `QThread`-обёртки над ядром + `IconLoader` (асинхронные иконки с кэшем) |
 | `scanner.py` | Ядро сканирования: индекс файлов (SQLite-кэш по path/size/mtime), запросы к Modrinth, дерево зависимостей |
 | `updater.py` | Установка, транзакции для отката, снимки сборки (жёсткие ссылки), выключение `*.disabled`, проверка блокировки файлов |
+| `curseforge.py` | CurseForge API: отпечаток файла (MurmurHash2), поиск, файлы; перевод в формат Modrinth. id проектов — `cf:123`, `get_all_versions`/`get_project` в `mod_updater_logic` перенаправляют такие id сюда |
 | `mod_updater_logic.py` | HTTP: Modrinth API, версии загрузчиков, скачивание с проверкой хэша |
 | `exporters.py` | Строка «Поделиться», JSON для сервера, `.mrpack` |
 | `game_detection.py` | Определение версии игры и загрузчика по папке `versions` |
@@ -98,6 +99,9 @@
   старой, иначе защита «одна копия» передаст ей аргументы и завершится.
 - Выпуск: поднять `APP_VERSION` в `config.py`, переименовать раздел «## Следующая версия» в CHANGELOG.md в номер версии,
   `git tag vX.Y.Z && git push origin vX.Y.Z` — остальное делает `.github/workflows/release.yml`.
+- Моды с CurseForge: `project_id` вида `cf:123`, `source == "curseforge"`, `page_url`; если автор запретил скачивание
+  программами — `download_url = None`, а `manual_url` ведёт на страницу файла. Ключ API — только из окружения или
+  `_build_secrets.py`, никогда в коде.
 - Версии Minecraft бывают в двух форматах: `1.21.1` и годовом `26.2` (с 2026) — см. `GAME_VERSION_RE`.
 
 ## Запуск, тесты, сборка

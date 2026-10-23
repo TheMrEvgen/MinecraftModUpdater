@@ -30,7 +30,7 @@ QUERY_HINTS = [
     ("side:both", tr("клиент и сервер")), ("is:fav", tr("избранные")), ("is:pinned", tr("закреплённые")),
     ("is:disabled", tr("выключенные")), ("is:new", tr("новые обновления с прошлого раза")), ("is:note", tr("с заметкой")),
     ("is:abandoned", tr("давно не обновлялись")), ("is:lib", tr("библиотеки")), ("status:update", tr("есть обновление")),
-    ("status:problem", tr("с проблемами")), ("status:notfound", tr("нет на Modrinth")), ("size>5mb", tr("больше 5 МБ")),
+    ("status:problem", tr("с проблемами")), ("status:notfound", tr("нет в каталогах")), ("size>5mb", tr("больше 5 МБ")),
     ("age>1y", tr("не обновлялись больше года")), ("-tag:", tr("без метки")),
 ]
 
