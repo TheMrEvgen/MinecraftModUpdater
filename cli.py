@@ -22,9 +22,9 @@ import sys
 from typing import List, Optional
 
 import config as app_config
+from background_check import collect_updates, resolve_versions
 from content import CONTENT_TYPES, content_by_key
 from enums import ModStatus, UpdateChannel
-from game_detection import detect_game_versions
 from i18n import tr
 
 EXIT_OK, EXIT_PARTIAL, EXIT_USAGE, EXIT_LOCKED = 0, 1, 2, 3
@@ -82,27 +82,7 @@ def _print(msg: str = "") -> None:
 
 
 def _resolve_versions(profile: dict, args) -> tuple[Optional[str], Optional[str]]:
-    game_version, loader = profile.get("game_version"), profile.get("loader")
-    if not profile.get("manual_mode"):
-        detected = detect_game_versions(profile.get("mods_path", ""))
-        if detected.best_guess:
-            game_version, loader = detected.best_guess
-    return args.game_version or game_version, args.loader or loader
-
-
-def _collect_updates(mods_data: List[dict], include_deps: bool, pinned=()) -> List[dict]:
-    from view_model import pin_key
-    statuses = {ModStatus.UPDATE_AVAILABLE, ModStatus.READY_TO_INSTALL}
-    if include_deps:
-        statuses.add(ModStatus.REQUIRED)
-    result = {}
-    for mod in mods_data:
-        for entry in [mod] + mod.get('dependencies', []):
-            pid = entry.get('project_id')
-            if (pid and pid not in result and entry.get('download_url') and entry.get('status') in statuses
-                    and not entry.get('disabled') and pin_key(entry) not in pinned):
-                result[pid] = entry
-    return list(result.values())
+    return resolve_versions(profile, args.game_version, args.loader)
 
 
 def run(argv: List[str]) -> int:
@@ -164,7 +144,7 @@ def run(argv: List[str]) -> int:
     mods_data = scan_mods(mods_path, game_version, loader, app_config.CACHE_FILE, channel,
                           progress=lambda msg: logging.info(msg), content=content)
     pinned = set(profile.get("pinned") or {})
-    updates = _collect_updates(mods_data, include_deps=not args.no_deps, pinned=pinned)
+    updates = collect_updates(mods_data, include_deps=not args.no_deps, pinned=pinned)
     skipped = [m['name'] for m in mods_data if m.get('download_url') and (m.get('disabled') or m.get('project_id') in pinned)]
     if skipped:
         _print(tr('Пропущены (закреплены или выключены): {0}', ', '.join(skipped)))

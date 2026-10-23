@@ -118,6 +118,31 @@ def _keys(paths: InstallPaths) -> Dict[str, str]:
     }
 
 
+TRAY_FLAG = "--tray"  # Запуск свёрнутым в трей (автозапуск с Windows)
+
+
+def _run_key(registry_root: str = "Software") -> str:
+    return f"{registry_root}\\Microsoft\\Windows\\CurrentVersion\\Run"
+
+
+def autostart_command(registry_root: str = "Software") -> Optional[str]:
+    """Команда автозапуска программы с Windows или None, если автозапуск выключен."""
+    return _read_value(_run_key(registry_root), UNINSTALL_KEY)
+
+
+def set_autostart(enabled: bool, exe: Optional[str] = None, registry_root: str = "Software"):
+    """Запуск вместе с Windows — сразу в трей, без окна."""
+    if enabled:
+        _set_values(_run_key(registry_root), {UNINSTALL_KEY: f'"{exe}" {TRAY_FLAG}'})
+        return
+    try:
+        winreg = _winreg()
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _run_key(registry_root), 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, UNINSTALL_KEY)
+    except OSError:
+        pass
+
+
 def _notify_shell():
     """Проводник сразу узнаёт о новых ассоциациях файлов."""
     try:
@@ -243,6 +268,7 @@ def uninstall(paths: Optional[InstallPaths] = None, remove_data: bool = False, s
             winreg.DeleteValue(key, MRPACK_PROGID)
     except OSError:
         pass
+    set_autostart(False, registry_root=paths.registry_root)
     done.append(tr("Записи реестра удалены"))
     _notify_shell()
     if remove_data:

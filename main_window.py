@@ -46,6 +46,7 @@ from window.palette import PaletteMixin
 from window.preferences import PreferencesMixin
 from window.profiles import ProfilesMixin
 from window.transfer import TransferMixin
+from window.tray import TrayMixin
 from workers import IconLoader, ImportWorker, LoaderVersionWorker, LocalScanWorker, ScanWorker, TaskWorker, UpdateWorker
 
 
@@ -68,7 +69,8 @@ class QtLogHandler(logging.Handler):
 
 
 class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin, ModpackMixin, CatalogMixin,
-                    PaletteMixin, ModActionsMixin, GameMixin, MaintenanceMixin, AppMixin, PreferencesMixin, QMainWindow):
+                    PaletteMixin, ModActionsMixin, GameMixin, MaintenanceMixin, AppMixin, PreferencesMixin, TrayMixin,
+                    QMainWindow):
     """Главное окно. Методы по темам — в примесях window/*.py, здесь — интерфейс, тема, страницы и закрытие."""
     PAGE_MODS_INDEX, PAGE_CATALOG_INDEX, PAGE_HISTORY_INDEX, PAGE_STATS_INDEX = PAGE_MODS, PAGE_CATALOG, PAGE_HISTORY, PAGE_STATS
     PAGE_SETTINGS_INDEX = PAGE_SETTINGS
@@ -157,6 +159,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self._game_timer = QTimer(self, interval=2000)  # Наблюдение за игрой: запущена ли, не вылетела ли
         self._game_timer.timeout.connect(self._poll_game)
         self._game_timer.start()
+        self._setup_tray()
 
     # ================================================================== Построение интерфейса
 
@@ -218,6 +221,8 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self.settings_page.uninstall_requested.connect(self._uninstall_app)
         self.settings_page.app_update_check_requested.connect(lambda: self._check_app_update(manual=True))
         self.settings_page.app_update_open_requested.connect(self._open_app_update)
+        self.settings_page.autostart_toggled.connect(self._set_autostart)
+        self.settings_page.background_check_requested.connect(lambda: self._start_background_check(manual=True))
         self.stack.addWidget(self.settings_page)
 
         self.toasts = ToastManager(root, t)
@@ -579,14 +584,20 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
             self.palette.open()
 
     def closeEvent(self, event):
+        if self._hide_to_tray():  # «Оставаться в трее»: окно прячется, программа работает дальше
+            event.ignore()
+            return
         workers = [w for w in (self.scan_worker, self.import_worker, self.local_scan_worker, self.update_worker,
-                               self.loader_version_worker, *self._task_workers) if w and w.isRunning()]
+                               self.loader_version_worker, self._bg_worker, *self._task_workers) if w and w.isRunning()]
         if self.update_worker and self.update_worker.isRunning():
             if not confirm(self, tr("Идёт обновление"), tr("Моды ещё скачиваются. Прервать и закрыть программу?"),
                            tr("Прервать и закрыть"), tr("Продолжить")):
+                self._quitting = False
                 event.ignore()
                 return
         updating = bool(self.update_worker and self.update_worker.isRunning())
+        if self.tray:
+            self.tray.hide()
         for worker in workers:
             if hasattr(worker, "stop"):
                 worker.stop()
@@ -607,6 +618,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         stuck += [type(l).__name__ for l in loaders if l.pool.activeThreadCount()]
         logging.getLogger().removeHandler(self._gui_log_handler)
         super().closeEvent(event)
+        QApplication.instance().quit()  # Выход из трея и обычное закрытие: окна больше нет — завершаемся
         if stuck:
             # Ждать дальше бессмысленно: настройки сохранены, а прерывать потоки Qt не умеет
             logging.warning(tr('Закрытие без ожидания фоновых задач: {0}', ', '.join(stuck)))
@@ -634,6 +646,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
             self.settings_page.set_backup_usage(self._backup_usage_text())
             self._refresh_install_ui()
             self._refresh_app_update_ui()
+            self._refresh_background_ui()
 
     def _refresh_history(self):
         if not self.mods_path:

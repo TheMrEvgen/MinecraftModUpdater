@@ -227,6 +227,8 @@ class SettingsPage(QWidget):
     prune_backups_requested = pyqtSignal()
     install_requested = pyqtSignal(dict)
     app_update_check_requested = pyqtSignal()
+    autostart_toggled = pyqtSignal(bool)
+    background_check_requested = pyqtSignal()
     app_update_open_requested = pyqtSignal()
     uninstall_requested = pyqtSignal()
 
@@ -402,6 +404,38 @@ class SettingsPage(QWidget):
         self.parallel.currentIndexChanged.connect(self._emit)
         row.addWidget(self.parallel)
         row.addStretch()
+        body.addLayout(row)
+        root.addWidget(card)
+
+        # Работа в фоне: трей, фоновая проверка, автозапуск
+        card, body = self._card(tr("Работа в фоне"))
+        self.close_to_tray = QCheckBox(tr("При закрытии окна оставаться в трее"))
+        self.close_to_tray.toggled.connect(self._emit)
+        self._add_with_hint(body, self.close_to_tray, tr("Программа продолжит проверять обновления, а выйти можно "
+                                                         "из меню значка возле часов."))
+        self.autostart = QCheckBox(tr("Запускать вместе с Windows (сразу в трей)"))
+        self.autostart.clicked.connect(self.autostart_toggled)
+        self.autostart_hint = label("", "Faint", wrap=True)
+        self.autostart_hint.setContentsMargins(26, 0, 0, 2)
+        body.addWidget(self.autostart)
+        body.addWidget(self.autostart_hint)
+        row = QHBoxLayout()
+        self.background_check = QCheckBox(tr("Проверять обновления модов во всех сборках каждые"))
+        self.background_check.toggled.connect(self._emit)
+        self.background_interval = QComboBox()
+        for hours in (1, 3, 6, 12, 24):
+            self.background_interval.addItem(tr("{0} ч", hours), hours)
+        self.background_interval.currentIndexChanged.connect(self._emit)
+        row.addWidget(self.background_check)
+        row.addWidget(self.background_interval)
+        row.addStretch()
+        body.addLayout(row)
+        row = QHBoxLayout()
+        self.background_status = label("", "Muted", wrap=True)
+        row.addWidget(self.background_status, 1)
+        self.background_check_btn = button(tr("Проверить сейчас"), None, "refresh", tokens, "text")
+        self.background_check_btn.clicked.connect(self.background_check_requested)
+        row.addWidget(self.background_check_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         body.addLayout(row)
         root.addWidget(card)
 
@@ -644,6 +678,10 @@ class SettingsPage(QWidget):
         self.language.setCurrentIndex(max(0, self.language.findData(settings.get("language") or language())))
         self.minimal.setChecked(bool(settings.get("minimal_mode", False)))
         self.app_update_auto.setChecked(bool(settings.get("app_update_check", True)))
+        self.close_to_tray.setChecked(bool(settings.get("close_to_tray", False)))
+        self.background_check.setChecked(bool(settings.get("background_check", True)))
+        self.background_interval.setCurrentIndex(
+            max(0, self.background_interval.findData(int(settings.get("background_interval_hours", 6)))))
         self.auto_crash.setChecked(bool(settings.get("auto_crash_analysis", True)))
         self.bisect_timeout.setCurrentIndex(max(0, self.bisect_timeout.findData(int(settings.get("auto_bisect_timeout", 5)))))
         self._sidebar_image = settings.get("sidebar_image") or ""
@@ -667,7 +705,6 @@ class SettingsPage(QWidget):
                                      "• ссылки modupdater:// — сборки и моды открываются из браузера и Discord;<br>"
                                      "• второй запуск не открывает второе окно, а передаёт файл уже открытой программе.<br><br>"
                                      "<b>Что появится в следующих версиях:</b><br>"
-                                     "• проверка обновлений модов в фоне со значком в трее и уведомлениями Windows;<br>"
                                      "• кнопки «Установить в Mod Updater» по ссылкам с сайтов и из сборок друзей."))
         boxes = (self.install_desktop, self.install_mrpack, self.install_protocol)
         installed = bool(supported and state and state.installed)
@@ -700,6 +737,24 @@ class SettingsPage(QWidget):
             self.install_btn.setText(tr("Установить"))
             self.install_btn.show()
             self.uninstall_btn.hide()
+
+    def set_background_state(self, autostart: bool, autostart_supported: bool, tray_available: bool,
+                             last_check, updates: int):
+        """Состояние карточки «Работа в фоне»: автозапуск (только для .exe), трей, последняя проверка."""
+        import datetime
+        self.autostart.setChecked(autostart)
+        self.autostart.setEnabled(autostart_supported)
+        self.autostart_hint.setText("" if autostart_supported else
+                                    tr("Доступно в собранной программе (.exe) для Windows."))
+        self.autostart_hint.setVisible(not autostart_supported)
+        self.close_to_tray.setEnabled(tray_available)
+        if not last_check:
+            text = tr("Фоновая проверка ещё не запускалась.")
+        else:
+            when = datetime.datetime.fromtimestamp(float(last_check)).strftime("%H:%M")
+            text = tr("Последняя проверка в {0}: обновлений {1}.", when, updates) if updates else \
+                tr("Последняя проверка в {0}: все моды актуальны.", when)
+        self.background_status.setText(text)
 
     def set_app_update_state(self, text: str, available: bool = False, checking: bool = False):
         """Строка состояния обновления программы; «Обновить…» — когда есть новая версия."""
@@ -757,6 +812,9 @@ class SettingsPage(QWidget):
                 "language": self.language.currentData(),
                 "minimal_mode": self.minimal.isChecked(),
                 "app_update_check": self.app_update_auto.isChecked(),
+                "close_to_tray": self.close_to_tray.isChecked(),
+                "background_check": self.background_check.isChecked(),
+                "background_interval_hours": self.background_interval.currentData(),
                 "auto_crash_analysis": self.auto_crash.isChecked(),
                 "auto_bisect_timeout": self.bisect_timeout.currentData(),
                 "sidebar_image": self._sidebar_image,

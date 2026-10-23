@@ -45,3 +45,14 @@ def test_does_not_steal_mrpack_default(tmp_path, paths):
     assert installer._read_value(keys["mrpack_default"]) == "ModrinthApp.mrpack"  # Чужое умолчание не трогаем
     installer.uninstall(paths, schedule_exe_removal=False)
     assert installer._read_value(keys["mrpack_default"]) == "ModrinthApp.mrpack"
+
+
+def test_autostart(paths):
+    import installer
+    root = paths.registry_root
+    assert installer.autostart_command(root) is None
+    installer.set_autostart(True, r"C:\Apps\ModUpdater.exe", registry_root=root)
+    assert installer.autostart_command(root) == r'"C:\Apps\ModUpdater.exe" --tray'
+    installer.set_autostart(False, registry_root=root)
+    assert installer.autostart_command(root) is None
+    installer.set_autostart(False, registry_root=root)  # Повторное выключение — без ошибок

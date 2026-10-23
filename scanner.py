@@ -114,7 +114,8 @@ class ModCache:
 
     def __init__(self, db_path: str):
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        self.conn = sqlite3.connect(db_path)
+        # Кэш могут одновременно писать окно и фоновая проверка в трее — ждём освобождения базы, а не падаем
+        self.conn = sqlite3.connect(db_path, timeout=30)
         self.conn.executescript('''
             CREATE TABLE IF NOT EXISTS mod_info (sha1 TEXT PRIMARY KEY, data TEXT);
             CREATE TABLE IF NOT EXISTS project_info (project_id TEXT PRIMARY KEY, data TEXT);

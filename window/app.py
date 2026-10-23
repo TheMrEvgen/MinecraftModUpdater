@@ -164,10 +164,9 @@ class AppMixin:
     def handle_external(self, args: List[str]):
         """Файл .mrpack или ссылка modupdater://, переданные при запуске или второй копией программы."""
         import urllib.parse
-        if self.isMinimized():
-            self.showNormal()
-        self.raise_()
-        self.activateWindow()
+        if list(args or []) == ["--tray"]:  # Повторный автозапуск — программа и так работает
+            return
+        self._show_from_tray()
         QApplication.alert(self)
         for arg in args or []:
             if arg == "--activate":

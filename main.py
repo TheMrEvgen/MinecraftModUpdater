@@ -98,7 +98,8 @@ def run_gui() -> int:
     if single_instance.RESTART_FLAG in sys.argv:
         single_instance.wait_for_previous()  # Перезапуск или обновление: прежняя копия ещё закрывается
     # Программа уже открыта: отдаём ей файл или ссылку и выходим
-    elif single_instance.send_to_running(args or ["--activate"]):
+    # Автозапуск (--tray) при уже открытой программе ничего не показывает — просто выходим
+    elif single_instance.send_to_running(args or (["--tray"] if "--tray" in sys.argv else ["--activate"])):
         logging.info(tr("Программа уже запущена — аргументы переданы открытому окну."))
         return 0
     import self_update
@@ -109,7 +110,9 @@ def run_gui() -> int:
     window = ModUpdaterApp()
     server = single_instance.InstanceServer(window)
     server.received.connect(window.handle_external)
-    window.show()
+    app.setQuitOnLastWindowClosed(False)  # Окно может прятаться в трей; выход — в closeEvent окна
+    if "--tray" not in sys.argv or not window.start_in_tray():
+        window.show()
     if args:
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(800, lambda: window.handle_external(args))

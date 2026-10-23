@@ -381,3 +381,25 @@ class SelfUpdateWorker(QThread):
             self.failed.emit(str(e))
             return
         self.succeeded.emit(path)
+
+
+class BackgroundCheckWorker(QThread):
+    """Фоновая проверка обновлений модов во всех сборках (для трея)."""
+    finished_with = pyqtSignal(list)
+
+    def __init__(self, config: dict):
+        super().__init__()
+        self.config = config
+        self._cancelled = False
+
+    def stop(self):
+        self._cancelled = True
+
+    def run(self):
+        import background_check
+        try:
+            results = background_check.check_all(self.config, is_cancelled=lambda: self._cancelled)
+        except Exception as e:
+            logging.warning(tr('Фоновая проверка не удалась: {0}', e))
+            results = []
+        self.finished_with.emit(results if not self._cancelled else [])
