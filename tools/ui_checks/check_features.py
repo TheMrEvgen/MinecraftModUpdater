@@ -32,9 +32,10 @@ from content import MODS, RESOURCEPACKS, SHADERS  # noqa: E402
 from ui.mod_list import entry_at, meta_at  # noqa: E402
 
 log = []
-mw.confirm = lambda *a, **k: (log.append(("confirm", a[1])), True)[1]
-mw.ask_choice = lambda parent, icon, title, text, buttons, **k: (log.append(("choice", title)), 0)[1]
-mw.show_message = lambda parent, icon, title, text: log.append(("msg", title, text[:100]))
+from window_patch import patch_window  # noqa: E402
+patch_window(confirm=lambda *a, **k: (log.append(("confirm", a[1])), True)[1],
+             ask_choice=lambda parent, icon, title, text, buttons, **k: (log.append(("choice", title)), 0)[1],
+             show_message=lambda parent, icon, title, text: log.append(("msg", title, text[:100])))
 toasts = []
 
 w = mw.ModUpdaterApp()
@@ -163,7 +164,7 @@ w._switch_page(mw.PAGE_MODS)
 wait_idle()
 entries = w._bulk_candidates()[:6]
 review = dialogs.UpdateReviewDialog(w, w.tokens, entries, w._icon_for_entry,
-                                    lambda cb: w._run_task(mw.collect_changelogs, (entries, w.game_version, w.loader, MODS),
+                                    lambda cb: w._run_task(__import__('scanner').collect_changelogs, (entries, w.game_version, w.loader, MODS),
                                                            cb, lambda e: cb({}), None))
 review.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
 review.show()
@@ -178,12 +179,13 @@ shot("10_review", review)
 review.close()
 
 # Обновить все (окно подтверждаем автоматически) — со снимком
-dialogs_exec = mw.UpdateReviewDialog.exec
-mw.UpdateReviewDialog.exec = lambda self: 1
+from ui.dialogs import UpdateReviewDialog  # noqa: E402
+dialogs_exec = UpdateReviewDialog.exec
+UpdateReviewDialog.exec = lambda self: 1
 before = len(os.listdir(f"{GAME}/mods"))
 w.update_all()
 wait_idle(600)
-mw.UpdateReviewDialog.exec = dialogs_exec
+UpdateReviewDialog.exec = dialogs_exec
 print("after update: bulk", len(w._bulk_candidates()), "files", before, "->", len([f for f in os.listdir(f"{GAME}/mods") if f.endswith(('.jar', '.disabled'))]))
 print("pinned still old:", pinned_entry["name"], pinned_entry.get("current_version"), pinned_entry.get("new_version"))
 shot("11_after_update")

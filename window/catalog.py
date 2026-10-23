@@ -1,0 +1,186 @@
+"""Каталог Modrinth: установка, массовая установка, выбранная версия, статистика и альтернативы.
+
+Примесь к главному окну (ModUpdaterApp): методы работают с его атрибутами."""
+import os
+from typing import Dict, List, Optional
+
+import config as app_config
+from content import CONTENT_TYPES, ContentType, MODS
+from enums import ModStatus
+from i18n import tr
+from scanner import resolve_many_installs, resolve_project_install, scan_local
+from view_model import iter_all_entries
+
+
+class CatalogMixin:
+    # ================================================================== Каталог
+
+    def _installed_ids(self) -> Dict[str, set]:
+        result: Dict[str, set] = {}
+        for content in CONTENT_TYPES:
+            data = self.mods_data if content is self.content else self.sessions.get(self._skey(content=content)) or []
+            result[content.key] = {e["project_id"] for e in iter_all_entries(data) if e.get("project_id") and e.get("filepath")}
+        return result
+
+    def _refresh_catalog_context(self):
+        self.catalog_page.set_context(self.game_version, self.loader, self._installed_ids())
+        # Типы контента, которые ещё не открывались: читаем их папки, чтобы отметить уже установленное
+        game_dir = self._profile().get("mods_path", "")
+        for content in CONTENT_TYPES:
+            key = self._skey(content=content)
+            if content is not self.content and key not in self.sessions and os.path.isdir(content.path(game_dir)):
+                self._run_task(scan_local, (content.path(game_dir), app_config.CACHE_FILE, content),
+                               lambda data, k=key: self._on_catalog_folder_read(k, data), lambda e: None, None)
+
+    def _on_catalog_folder_read(self, key: tuple, data: List[dict]):
+        self.sessions.setdefault(key, data)
+        self.catalog_page.set_context(self.game_version, self.loader, self._installed_ids())
+
+    def _install_from_catalog(self, hit: dict):
+        if self._busy:
+            self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
+            return
+        content = self.catalog_page.content
+        if not self._profile().get("mods_path"):
+            self.toasts.show(tr("Сначала укажите папку игры для этой сборки."), "warning", tr("Настроить"), self._edit_current_profile)
+            return
+        pid = hit.get("project_id")
+        installed = self._installed_ids().get(content.key, set())
+        self.catalog_page.set_installing([pid], True)
+        self._run_task(resolve_project_install,
+                       (pid, self.game_version, self.loader, self._channel(), installed, content),
+                       lambda entries: self._on_catalog_resolved(hit, content, entries),
+                       lambda e: self._on_catalog_failed(pid, e), None)
+
+    def _on_catalog_failed(self, pid: str, error: str):
+        self.catalog_page.set_installing([pid], False)
+        self.toasts.show(tr('Не удалось подготовить установку: {0}', error), "error")
+
+    def _on_catalog_resolved(self, hit: dict, content: ContentType, entries: List[dict]):
+        pid = hit.get("project_id")
+        self.catalog_page.set_installing([pid], False)
+        if not entries:
+            self.toasts.show(tr('У «{0}» нет версии для Minecraft {1}', hit.get('title'), self.game_version)
+                             + (f" ({self.loader})" if content is MODS else "") + ".", "warning")
+            return
+        if len(entries) > 1:
+            deps = ", ".join(e.get("name") for e in entries[1:])
+            self.toasts.show(tr('Вместе с «{0}» будут установлены зависимости: {1}', entries[0].get('name'), deps), "info")
+        folder = content.path(self._profile().get("mods_path", ""))
+        self._catalog_installing = [e["project_id"] for e in entries]
+        self._catalog_content = content
+        self.catalog_page.set_installing(self._catalog_installing, True)
+        self.start_update(entries, folder=folder)
+        if not self.update_worker:  # Установка не началась (игра запущена или отмена)
+            self.catalog_page.set_installing(self._catalog_installing, False)
+            self._catalog_installing = []
+
+    def _finish_catalog_install(self, worker):
+        installing, self._catalog_installing = self._catalog_installing, []
+        self.catalog_page.set_installing(installing, False)
+        results = worker.results.items()
+        succeeded = [worker.mods_to_update[i] for i, s in results if s in (ModStatus.UPDATED, ModStatus.INSTALLED)]
+        failed = [worker.mods_to_update[i] for i, s in worker.results.items() if s.is_error]
+        self._invalidate_folder(worker.mods_path)
+        installed = self._installed_ids()
+        installed.setdefault(self._catalog_content.key, set()).update(e["project_id"] for e in succeeded)
+        self.catalog_page.set_context(self.game_version, self.loader, installed)
+        if succeeded:
+            names = ", ".join(e.get("name") for e in succeeded[:3]) + (tr(" и др.") if len(succeeded) > 3 else "")
+            self.toasts.show(tr('Установлено: {0}', names), "success", tr("Отменить"),
+                             lambda: self._rollback_dir(worker.transaction.dir), timeout=9000)
+        if failed:
+            self.toasts.show(tr('Не удалось установить: {0}', ', '.join(e.get('name') for e in failed)), "error")
+        if os.path.normcase(worker.mods_path) == os.path.normcase(self.mods_path) and not self.is_import_mode:
+            self.start_local_scan()
+
+    # ================================================================== Статистика и замена заброшенных модов
+
+    def _refresh_stats(self):
+        self.stats_page.set_data(self._count_items, self.current_profile_name, self.mod_tags)
+
+    def _stats_filter(self, query: str):
+        self._switch_page(self.PAGE_MODS_INDEX)
+        self._set_category_all_silent()
+        self.search.setText(query)
+        self._apply_filter(query=query)
+
+    def _set_category_all_silent(self):
+        from view_model import CAT_ALL
+        self.cards[CAT_ALL].setChecked(True)
+        self.proxy.set_filter(category=CAT_ALL)
+
+    def _find_replacement(self, entry: dict):
+        self._switch_page(self.PAGE_CATALOG_INDEX)
+        self.catalog_page.tab_group.buttons()[CONTENT_TYPES.index(self.content)].setChecked(True)
+        self.catalog_page.content = self.content
+        self.catalog_page.search_like(entry)
+
+    # ================================================================== Каталог: массовая установка и выбранная версия
+
+    def _install_many_from_catalog(self, hits: List[dict]):
+        if self._busy or not hits:
+            if self._busy:
+                self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
+            return
+        content = self.catalog_page.content
+        installed = self._installed_ids().get(content.key, set())
+        ids = [h.get("project_id") for h in hits]
+        self.catalog_page.set_installing(ids, True)
+
+        def resolved(result):
+            entries, missing = result
+            self.catalog_page.set_installing(ids, False)
+            if missing:
+                titles = [h.get("title") for h in hits if h.get("project_id") in missing]
+                self.toasts.show(tr('Нет версии для вашей сборки: {0}', ', '.join(titles)), "warning")
+            if entries:
+                self._start_catalog_install(entries, content)
+
+        self._run_task(resolve_many_installs, (ids, self.game_version, self.loader, self._channel(), installed, content),
+                       resolved, lambda e: (self.catalog_page.set_installing(ids, False),
+                                            self.toasts.show(tr('Не удалось подготовить установку: {0}', e), "error")), None)
+
+    def _install_catalog_version(self, hit: dict, version: dict):
+        if self._busy:
+            self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
+            return
+        content = self.catalog_page.content
+        installed = self._installed_ids().get(content.key, set())
+        pid = hit.get("project_id")
+        self.catalog_page.set_installing([pid], True)
+        self._run_task(resolve_project_install,
+                       (pid, self.game_version, self.loader, self._channel(), installed, content, 3, version),
+                       lambda entries: self._on_catalog_resolved(hit, content, entries),
+                       lambda e: self._on_catalog_failed(pid, e), None)
+
+    def _start_catalog_install(self, entries: List[dict], content):
+        folder = content.path(self._profile().get("mods_path", ""))
+        self._catalog_installing = [e["project_id"] for e in entries]
+        self._catalog_content = content
+        self.catalog_page.set_installing(self._catalog_installing, True)
+        self.start_update(entries, folder=folder)
+        if not self.update_worker:
+            self.catalog_page.set_installing(self._catalog_installing, False)
+            self._catalog_installing = []
+
+    def _installed_version(self, project_id: str) -> Optional[str]:
+        """Установленная версия проекта (для отметки в списке версий каталога)."""
+        content = self.catalog_page.content
+        data = self.mods_data if content is self.content else self.sessions.get(self._skey(content=content)) or []
+        return next((e.get("current_version") for e in iter_all_entries(data)
+                     if e.get("project_id") == project_id and e.get("filepath")), None)
+
+    def _show_installed_from_catalog(self, hit: dict):
+        content = self.catalog_page.content
+        self._switch_page(self.PAGE_MODS_INDEX)
+        if self.content is not content:
+            self._set_content(content)
+        entry = next((e for e in iter_all_entries(self.mods_data) if e.get("project_id") == hit.get("project_id")
+                      and e.get("filepath")), None)
+        if entry:
+            self._reset_filters()
+            self._select_entry(entry)
+            self._open_current_details()
+        else:
+            self.toasts.show(tr("Мод установлен — список обновится после чтения папки."), "info")

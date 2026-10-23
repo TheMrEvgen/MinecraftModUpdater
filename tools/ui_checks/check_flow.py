@@ -29,9 +29,10 @@ app = create_app()
 import main_window as mw  # noqa: E402
 
 dialogs = []
-mw.confirm = lambda *a, **k: (dialogs.append(a[1]), True)[1]
-mw.ask_choice = lambda parent, icon, title, text, buttons, **k: (dialogs.append(title), 1 if title == "Импорт сборки" else 1)[1]
-mw.show_message = lambda parent, icon, title, text: dialogs.append(f"MSG {title}: {text[:80]}")
+from window_patch import patch_window  # noqa: E402
+patch_window(confirm=lambda *a, **k: (dialogs.append(a[1]), True)[1],
+             ask_choice=lambda parent, icon, title, text, buttons, **k: (dialogs.append(title), 1)[1],
+             show_message=lambda parent, icon, title, text: dialogs.append(f"MSG {title}: {text[:80]}"))
 toasts = []
 w = mw.ModUpdaterApp()
 orig_show = w.toasts.show
@@ -113,7 +114,7 @@ wait_idle()
 wait_idle()
 
 # Экспорт .mrpack и импорт его обратно
-mw.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (f"{SP}/flow.mrpack", ""))
+__import__('PyQt6.QtWidgets', fromlist=['QFileDialog']).QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (f"{SP}/flow.mrpack", ""))
 w.export_mrpack()
 index = json.loads(zipfile.ZipFile(f"{SP}/flow.mrpack").read("modrinth.index.json"))
 print("7. mrpack:", index["dependencies"], len(index["files"]), "файлов")

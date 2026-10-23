@@ -17,7 +17,9 @@ PLACEHOLDER = re.compile(r"\{(\d+)(?:![rsa])?(?::[^}]*)?\}")
 
 
 def source_files() -> List[str]:
-    files = glob.glob(os.path.join(ROOT, "*.py")) + glob.glob(os.path.join(ROOT, "ui", "*.py"))
+    files = glob.glob(os.path.join(ROOT, "*.py"))
+    for package in ("ui", "window"):
+        files += glob.glob(os.path.join(ROOT, package, "*.py"))
     return sorted(f for f in files if os.path.basename(f) not in ("i18n.py",))
 
 

@@ -29,18 +29,15 @@ from main import create_app  # noqa: E402
 
 app = create_app()
 import main_window as mw  # noqa: E402
-import main_window_tools as mwt  # noqa: E402
+from window_patch import patch_window  # noqa: E402
 from content import MODS  # noqa: E402
 
 log = []
 answers = {"confirm": True}
-for module in (mw, mwt):
-    module.confirm = lambda *a, **k: (log.append(("confirm", a[1])), answers["confirm"])[1]
-    module.show_message = lambda parent, icon, title, text: log.append(("msg", title, text[:120]))
-mwt.ask_choice = lambda *a, **k: 0
 texts = []
-mwt.ask_text = lambda *a, **k: texts.pop(0) if texts else None
-mw.ask_text = mwt.ask_text
+patch_window(confirm=lambda *a, **k: (log.append(("confirm", a[1])), answers["confirm"])[1],
+             show_message=lambda parent, icon, title, text: log.append(("msg", title, text[:120])),
+             ask_choice=lambda *a, **k: 0, ask_text=lambda *a, **k: texts.pop(0) if texts else None)
 toasts = []
 
 w = mw.ModUpdaterApp()
@@ -201,7 +198,7 @@ def capture(self, parent, tokens, left, right, diff):
 
 
 tools_dialogs.CompareDialog.__init__ = capture
-mwt.CompareDialog = tools_dialogs.CompareDialog
+patch_window(CompareDialog=tools_dialogs.CompareDialog)
 w._compare_profiles("Копия сборки", "Клон")
 wait_idle()
 diff = compare_result.get("diff") or {}
@@ -215,8 +212,9 @@ shot("04_groups")
 
 # --- Экспорт / импорт настроек
 export_path = f"{SP}/settings_export.json"
-mwt.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (export_path, ""))
-mwt.QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (export_path, ""))
+from PyQt6.QtWidgets import QFileDialog  # noqa: E402
+QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (export_path, ""))
+QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (export_path, ""))
 w._export_settings()
 check("экспорт настроек", os.path.exists(export_path))
 w.mod_notes.clear()

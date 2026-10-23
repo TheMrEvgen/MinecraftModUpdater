@@ -31,14 +31,13 @@ from main import create_app  # noqa: E402
 
 app = create_app()
 import main_window as mw  # noqa: E402
-import main_window_tools as mwt  # noqa: E402
+from ui.tools_dialogs import CrashDialog  # noqa: E402
+from window_patch import patch_window  # noqa: E402
 
 opened = []
-for module in (mw, mwt):
-    module.confirm = lambda *a, **k: True
-    module.show_message = lambda *a, **k: None
-mwt.ask_choice = lambda *a, **k: 0  # «Автоматически»
-mwt.CrashDialog.exec = lambda self: opened.append(self.file_combo.currentText()) or 0
+patch_window(confirm=lambda *a, **k: True, show_message=lambda *a, **k: None,
+             ask_choice=lambda *a, **k: 0)  # «Автоматически»
+CrashDialog.exec = lambda self: opened.append(self.file_combo.currentText()) or 0
 
 w = mw.ModUpdaterApp()
 w.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
