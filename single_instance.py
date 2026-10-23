@@ -9,6 +9,7 @@ from typing import List
 
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
+from i18n import tr
 
 SERVER_NAME = f"MinecraftModUpdater-{getpass.getuser()}"
 
@@ -41,7 +42,7 @@ class InstanceServer(QObject):
         self.server = QLocalServer(self)
         QLocalServer.removeServer(SERVER_NAME)  # Остаток после аварийного завершения
         if not self.server.listen(SERVER_NAME):
-            logging.warning(f"Не удалось открыть канал одного экземпляра: {self.server.errorString()}")
+            logging.warning(tr('Не удалось открыть канал одного экземпляра: {0}', self.server.errorString()))
         self.server.newConnection.connect(self._on_connection)
 
     def _on_connection(self):

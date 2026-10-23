@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
+from i18n import tr
 
 SUPPORTED_LOADERS = ("fabric", "neoforge", "forge", "quilt")
 
@@ -84,7 +85,7 @@ def detect_game_versions(game_dir: str) -> DetectionResult:
     result = DetectionResult()
     versions_path = os.path.join(game_dir, 'versions')
     if not os.path.isdir(versions_path):
-        logging.warning(f"Папка версий не найдена по пути: {versions_path}.")
+        logging.warning(tr('Папка версий не найдена по пути: {0}.', versions_path))
         return result
 
     latest_mod_time = 0.0
@@ -99,7 +100,7 @@ def detect_game_versions(game_dir: str) -> DetectionResult:
                 with open(file_entry.path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
             except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
-                logging.warning(f"Не удалось прочитать или разобрать файл версии {file_entry.path}: {e}")
+                logging.warning(tr('Не удалось прочитать или разобрать файл версии {0}: {1}', file_entry.path, e))
                 continue
             if not isinstance(data, dict):
                 continue

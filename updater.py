@@ -103,7 +103,7 @@ class UpdateTransaction:
             shutil.move(path, backup_path)
             self.manifest["backed_up"].append({"name": name, "backup": backup_name})
             self._save_locked()
-        logging.info(f"Файл {name} перемещен в бэкап: {self.dir}")
+        logging.info(tr('Файл {0} перемещен в бэкап: {1}', name, self.dir))
         return backup_path
 
     def restore_file(self, backup_path: str, original_path: str):
@@ -173,7 +173,7 @@ def rollback_transaction(mods_path: str, manifest: Dict) -> List[str]:
         try:
             if os.path.exists(path):
                 os.remove(path)
-                logging.info(f"Откат: удален установленный файл {filename}")
+                logging.info(tr('Откат: удален установленный файл {0}', filename))
         except OSError as e:
             errors.append(tr('Не удалось удалить {0}: {1}', filename, e))
 
@@ -188,7 +188,7 @@ def rollback_transaction(mods_path: str, manifest: Dict) -> List[str]:
             continue
         try:
             shutil.move(source, target)
-            logging.info(f"Откат: восстановлен файл {entry['name']}")
+            logging.info(tr('Откат: восстановлен файл {0}', entry['name']))
         except OSError as e:
             errors.append(tr('Не удалось восстановить {0}: {1}', entry['name'], e))
 
@@ -256,7 +256,7 @@ def set_disabled(path: str, disabled: bool) -> str:
     if os.path.exists(target):
         raise FileExistsError(tr('Файл {0} уже существует', os.path.basename(target)))
     os.rename(path, target)
-    logging.info(f"Файл {name} {'выключен' if disabled else 'включён'}.")
+    logging.info(tr('Файл {0} {1}.', name, tr('выключен') if disabled else tr('включён')))
     return target
 
 
@@ -281,7 +281,7 @@ def install_mod(mod: Dict, mods_path: str, transaction: UpdateTransaction,
     try:
         new_filename = safe_filename(mod['new_filename'])
     except (KeyError, ValueError) as e:
-        logging.error(f"Некорректное имя файла для '{mod_name}': {e}")
+        logging.error(tr("Некорректное имя файла для '{0}': {1}", mod_name, e))
         return ModStatus.DOWNLOAD_ERROR
 
     if mod.get('disabled'):
@@ -298,7 +298,7 @@ def install_mod(mod: Dict, mods_path: str, transaction: UpdateTransaction,
         logging.error(f"'{mod_name}': {e}")
         return ModStatus.HASH_ERROR
     except DownloadError as e:
-        logging.error(f"Не удалось скачать мод '{mod_name}': {e}")
+        logging.error(tr("Не удалось скачать мод '{0}': {1}", mod_name, e))
         return ModStatus.DOWNLOAD_ERROR
 
     backups: List[tuple] = []  # (backup_path, original_path)
@@ -311,12 +311,12 @@ def install_mod(mod: Dict, mods_path: str, transaction: UpdateTransaction,
         os.replace(temp_path, final_path)
         transaction.record_installed(new_filename)
     except Exception as e:
-        logging.error(f"Ошибка при замене файла для мода '{mod_name}': {e}. Восстановление старой версии...")
+        logging.error(tr("Ошибка при замене файла для мода '{0}': {1}. Восстановление старой версии...", mod_name, e))
         for backup_path, original_path in reversed(backups):
             try:
                 transaction.restore_file(backup_path, original_path)
             except Exception as restore_error:
-                logging.critical(f"Не удалось восстановить {original_path}: {restore_error}")
+                logging.critical(tr('Не удалось восстановить {0}: {1}', original_path, restore_error))
         try:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -325,7 +325,7 @@ def install_mod(mod: Dict, mods_path: str, transaction: UpdateTransaction,
         return ModStatus.REPLACE_ERROR
 
     status = ModStatus.UPDATED if mod.get('filepath') else ModStatus.INSTALLED
-    logging.info(f"Мод '{mod_name}' успешно {'обновлен' if status == ModStatus.UPDATED else 'установлен'} до версии {mod.get('new_version')}.")
+    logging.info(tr("Мод '{0}' успешно {1} до версии {2}.", mod_name, tr('обновлен') if status == ModStatus.UPDATED else tr('установлен'), mod.get('new_version')))
     return status
 
 
@@ -340,7 +340,7 @@ def remove_mods(filepaths: Iterable[str], transaction: UpdateTransaction) -> tup
             removed.append(path)
         except Exception as e:
             errors.append(f"{os.path.basename(path)}: {e}")
-            logging.error(f"Не удалось удалить {path}: {e}")
+            logging.error(tr('Не удалось удалить {0}: {1}', path, e))
     return removed, errors
 
 
@@ -371,7 +371,7 @@ def add_files(paths: Iterable[str], mods_path: str, transaction: UpdateTransacti
             added.append(name)
         except OSError as e:
             errors.append(f"{name}: {e}")
-            logging.error(f"Не удалось добавить {source}: {e}")
+            logging.error(tr('Не удалось добавить {0}: {1}', source, e))
     return added, errors
 
 
@@ -416,7 +416,7 @@ def create_snapshot(folder: str, reason: str = "manual", content: ContentType = 
     with open(os.path.join(snap_dir, MANIFEST_NAME), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
     manifest["dir"] = snap_dir
-    logging.info(f"Создан снимок сборки ({len(entries)} файлов): {snap_dir}")
+    logging.info(tr('Создан снимок сборки ({0} файлов): {1}', len(entries), snap_dir))
     return manifest
 
 

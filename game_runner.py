@@ -124,7 +124,7 @@ def launch(plan: LaunchPlan) -> None:
     flags = CREATE_NO_WINDOW if sys.platform == "win32" else 0
     subprocess.Popen(plan.command, creationflags=flags, close_fds=True,
                      cwd=os.path.dirname(plan.command[0]) if os.path.isabs(plan.command[0]) else None)
-    logging.info(f"Запуск игры: {' '.join(plan.command)}")
+    logging.info(tr('Запуск игры: {0}', ' '.join(plan.command)))
 
 
 # --- Наблюдение по логу ---
@@ -202,6 +202,6 @@ def stop_game(game_dir: str) -> int:
     for pid in pids:
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=CREATE_NO_WINDOW)
     if pids:
-        logging.info(f"Игра закрыта (процессы {pids}).")
+        logging.info(tr('Игра закрыта (процессы {0}).', pids))
         time.sleep(1.5)  # Даём Windows освободить файлы модов
     return len(pids)

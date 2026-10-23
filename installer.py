@@ -215,7 +215,7 @@ def install(source_exe: str, desktop: bool = True, associate_mrpack: bool = True
     else:
         _delete_tree(keys["protocol"])
     _notify_shell()
-    logging.info("Установка: " + "; ".join(done))
+    logging.info(tr("Установка: ") + "; ".join(done))
     return done
 
 
@@ -253,5 +253,5 @@ def uninstall(paths: Optional[InstallPaths] = None, remove_data: bool = False, s
         subprocess.Popen(f'cmd /c ping 127.0.0.1 -n 3 >nul & rmdir /s /q "{paths.install_dir}"',
                          creationflags=CREATE_NO_WINDOW, close_fds=True)
         done.append(tr("Папка программы будет удалена после выхода"))
-    logging.info("Удаление: " + "; ".join(done))
+    logging.info(tr("Удаление: ") + "; ".join(done))
     return done

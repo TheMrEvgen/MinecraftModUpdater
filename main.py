@@ -92,12 +92,12 @@ def run_gui() -> int:
 
     app_config.setup_file_logging("mod_updater")
     apply_ui_scale()
-    logging.info("Запуск приложения Minecraft Mod Updater.")
+    logging.info(tr("Запуск приложения Minecraft Mod Updater."))
     app = create_app()
     args = single_instance.external_args(sys.argv)
     # Программа уже открыта: отдаём ей файл или ссылку и выходим
     if single_instance.send_to_running(args or ["--activate"]):
-        logging.info("Программа уже запущена — аргументы переданы открытому окну.")
+        logging.info(tr("Программа уже запущена — аргументы переданы открытому окну."))
         return 0
     import crash_handler
     crash_handler.install()  # Необработанные ошибки — в окно с отчётом, а не молчаливое падение

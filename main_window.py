@@ -628,7 +628,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         super().closeEvent(event)
         if stuck:
             # Ждать дальше бессмысленно: настройки сохранены, а прерывать потоки Qt не умеет
-            logging.warning(f"Закрытие без ожидания фоновых задач: {', '.join(stuck)}")
+            logging.warning(tr('Закрытие без ожидания фоновых задач: {0}', ', '.join(stuck)))
             logging.shutdown()
             for stream in (sys.stdout, sys.stderr):
                 try:
@@ -648,7 +648,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
                 "last_seen": self.last_seen,
             })
         except OSError as e:
-            logging.error(f"Ошибка при сохранении конфигурации: {e}")
+            logging.error(tr('Ошибка при сохранении конфигурации: {0}', e))
 
     def _profile(self) -> dict:
         return self.profiles.get(self.current_profile_name) or app_config.default_profile()
@@ -959,7 +959,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
                 shutil.copyfile(image, target)
                 settings["sidebar_image"] = target
             except OSError as e:
-                logging.warning(f"Не удалось скопировать картинку боковой панели: {e}")
+                logging.warning(tr('Не удалось скопировать картинку боковой панели: {0}', e))
         if self.settings.get("per_profile_view", True) and "view_mode" in settings:
             self._profile()["view_mode"] = settings["view_mode"]  # Вид запоминается для текущей сборки
         self.settings.update(settings)
@@ -988,7 +988,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
                 if os.path.exists(path):
                     os.remove(path)
             except OSError as e:
-                logging.error(f"Не удалось удалить {path}: {e}")
+                logging.error(tr('Не удалось удалить {0}: {1}', path, e))
         shutil.rmtree(app_config.ICON_CACHE_DIR, ignore_errors=True)
         os.makedirs(app_config.ICON_CACHE_DIR, exist_ok=True)
         self._icon_pixmaps.clear()
@@ -1565,7 +1565,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
             return
         self._silent_scan = silent
         channel = self._channel()
-        logging.info(f"Проверка обновлений: Minecraft {self.game_version} ({self.loader}), канал {channel.value}")
+        logging.info(tr('Проверка обновлений: Minecraft {0} ({1}), канал {2}', self.game_version, self.loader, channel.value))
         self._set_busy("scan", tr("Проверяем обновления…"))
         self.scan_worker = ScanWorker(self.mods_path, self.game_version, self.loader, app_config.CACHE_FILE, channel,
                                       self.content)
@@ -1808,7 +1808,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
             try:
                 move_all_to_backup(self.mods_path, transaction)
             except Exception as e:
-                logging.error(f"Ошибка при переносе модов в бэкап: {e}")
+                logging.error(tr('Ошибка при переносе модов в бэкап: {0}', e))
                 show_message(self, QMessageBox.Icon.Critical, tr("Ошибка бэкапа"),
                              tr('Не удалось перенести моды в бэкап: {0}\nУже перенесённые файлы можно вернуть в «Истории».', e))
                 return False, None
@@ -2295,7 +2295,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
             if reason != "manual":
                 prune_snapshots(self.mods_path, int(self.settings.get("snapshots_keep", 10)))
         except OSError as e:
-            logging.error(f"Не удалось создать снимок: {e}")
+            logging.error(tr('Не удалось создать снимок: {0}', e))
             snapshot = None
             if not quiet:
                 show_message(self, QMessageBox.Icon.Warning, tr("Снимок не создан"), str(e))
@@ -2369,7 +2369,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
                 try:
                     new_path = set_disabled(old_path, True)
                 except OSError as e:
-                    logging.error(f"Не удалось выключить {entry.get('name')}: {e}")
+                    logging.error(tr('Не удалось выключить {0}: {1}', entry.get('name'), e))
                     continue
                 for same in self._same_file_entries(old_path):
                     same["filepath"], same["disabled"] = new_path, True

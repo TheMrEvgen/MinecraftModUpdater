@@ -127,12 +127,12 @@ def load_config(path: str = CONFIG_FILE) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as f:
             config = json.load(f)
-        logging.info("Конфигурация успешно загружена.")
+        logging.info(tr("Конфигурация успешно загружена."))
         return _normalize(config)
     except FileNotFoundError:
-        logging.info("Файл конфигурации не найден, используются значения по умолчанию.")
+        logging.info(tr("Файл конфигурации не найден, используются значения по умолчанию."))
     except (json.JSONDecodeError, UnicodeDecodeError, AttributeError, TypeError) as e:
-        logging.warning(f"Ошибка при чтении файла конфигурации ({e}), будут использованы значения по умолчанию.")
+        logging.warning(tr('Ошибка при чтении файла конфигурации ({0}), будут использованы значения по умолчанию.', e))
     return _normalize(default_config())
 
 

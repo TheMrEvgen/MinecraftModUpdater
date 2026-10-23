@@ -98,7 +98,7 @@ def read_mod_metadata(filepath: str) -> tuple[str, str, Optional[str]]:
             if toml_name:
                 mod_name = toml_name
     except Exception as e:
-        logging.warning(f"Не удалось прочитать метаданные из {filename}: {e}")
+        logging.warning(tr('Не удалось прочитать метаданные из {0}: {1}', filename, e))
 
     return mod_name, mod_version, project_id
 
@@ -237,7 +237,7 @@ def index_local_files(mods_path: str, cache: Optional[ModCache] = None,
             to_index.append((path, st.st_size, st.st_mtime_ns))
 
     if to_index:
-        logging.info(f"Индексация {len(to_index)} новых или изменённых файлов (из кэша: {len(result)}).")
+        logging.info(tr('Индексация {0} новых или изменённых файлов (из кэша: {1}).', len(to_index), len(result)))
         new_entries = []
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(_index_file, *args) for args in to_index]
@@ -248,7 +248,7 @@ def index_local_files(mods_path: str, cache: Optional[ModCache] = None,
                 try:
                     new_entries.append(future.result())
                 except OSError as e:
-                    logging.error(f"Не удалось прочитать файл: {e}")
+                    logging.error(tr('Не удалось прочитать файл: {0}', e))
         if cache:
             cache.put_file_entries(new_entries)
         result.extend(new_entries)
@@ -419,7 +419,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
                 latest_by_hash = get_latest_versions_from_hashes(
                     [d['sha1'] for d in installed.values()], game_version, loaders, channel.version_types)
             except requests.RequestException as e:
-                logging.error(f"Не удалось получить последние версии: {e}")
+                logging.error(tr('Не удалось получить последние версии: {0}', e))
                 latest_by_hash = {}
             for project_id, details in installed.items():
                 latest_by_project[project_id] = latest_by_hash.get(details['sha1'])
@@ -456,7 +456,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
                     try:
                         latest_by_project[pid] = future.result()
                     except Exception as e:
-                        logging.error(f"Не удалось получить версию для зависимости {pid}: {e}")
+                        logging.error(tr('Не удалось получить версию для зависимости {0}: {1}', pid, e))
                         latest_by_project[pid] = None
 
         # --- Информация о проектах: названия, иконки, стороны (клиент/сервер) ---
@@ -469,7 +469,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
                 if cache and projects_info:
                     cache.put_project_infos(projects_info)
             except requests.RequestException as e:
-                logging.error(f"Не удалось получить информацию о проектах: {e}")
+                logging.error(tr('Не удалось получить информацию о проектах: {0}', e))
                 if cache:
                     projects_info = cache.get_project_infos(all_project_ids)
         check_cancel()
@@ -495,7 +495,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
             latest = latest_by_project.get(project_id)
             if is_newer_version(latest, details['info']) and apply_install_info(entry, latest):
                 entry["status"] = ModStatus.UPDATE_AVAILABLE
-                logging.info(f"Найдено обновление для '{entry['name']}': {entry['current_version']} -> {entry['new_version']}.")
+                logging.info(tr("Найдено обновление для '{0}': {1} -> {2}.", entry['name'], entry['current_version'], entry['new_version']))
             return entry
 
         mods_data: List[Dict] = []
@@ -602,7 +602,7 @@ def entries_from_mrpack(index: Dict) -> List[Dict]:
         versions = get_mods_info_from_hashes(sha1_list)
         projects = get_projects_info_from_ids({v.get('project_id') for v in versions.values()})
     except requests.RequestException as e:
-        logging.warning(f"Не удалось получить информацию о модах сборки: {e}")
+        logging.warning(tr('Не удалось получить информацию о модах сборки: {0}', e))
         versions, projects = {}, {}
 
     entries = []
@@ -649,7 +649,7 @@ def resolve_project_install(project_id: str, game_version: str, loader: Optional
         if not version:
             if pid == project_id:
                 return []
-            logging.warning(f"Для зависимости {pid} нет совместимой версии.")
+            logging.warning(tr('Для зависимости {0} нет совместимой версии.', pid))
             continue
         versions[pid] = version
         if depth < max_depth and content.has_dependencies:
@@ -699,7 +699,7 @@ def collect_changelogs(entries: List[Dict], game_version: str, loader: Optional[
             try:
                 result[futures[future]] = future.result()
             except Exception as e:
-                logging.warning(f"Не удалось загрузить список изменений {futures[future]}: {e}")
+                logging.warning(tr('Не удалось загрузить список изменений {0}: {1}', futures[future], e))
     return result
 
 

@@ -229,5 +229,5 @@ def discover_instances() -> List[Instance]:
                     result.append(instance)
         except OSError as e:
             logging.debug(f"Ошибка поиска установок: {e}")
-    logging.info(f"Найдено установок в лаунчерах: {len(result)}")
+    logging.info(tr('Найдено установок в лаунчерах: {0}', len(result)))
     return result

@@ -83,7 +83,7 @@ class CrashHandler:
         if issubclass(exc_type, KeyboardInterrupt):
             sys.__excepthook__(exc_type, exc, tb)
             return
-        logging.critical("Необработанное исключение", exc_info=(exc_type, exc, tb))
+        logging.critical(tr("Необработанное исключение"), exc_info=(exc_type, exc, tb))
         if QApplication.instance() is None:
             sys.__excepthook__(exc_type, exc, tb)
             return

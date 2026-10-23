@@ -28,3 +28,15 @@ def test_tr_and_plural_in_both_languages():
         assert i18n.plural(11, "мод", "мода", "модов") == "модов"
     finally:
         i18n.set_language("ru")
+
+
+def test_dates_follow_language():
+    from mod_updater_logic import format_date
+    try:
+        i18n.set_language("ru")
+        assert format_date("2026-09-06T12:00:00Z") == "06.09.2026"
+        i18n.set_language("en")
+        assert format_date("2026-09-06T12:00:00Z") == "2026-09-06"
+        assert i18n.tr("Сканирование прервано пользователем.") == "Scan cancelled by the user."
+    finally:
+        i18n.set_language("ru")

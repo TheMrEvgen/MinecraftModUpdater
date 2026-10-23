@@ -114,7 +114,7 @@ def prune_backups(folder: str, max_age_days: Optional[int] = None, max_bytes: Op
             shutil.rmtree(candidates.pop(0), ignore_errors=True)
             removed += 1
     if removed:
-        logging.info(f"Очистка бэкапов {folder}: удалено {removed}.")
+        logging.info(tr('Очистка бэкапов {0}: удалено {1}.', folder, removed))
     return removed
 
 

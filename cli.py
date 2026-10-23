@@ -199,7 +199,7 @@ def run(argv: List[str]) -> int:
             try:
                 status = future.result()
             except Exception as e:
-                logging.exception(f"Ошибка при обновлении {entry['name']}: {e}")
+                logging.exception(tr('Ошибка при обновлении {0}: {1}', entry['name'], e))
                 status = ModStatus.CRITICAL_ERROR
             _print(f"  {'✓' if not status.is_error else '✗'} {entry['name']}: {status.value}")
             if status.is_error:
@@ -219,6 +219,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     except SystemExit as e:  # argparse
         return int(e.code or 0) if isinstance(e.code, int) else EXIT_USAGE
     except Exception as e:
-        logging.exception("Непредвиденная ошибка в консольном режиме")
+        logging.exception(tr("Непредвиденная ошибка в консольном режиме"))
         _print(tr('Ошибка: {0}', e))
         return EXIT_USAGE

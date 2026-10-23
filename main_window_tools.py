@@ -567,7 +567,7 @@ class ToolsMixin:
         try:
             removed = prune_backups(self.mods_path, days, megabytes * 1024 * 1024 if megabytes else None)
         except OSError as e:
-            logging.error(f"Очистка бэкапов: {e}")
+            logging.error(tr('Очистка бэкапов: {0}', e))
             removed = 0
         if manual:
             self.toasts.show(tr('Удалено старых бэкапов: {0}.', removed) if removed else tr("Нечего удалять — всё в пределах лимитов."),
@@ -920,7 +920,7 @@ class ToolsMixin:
         entries = [e for e in self._count_items if e.get("filepath")]
         self._run_task(readiness.check_readiness, (entries, self.game_version, self.loader, self._channel()),
                        lambda result: self._on_readiness(profile_name, result),
-                       lambda e: logging.info(f"Проверка готовности к новой версии не удалась: {e}"), None)
+                       lambda e: logging.info(tr('Проверка готовности к новой версии не удалась: {0}', e)), None)
 
     def _on_readiness(self, profile_name: str, result: Optional[Dict]):
         profile = self.profiles.get(profile_name)
@@ -1053,7 +1053,7 @@ class ToolsMixin:
         state = state or game_runner.run_state(game_dir, started_at or time.time() - 3600)
         if not state.crashed:
             return
-        logging.info(f"Игра завершилась с ошибкой: {state.reason}")
+        logging.info(tr('Игра завершилась с ошибкой: {0}', state.reason))
         QApplication.alert(self)
         if self.settings.get("auto_crash_analysis", True):
             self.toasts.show(tr("Игра вылетела — открываем разбор."), "warning")
@@ -1124,7 +1124,7 @@ class ToolsMixin:
     def _auto_answer(self, problem_persists: bool, reason: str):
         import game_runner
         self._auto_bisect["phase"] = "stopping"
-        logging.info(f"Автопоиск: {reason} → проблема {'осталась' if problem_persists else 'пропала'}")
+        logging.info(tr('Автопоиск: {0} → проблема {1}', reason, tr('осталась') if problem_persists else tr('пропала')))
         self._show_auto_status(tr('{0}; закрываем игру…', reason))
         game_dir = self._game_dir()
 

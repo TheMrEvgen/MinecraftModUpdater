@@ -43,16 +43,16 @@ class ScanWorker(QThread):
                                   content=self.content)
             self.finished.emit(mods_data)
         except ScanCancelled:
-            logging.info("Сканирование прервано пользователем.")
+            logging.info(tr("Сканирование прервано пользователем."))
             self.finished.emit(None)
         except Exception as e:
-            logging.exception(f"Ошибка во время сканирования: {e}")
+            logging.exception(tr('Ошибка во время сканирования: {0}', e))
             self.progress.emit(tr('Ошибка сканирования: {0}', e))
             self.finished.emit([])
 
     def stop(self):
         self.is_running = False
-        logging.info("Получен запрос на остановку сканирования.")
+        logging.info(tr("Получен запрос на остановку сканирования."))
 
 
 class LocalScanWorker(QThread):
@@ -69,10 +69,10 @@ class LocalScanWorker(QThread):
     def run(self):
         try:
             mods_data = scan_local(self.mods_path, self.cache_file, self.content)
-            logging.info(f"Локальное сканирование завершено. Найдено файлов: {len(mods_data)}.")
+            logging.info(tr('Локальное сканирование завершено. Найдено файлов: {0}.', len(mods_data)))
             self.finished.emit(mods_data if self.is_running else None)
         except Exception as e:
-            logging.exception(f"Ошибка во время локального сканирования: {e}")
+            logging.exception(tr('Ошибка во время локального сканирования: {0}', e))
             self.finished.emit([])
 
     def stop(self):
@@ -103,7 +103,7 @@ class UpdateWorker(QThread):
 
     def stop(self):
         self.is_running = False
-        logging.info("Получен запрос на остановку обновления.")
+        logging.info(tr("Получен запрос на остановку обновления."))
 
     def _process_single_mod(self, i: int, mod: Dict):
         if not self.is_running:
@@ -121,18 +121,18 @@ class UpdateWorker(QThread):
             try:
                 status = install_mod(mod, self.mods_path, self.transaction, callback, lambda: not self.is_running)
             except Exception as e:
-                logging.critical(f"Неперехваченная ошибка при обработке мода {mod.get('name')}: {e}")
+                logging.critical(tr('Неперехваченная ошибка при обработке мода {0}: {1}', mod.get('name'), e))
                 status = ModStatus.CRITICAL_ERROR
         with self._results_lock:
             self.results[i] = status
         self.progress.emit(i, status.value)
 
     def run(self):
-        logging.info(f"Запуск обновления {len(self.mods_to_update)} модов в {self.max_workers} потока.")
+        logging.info(tr('Запуск обновления {0} модов в {1} потока.', len(self.mods_to_update), self.max_workers))
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = [executor.submit(self._process_single_mod, i, mod) for i, mod in enumerate(self.mods_to_update)]
             concurrent.futures.wait(futures)
-        logging.info("Все задачи по обновлению модов завершены.")
+        logging.info(tr("Все задачи по обновлению модов завершены."))
         self.finished.emit()
 
 
@@ -154,13 +154,13 @@ class ImportWorker(QThread):
 
     def stop(self):
         self.is_running = False
-        logging.info("Получен запрос на остановку импорта.")
+        logging.info(tr("Получен запрос на остановку импорта."))
 
     def run(self):
         try:
             self.finished.emit(self._run())
         except Exception as e:
-            logging.exception(f"Ошибка импорта: {e}")
+            logging.exception(tr('Ошибка импорта: {0}', e))
             self.progress.emit(tr('Ошибка импорта: {0}', e))
             self.finished.emit([])
 
@@ -192,13 +192,13 @@ class ImportWorker(QThread):
                 try:
                     versions_map[project_id] = future.result()
                 except Exception as e:
-                    logging.error(f"Не удалось получить версию для импорта проекта {project_id}: {e}")
+                    logging.error(tr('Не удалось получить версию для импорта проекта {0}: {1}', project_id, e))
 
         mods_data = []
         for project_id in self.project_ids:
             project = projects_info.get(project_id)
             if not project:
-                logging.warning(f"Не удалось найти информацию для project_id: {project_id}")
+                logging.warning(tr('Не удалось найти информацию для project_id: {0}', project_id))
                 continue
             entry = {
                 "name": project.get('title') or project.get('slug', project_id), "project_id": project_id,
@@ -209,7 +209,7 @@ class ImportWorker(QThread):
             if apply_install_info(entry, versions_map.get(project_id)):
                 mods_data.append(entry)
             else:
-                logging.warning(f"Не найдено совместимых версий для '{entry['name']}' (ID: {project_id}).")
+                logging.warning(tr("Не найдено совместимых версий для '{0}' (ID: {1}).", entry['name'], project_id))
         return mods_data
 
 
@@ -230,13 +230,13 @@ class LoaderVersionWorker(QThread):
             return
         try:
             if parse_version(latest) > parse_version(self.current_loader_version):
-                logging.info(f"Доступно обновление загрузчика {self.loader}: {self.current_loader_version} -> {latest}")
+                logging.info(tr('Доступно обновление загрузчика {0}: {1} -> {2}', self.loader, self.current_loader_version, latest))
                 self.finished.emit(f"🔼 ({self.current_loader_version} -> {latest})", 'update', latest)
             else:
-                logging.info(f"Загрузчик {self.loader} актуален (версия {self.current_loader_version}).")
+                logging.info(tr('Загрузчик {0} актуален (версия {1}).', self.loader, self.current_loader_version))
                 self.finished.emit(f"✅ ({self.current_loader_version})", 'ok', latest)
         except InvalidVersion as e:
-            logging.error(f"Ошибка сравнения версий загрузчика: {e}")
+            logging.error(tr('Ошибка сравнения версий загрузчика: {0}', e))
             self.finished.emit(f"⚠️ ({self.current_loader_version})", 'error', latest)
 
 
@@ -255,7 +255,7 @@ class TaskWorker(QThread):
         try:
             self.succeeded.emit(self._func(*self._args, **self._kwargs))
         except Exception as e:
-            logging.error(f"Ошибка фоновой операции: {e}")
+            logging.error(tr('Ошибка фоновой операции: {0}', e))
             self.failed.emit(str(e))
 
 

@@ -4,8 +4,9 @@
     python tools/i18n_wrap.py file.py ...          — показать, сколько строк будет размечено
     python tools/i18n_wrap.py --write file.py ...  — разметить
 
-f-строки превращаются в tr("шаблон {0}", выражение). Не трогаются: docstring-и и строки-комментарии, вызовы
-logging.*, уже размеченные tr(...), функции из SKIP_FUNCS (таблица стилей) и аргументы format_spec.
+f-строки превращаются в tr("шаблон {0}", выражение). Не трогаются: docstring-и и строки-комментарии, отладочные
+сообщения logging.debug (их читает только разработчик), уже размеченные tr(...), функции из SKIP_FUNCS (таблица стилей)
+и аргументы format_spec. Остальные сообщения журнала переводятся: их видно на странице «Журнал».
 """
 import ast
 import re
@@ -15,6 +16,7 @@ from typing import List, Optional, Tuple
 CYRILLIC = re.compile("[А-Яа-яЁё]")
 SKIP_FUNCS = {"build_stylesheet"}
 SKIP_CALLS = {"logging", "logger", "log"}
+SKIP_LOG_LEVELS = {"debug"}
 
 
 def _line_offsets(source: str) -> List[int]:
@@ -64,7 +66,8 @@ class Wrapper:
                 func = ancestor.func
                 if isinstance(func, ast.Name) and func.id == "tr":
                     return True
-                if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in SKIP_CALLS:
+                if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in SKIP_CALLS \
+                        and func.attr in SKIP_LOG_LEVELS:
                     return True
             if isinstance(ancestor, ast.FormattedValue) and node is not ancestor and getattr(ancestor, "format_spec", None) \
                     and any(node is n for n in ast.walk(ancestor.format_spec)):
