@@ -43,7 +43,8 @@ jobs:
           Copy-Item "dist/Minecraft Mod Updater beta.exe" ModUpdater.exe
           Copy-Item (Get-ChildItem "Minecraft Mod Updater beta_v*.zip" | Select-Object -First 1).FullName ModUpdater.zip
           $hash = (Get-FileHash ModUpdater.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  ModUpdater.exe" | Out-File -Encoding ascii ModUpdater.exe.sha256
+          # Формат sha256sum с переводом строки \n — проверяется и программой, и `sha256sum -c`
+          [IO.File]::WriteAllText("$PWD/ModUpdater.exe.sha256", "$hash  ModUpdater.exe`n")
           python tools/release_notes.py "${{ github.ref_name }}" notes.md
 
       - name: Выпуск на GitHub
