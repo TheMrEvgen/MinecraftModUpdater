@@ -6,7 +6,7 @@ from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QSplitter, QTextBrowser, QVBoxLayout, QWidget,
+    QProgressBar, QPushButton, QSplitter, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 import icons
@@ -322,3 +322,113 @@ class MigrationDialog(FramelessDialog):
         self.disable_missing.setVisible(bool(missing))
         self.ok.setText(tr('Перейти на {0}', target))
         self.ok.setEnabled(bool(ready) and target != self._current)
+
+
+class AppUpdateDialog(FramelessDialog):
+    """Новая версия программы: что изменилось, загрузка с прогрессом. После accept() файл в downloaded_path."""
+
+    def __init__(self, parent, release, current_version: str, can_install: bool):
+        super().__init__(parent, tr("Обновление программы"), 560)
+        from workers import SelfUpdateWorker
+        self._worker_class = SelfUpdateWorker
+        self.release = release
+        self.can_install = can_install
+        self.downloaded_path: Optional[str] = None
+        self.skipped = False
+        self.worker = None
+        self.setMinimumHeight(460)
+        if release.prerelease:
+            title = tr("Доступна бета-версия {0}", release.version)
+        else:
+            title = tr("Доступна версия {0}", release.version)
+        self.body.addWidget(label(title, "SectionTitle"))
+        self.body.addWidget(label(tr("У вас установлена {0}. Настройки, сборки и моды сохранятся.", current_version), "Muted",
+                                  wrap=True))
+        notes = QTextBrowser()
+        notes.setOpenExternalLinks(True)
+        # Описание выпуска пишем сами (CHANGELOG.md), заголовки в нём уже нужного размера
+        notes.setMarkdown((release.notes or tr("_Описание выпуска не указано._"))[:60000])
+        self.body.addWidget(notes, 1)
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.hide()
+        self.progress_text = label("", "Faint", wrap=True)
+        self.progress_text.hide()
+        self.body.addWidget(self.progress)
+        self.body.addWidget(self.progress_text)
+        if not can_install:
+            self.body.addWidget(label(tr("Обновление в один клик работает в собранной программе (.exe). "
+                                         "Сейчас программа запущена из исходников — обновите их через git."),
+                                      "Faint", wrap=True))
+        self.skip_btn = self.add_button(tr("Пропустить эту версию"), False, self._skip)
+        self.later_btn = self.add_button(tr("Позже"))
+        if can_install:
+            self.install_btn = self.add_button(tr("Обновить и перезапустить"), True, self._start)
+        else:
+            self.install_btn = self.add_button(tr("Открыть страницу выпуска"), True, self._open_page)
+        self.finish_layout()
+
+    def _skip(self):
+        self.skipped = True
+        self.reject()
+
+    def _open_page(self):
+        import webbrowser
+        webbrowser.open(self.release.page_url)
+        self.reject()
+
+    def _start(self):
+        from self_update import downloads_folder
+        self.skip_btn.hide()
+        self.install_btn.setEnabled(False)
+        self.later_btn.setText(tr("Отмена"))
+        self.later_btn.clicked.disconnect()
+        self.later_btn.clicked.connect(self._cancel)
+        self.progress.setRange(0, 0)
+        self.progress.show()
+        self.progress_text.setText(tr("Скачиваем…"))
+        self.progress_text.show()
+        self.worker = self._worker_class(self.release, downloads_folder())
+        self.worker.progress.connect(self._on_progress)
+        self.worker.succeeded.connect(self._on_done)
+        self.worker.failed.connect(self._on_failed)
+        self.worker.start()
+
+    def _on_progress(self, done: int, total: int):
+        if total:
+            self.progress.setRange(0, 1000)
+            self.progress.setValue(int(done * 1000 / total))
+            self.progress_text.setText(tr("Скачано {0} из {1}", format_size(done), format_size(total)))
+        else:
+            self.progress_text.setText(tr("Скачано {0}", format_size(done)))
+
+    def _on_done(self, path: str):
+        self.downloaded_path = path
+        self.progress_text.setText(tr("Файл проверен — перезапускаем…"))
+        self.accept()
+
+    def _on_failed(self, error: str):
+        if not error:  # Отменили
+            self.reject()
+            return
+        self.progress.hide()
+        self.progress_text.setText(tr("Не удалось скачать: {0}", error))
+        self.install_btn.setEnabled(True)
+        self.install_btn.setText(tr("Повторить"))
+        self.later_btn.setText(tr("Закрыть"))
+        self.later_btn.clicked.disconnect()
+        self.later_btn.clicked.connect(self.reject)
+
+    def _cancel(self):
+        if self.worker and self.worker.isRunning():
+            self.later_btn.setEnabled(False)
+            self.progress_text.setText(tr("Отменяем…"))
+            self.worker.stop()
+        else:
+            self.reject()
+
+    def reject(self):
+        if self.worker and self.worker.isRunning():  # Закрытие крестиком во время загрузки — сначала отмена
+            self.worker.stop()
+            self.worker.wait(5000)
+        super().reject()

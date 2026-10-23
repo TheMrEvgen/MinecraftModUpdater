@@ -182,6 +182,8 @@ QComboBox::drop-down {{ border: none; width: 26px; }}
 QComboBox::down-arrow {{ image: url({check_icon.replace('/check_', '/chevron_')}); width: 12px; height: 12px; }}
 QComboBox QAbstractItemView {{ background: {t['surface2']}; border: 1px solid {t['border_strong']};
     border-radius: 8px; padding: 4px; selection-background-color: {rgba(t['accent'], 0.18)}; selection-color: {t['text']}; }}
+QProgressBar {{ background: {t['surface3']}; border: none; border-radius: 3px; max-height: 6px; min-height: 6px; }}
+QProgressBar::chunk {{ background: {t['accent']}; border-radius: 3px; }}
 QCheckBox {{ spacing: 8px; }}
 QCheckBox::indicator, QRadioButton::indicator {{ width: 16px; height: 16px; border-radius: 5px;
     border: 1.5px solid {t['border_strong']}; background: {t['surface']}; }}

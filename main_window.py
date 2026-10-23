@@ -175,6 +175,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self._refresh_sidebar()
         QTimer.singleShot(0, lambda: self._load_profile(self.current_profile_name))
         QTimer.singleShot(4000, self._offer_install)
+        QTimer.singleShot(6000, self._check_app_update)
         self._game_timer = QTimer(self, interval=2000)  # Наблюдение за игрой: запущена ли, не вылетела ли
         self._game_timer.timeout.connect(self._poll_game)
         self._game_timer.start()
@@ -237,6 +238,8 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
         self.settings_page.prune_backups_requested.connect(lambda: self._prune_backups(manual=True))
         self.settings_page.install_requested.connect(self._install_app)
         self.settings_page.uninstall_requested.connect(self._uninstall_app)
+        self.settings_page.app_update_check_requested.connect(lambda: self._check_app_update(manual=True))
+        self.settings_page.app_update_open_requested.connect(self._open_app_update)
         self.stack.addWidget(self.settings_page)
 
         self.toasts = ToastManager(root, t)
@@ -1011,6 +1014,7 @@ class ModUpdaterApp(ToolsMixin, QMainWindow):
             self.settings_page.load(self.config_theme, {**self.settings, "view_mode": self._view_mode()})
             self.settings_page.set_backup_usage(self._backup_usage_text())
             self._refresh_install_ui()
+            self._refresh_app_update_ui()
 
     def _refresh_history(self):
         if not self.mods_path:

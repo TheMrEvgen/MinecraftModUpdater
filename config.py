@@ -57,6 +57,7 @@ def default_settings() -> dict:
     return {
         "auto_check": True,          # Проверять обновления автоматически при открытии сборки
         "discover_launchers": True,  # Искать сборки Prism/Modrinth/CurseForge при запуске
+        "app_update_check": True,    # Проверять новые версии самой программы на GitHub при запуске
         "parallel_downloads": 3,
         "view_mode": "flat",           # Вид списка: flat — все моды, mine — только мои, tree — дерево зависимостей
         "expand_dependencies": False,  # В дереве зависимости раскрыты сразу

@@ -95,10 +95,14 @@ def run_gui() -> int:
     logging.info(tr("Запуск приложения Minecraft Mod Updater."))
     app = create_app()
     args = single_instance.external_args(sys.argv)
+    if single_instance.RESTART_FLAG in sys.argv:
+        single_instance.wait_for_previous()  # Перезапуск или обновление: прежняя копия ещё закрывается
     # Программа уже открыта: отдаём ей файл или ссылку и выходим
-    if single_instance.send_to_running(args or ["--activate"]):
+    elif single_instance.send_to_running(args or ["--activate"]):
         logging.info(tr("Программа уже запущена — аргументы переданы открытому окну."))
         return 0
+    import self_update
+    self_update.cleanup_old()  # Старый .exe, оставшийся после обновления программы
     import crash_handler
     crash_handler.install()  # Необработанные ошибки — в окно с отчётом, а не молчаливое падение
     from main_window import ModUpdaterApp

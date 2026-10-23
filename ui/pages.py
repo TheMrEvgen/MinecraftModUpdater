@@ -226,6 +226,8 @@ class SettingsPage(QWidget):
     import_requested = pyqtSignal()
     prune_backups_requested = pyqtSignal()
     install_requested = pyqtSignal(dict)
+    app_update_check_requested = pyqtSignal()
+    app_update_open_requested = pyqtSignal()
     uninstall_requested = pyqtSignal()
 
     def __init__(self, tokens: dict, parent=None):
@@ -499,6 +501,27 @@ class SettingsPage(QWidget):
         body.addLayout(row)
         root.addWidget(card)
 
+        # Обновление самой программы
+        card, body = self._card(tr("Обновление программы"))
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.app_update_status = label("", "Muted", wrap=True)
+        self.app_update_status.setTextFormat(Qt.TextFormat.RichText)
+        row.addWidget(self.app_update_status, 1)
+        self.app_update_open_btn = button(tr("Обновить…"), "PrimaryButton", "download", tokens, "accent_text")
+        self.app_update_open_btn.clicked.connect(self.app_update_open_requested)
+        self.app_update_open_btn.hide()
+        self.app_update_check_btn = button(tr("Проверить"), None, "refresh", tokens, "text")
+        self.app_update_check_btn.clicked.connect(self.app_update_check_requested)
+        row.addWidget(self.app_update_open_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.app_update_check_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        body.addLayout(row)
+        self.app_update_auto = QCheckBox(tr("Проверять новые версии программы при запуске"))
+        self.app_update_auto.toggled.connect(self._emit)
+        self._add_with_hint(body, self.app_update_auto,
+                            tr("Не чаще раза в 12 часов. Новая версия скачивается только по вашей команде."))
+        root.addWidget(card)
+
         # Горячие клавиши
         card, body = self._card(tr("Горячие клавиши"))
         self._hotkeys_card = card
@@ -620,6 +643,7 @@ class SettingsPage(QWidget):
         self.scale.setCurrentIndex(max(0, self.scale.findData(int(settings.get("ui_scale", 100)))))
         self.language.setCurrentIndex(max(0, self.language.findData(settings.get("language") or language())))
         self.minimal.setChecked(bool(settings.get("minimal_mode", False)))
+        self.app_update_auto.setChecked(bool(settings.get("app_update_check", True)))
         self.auto_crash.setChecked(bool(settings.get("auto_crash_analysis", True)))
         self.bisect_timeout.setCurrentIndex(max(0, self.bisect_timeout.findData(int(settings.get("auto_bisect_timeout", 5)))))
         self._sidebar_image = settings.get("sidebar_image") or ""
@@ -643,7 +667,6 @@ class SettingsPage(QWidget):
                                      "• ссылки modupdater:// — сборки и моды открываются из браузера и Discord;<br>"
                                      "• второй запуск не открывает второе окно, а передаёт файл уже открытой программе.<br><br>"
                                      "<b>Что появится в следующих версиях:</b><br>"
-                                     "• автообновление самой программы (проверка, загрузка и замена в один клик);<br>"
                                      "• проверка обновлений модов в фоне со значком в трее и уведомлениями Windows;<br>"
                                      "• кнопки «Установить в Mod Updater» по ссылкам с сайтов и из сборок друзей."))
         boxes = (self.install_desktop, self.install_mrpack, self.install_protocol)
@@ -677,6 +700,12 @@ class SettingsPage(QWidget):
             self.install_btn.setText(tr("Установить"))
             self.install_btn.show()
             self.uninstall_btn.hide()
+
+    def set_app_update_state(self, text: str, available: bool = False, checking: bool = False):
+        """Строка состояния обновления программы; «Обновить…» — когда есть новая версия."""
+        self.app_update_status.setText(text)
+        self.app_update_open_btn.setVisible(available)
+        self.app_update_check_btn.setEnabled(not checking)
 
     def set_backup_usage(self, text: str):
         self.backup_usage.setText(text)
@@ -727,6 +756,7 @@ class SettingsPage(QWidget):
                 "ui_scale": self.scale.currentData(),
                 "language": self.language.currentData(),
                 "minimal_mode": self.minimal.isChecked(),
+                "app_update_check": self.app_update_auto.isChecked(),
                 "auto_crash_analysis": self.auto_crash.isChecked(),
                 "auto_bisect_timeout": self.bisect_timeout.currentData(),
                 "sidebar_image": self._sidebar_image,

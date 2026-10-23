@@ -352,3 +352,32 @@ class IconLoader(QObject):
         self.pool.clear()
         if wait_ms:
             self.pool.waitForDone(wait_ms)
+
+
+class SelfUpdateWorker(QThread):
+    """Скачивание новой версии программы с проверкой контрольной суммы."""
+    progress = pyqtSignal(int, int)
+    succeeded = pyqtSignal(str)
+    failed = pyqtSignal(str)  # Пустая строка — загрузку отменили
+
+    def __init__(self, release, folder: str):
+        super().__init__()
+        self.release = release
+        self.folder = folder
+        self._cancelled = False
+
+    def stop(self):
+        self._cancelled = True
+
+    def run(self):
+        import self_update
+        try:
+            path = self_update.download(self.release, self.folder, self.progress.emit, lambda: self._cancelled)
+        except self_update.UpdateCancelled:
+            self.failed.emit("")
+            return
+        except Exception as e:
+            logging.error(tr('Не удалось скачать новую версию программы: {0}', e))
+            self.failed.emit(str(e))
+            return
+        self.succeeded.emit(path)

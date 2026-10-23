@@ -14,11 +14,12 @@ import time
 import sys
 from typing import Callable, Dict, List, Optional
 
-from PyQt6.QtCore import QProcess, QStringListModel, Qt
+from PyQt6.QtCore import QStringListModel, Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import QApplication, QCompleter, QFileDialog, QMenu, QMessageBox
 
 import config as app_config
+import single_instance
 from bisect_session import BisectSession
 from content import CONTENT_TYPES, MODS, enabled_name
 from crash_analysis import find_crash_files
@@ -807,10 +808,95 @@ class ToolsMixin:
         if self._busy:
             self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
             return
-        args = sys.argv[1:] if getattr(sys, "frozen", False) else [os.path.abspath(sys.argv[0])] + sys.argv[1:]
         self.save_config()
-        if QProcess.startDetached(sys.executable, args):
-            QApplication.instance().closeAllWindows()
+        try:
+            single_instance.launch_new_instance(single_instance.external_args(sys.argv))
+        except OSError as e:
+            show_message(self, QMessageBox.Icon.Critical, tr("Не удалось перезапустить"), str(e))
+            return
+        QApplication.instance().closeAllWindows()
+
+    # ================================================================== Обновление программы
+
+    def _refresh_app_update_ui(self, checking: bool = False):
+        release = getattr(self, "_app_release", None)
+        current = app_config.APP_VERSION
+        if checking:
+            text = tr("Версия {0} · проверяем…", current)
+        elif release:
+            text = tr("Версия {0} · <span style='color:{1}'><b>доступна {2}</b></span>", current, self.tokens["accent"],
+                      release.version)
+        elif self.settings.get("app_update_last_check"):
+            text = tr("Версия {0} · это последняя версия", current)
+        else:
+            text = tr("Версия {0}", current)
+        self.settings_page.set_app_update_state(text, available=bool(release) and not checking, checking=checking)
+
+    def _check_app_update(self, manual: bool = False):
+        """Новая версия программы на GitHub. Автоматически — при запуске, не чаще раза в 12 часов."""
+        import self_update
+        if not manual:
+            known = self_update.parse_version(self.settings.get("app_update_latest") or "")
+            current = self_update.parse_version(app_config.APP_VERSION)
+            newer_known = bool(known and current and known > current)  # Уже находили — напомним без ожидания
+            if not self.settings.get("app_update_check", True) or \
+                    not (newer_known or self_update.needs_check(self.settings.get("app_update_last_check"))):
+                return
+        self._refresh_app_update_ui(checking=True)
+        self._run_task(self_update.check, (), lambda release: self._on_app_update(release, manual),
+                       lambda error: self._on_app_update_failed(error, manual), None)
+
+    def _on_app_update(self, release, manual: bool):
+        self.settings["app_update_last_check"] = time.time()
+        self.settings["app_update_latest"] = release.version if release else ""
+        self.save_config()
+        self._app_release = release
+        self._refresh_app_update_ui()
+        if release is None:
+            if manual:
+                self.toasts.show(tr("У вас последняя версия программы."), "success")
+            return
+        if manual:
+            self._open_app_update()
+        elif self.settings.get("app_update_skip") != release.version:
+            self.toasts.show(tr("Доступна новая версия программы: {0}", release.version), "info", tr("Подробнее"),
+                             self._open_app_update, timeout=15000)
+
+    def _on_app_update_failed(self, error: str, manual: bool):
+        self._refresh_app_update_ui()
+        if manual:
+            self.toasts.show(tr("Не удалось проверить обновления программы: {0}", error), "warning")
+
+    def _open_app_update(self):
+        import self_update
+        from ui.dialogs import AppUpdateDialog
+        release = getattr(self, "_app_release", None)
+        if release is None:
+            return
+        if self._busy:
+            self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
+            return
+        dialog = AppUpdateDialog(self, release, app_config.APP_VERSION, self_update.supported())
+        accepted = dialog.exec()
+        if dialog.skipped:
+            self.settings["app_update_skip"] = release.version
+            self.save_config()
+            self.toasts.show(tr("Версия {0} пропущена — напомним о следующей.", release.version), "info")
+        elif accepted and dialog.downloaded_path:
+            self._install_app_update(dialog.downloaded_path)
+
+    def _install_app_update(self, path: str):
+        """Ставит скачанный .exe вместо текущего и перезапускает программу."""
+        import self_update
+        if self._busy:
+            self.toasts.show(tr("Дождитесь окончания текущей операции и обновите программу снова."), "warning")
+            return
+        try:
+            self_update.replace_executable(path, self_update.current_executable())
+        except OSError as e:
+            show_message(self, QMessageBox.Icon.Critical, tr("Не удалось обновить программу"), str(e))
+            return
+        self._restart_app()
 
     # ================================================================== Установка и внешние ссылки
 
@@ -843,8 +929,12 @@ class ToolsMixin:
             if confirm(self, tr("Программа установлена"), text + tr("\n\nЗапустить установленную копию и закрыть эту?"),
                        tr("Запустить"), tr("Позже")):
                 self.save_config()
-                if QProcess.startDetached(state.exe, []):
-                    QApplication.instance().closeAllWindows()
+                try:
+                    single_instance.launch_new_instance(executable=state.exe)
+                except OSError as e:
+                    show_message(self, QMessageBox.Icon.Critical, tr("Не удалось запустить"), str(e))
+                    return
+                QApplication.instance().closeAllWindows()
         else:
             show_message(self, QMessageBox.Icon.Information, tr("Настройки установки применены"), text)
 
