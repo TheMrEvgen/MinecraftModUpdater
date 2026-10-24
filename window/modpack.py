@@ -245,9 +245,39 @@ class ModpackMixin:
         self.game_version = target
         self._update_header()
         self._refresh_sidebar()
+        old_loader_version = self.current_loader_version
         self.start_update(to_install, UpdateTransaction(self.mods_path, "migrate"))
+        if self._launcher_pack():
+            # Сборка Prism/MultiMC: версию игры и загрузчика меняем в самом лаунчере
+            if confirm(self, tr("Версия в лаунчере"),
+                       tr("Моды обновляются под Minecraft {0}.\n\nСменить версию игры и загрузчика на {0} и в сборке "
+                          "{1}? Файл сборки лаунчера сохраняется — это можно отменить.", target, self._launcher_title())
+                       + self._launcher_warning(), tr("Сменить"), tr("Сам в лаунчере")):
+                self._migrate_launcher_pack(target, old_version, old_loader_version)
+                return
         show_message(self, QMessageBox.Icon.Information, tr("Не забудьте про лаунчер"),
                      tr('Моды обновляются под Minecraft {0}.\n\nСмените версию игры и загрузчика на {1} в лаунчере (в Prism: «Изменить» → «Версия»). Вернуть всё как было можно на странице «История» — там сохранён снимок сборки под {2}.', target, target, old_version))
+
+    def _migrate_launcher_pack(self, target: str, old_version: str, old_loader_version: Optional[str]):
+        """Версия игры, LWJGL и загрузчик в mmc-pack.json — в фоне (нужны справочники Prism и загрузчика)."""
+        import launcher_pack
+        from mod_updater_logic import get_latest_loader_version
+        path, loader = self._launcher_pack(), self.loader
+
+        def work():
+            loader_version = get_latest_loader_version(loader, target) if loader else None
+            return launcher_pack.set_game_version(path, target, loader, loader_version), loader_version
+
+        def done(result):
+            backup, loader_version = result
+            self._after_launcher_change(game_version=target, loader_version=loader_version)
+            self.toasts.show(tr("В {0}: Minecraft {1}{2}.", self._launcher_title(), target,
+                                f", {loader} {loader_version}" if loader_version else ""), "success", tr("Отменить"),
+                             lambda: self._undo_launcher_change(path, backup, old_version, old_loader_version), timeout=15000)
+
+        self._run_task(work, (), done,
+                       lambda e: show_message(self, QMessageBox.Icon.Warning, tr("Не удалось сменить версию в лаунчере"),
+                                              tr("{0}\n\nСмените версию на {1} в лаунчере вручную.", e, target)), None)
 
     # ================================================================== Готовность к новой версии Minecraft
 

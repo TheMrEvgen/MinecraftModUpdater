@@ -265,9 +265,69 @@ class ProfilesMixin:
     def _on_loader_chip_clicked(self):
         if self.latest_loader_version and self.current_loader_version and \
                 self._is_newer(self.latest_loader_version, self.current_loader_version):
-            self.toasts.show(tr('Доступен {0} {1} (у вас {2}). Загрузчик обновляется в лаунчере.', LOADER_TITLES.get(self.loader, self.loader), self.latest_loader_version, self.current_loader_version), "info", timeout=8000)
+            if self._launcher_pack():
+                self._update_loader_in_launcher()
+            else:
+                self.toasts.show(tr('Доступен {0} {1} (у вас {2}). Загрузчик обновляется в лаунчере.', LOADER_TITLES.get(self.loader, self.loader), self.latest_loader_version, self.current_loader_version), "info", timeout=8000)
         else:
             self._edit_current_profile()
+
+    # --- Сборка Prism Launcher / MultiMC: версии меняем в самом лаунчере ---
+
+    def _launcher_pack(self) -> Optional[str]:
+        import launcher_pack
+        return launcher_pack.pack_file(self._profile().get("mods_path", ""))
+
+    def _launcher_title(self) -> str:
+        return {"prism": "Prism Launcher", "multimc": "MultiMC"}.get(self._profile().get("source"), "Prism Launcher")
+
+    def _launcher_warning(self) -> str:
+        import launcher_pack
+        return (tr("\n\n⚠ {0} сейчас открыт — закройте его, иначе при сохранении сборки он может вернуть прежние версии.",
+                   self._launcher_title()) if launcher_pack.launcher_running() else "")
+
+    def _update_loader_in_launcher(self):
+        import launcher_pack
+        loader_title = LOADER_TITLES.get(self.loader, self.loader)
+        old, new = self.current_loader_version, self.latest_loader_version
+        if not confirm(self, tr("Обновить загрузчик"),
+                       tr("Обновить {0} {1} → {2} в сборке {3}?\n\nФайл сборки лаунчера сохраняется — изменение можно "
+                          "отменить.", loader_title, old, new, self._launcher_title()) + self._launcher_warning(),
+                       tr("Обновить"), tr("Отмена")):
+            return
+        path = self._launcher_pack()
+        try:
+            backup = launcher_pack.set_loader_version(path, self.loader, new)
+        except (OSError, ValueError) as e:
+            show_message(self, QMessageBox.Icon.Critical, tr("Не удалось обновить загрузчик"), str(e))
+            return
+        self._after_launcher_change(game_version=None, loader_version=new)
+        self.toasts.show(tr("{0} обновлён до {1} в {2}.", loader_title, new, self._launcher_title()), "success",
+                         tr("Отменить"), lambda: self._undo_launcher_change(path, backup, None, old), timeout=12000)
+
+    def _after_launcher_change(self, game_version: Optional[str], loader_version: Optional[str]):
+        profile = self._profile()
+        if game_version:
+            profile["game_version"] = game_version
+            self.game_version = game_version
+        if loader_version:
+            profile["loader_version"] = loader_version
+            self.current_loader_version = loader_version
+            self.latest_loader_version = None
+        self.save_config()
+        self._update_header()
+        self._refresh_sidebar()
+        self._start_loader_check()
+
+    def _undo_launcher_change(self, path: str, backup: str, game_version: Optional[str], loader_version: Optional[str]):
+        import launcher_pack
+        try:
+            launcher_pack.restore(path, backup)
+        except OSError as e:
+            show_message(self, QMessageBox.Icon.Critical, tr("Не удалось вернуть"), str(e))
+            return
+        self._after_launcher_change(game_version, loader_version)
+        self.toasts.show(tr("Версии в сборке лаунчера возвращены."), "info")
 
     def _show_channel_menu(self):
         menu = QMenu(self)
