@@ -32,7 +32,7 @@ CRASH_MARKERS = ("---- Minecraft Crash Report ----", "Minecraft has crashed", "I
 
 # Лаунчеры по полю source профиля
 LAUNCHER_TITLES = {"prism": "Prism Launcher", "multimc": "MultiMC", "modrinth": "Modrinth App",
-                   "curseforge": "CurseForge", "official": "Minecraft Launcher"}
+                   "curseforge": "CurseForge", "official": "Minecraft Launcher", "legacy": "Legacy Launcher"}
 
 
 @dataclass
@@ -111,6 +111,10 @@ def launch_plan(profile: dict) -> Optional[LaunchPlan]:
         exe = find_curseforge_exe()
         if exe:
             return LaunchPlan([exe], LAUNCHER_TITLES[source], False)
+    if source == "legacy":
+        exe = find_legacy_exe()
+        if exe:  # Запустить сразу нужную версию Legacy Launcher из командной строки не умеет — открываем его
+            return LaunchPlan([exe], LAUNCHER_TITLES[source], False)
     if source == "official" or (source == "manual" and sys.platform == "win32"):
         exe = find_official_launcher()
         if exe:
@@ -118,6 +122,17 @@ def launch_plan(profile: dict) -> Optional[LaunchPlan]:
         if sys.platform == "win32" and source == "official":  # Лаунчер из Microsoft Store
             return LaunchPlan(["explorer.exe", r"shell:AppsFolder\Microsoft.4297127D64EC6_8wekyb3d8bbwe!Minecraft"],
                               LAUNCHER_TITLES["official"], False)
+    return None
+
+
+def find_legacy_exe() -> Optional[str]:
+    """Legacy Launcher: исполняемый файл в папке установки (у установщика он называется TL.exe)."""
+    from launchers import find_legacy_installs
+    for folder in find_legacy_installs():
+        for name in ("TL.exe", "Legacy Launcher.exe", "LegacyLauncher.exe"):
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                return path
     return None
 
 

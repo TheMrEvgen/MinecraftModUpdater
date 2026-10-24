@@ -6,12 +6,13 @@ import configparser
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from game_detection import detect_game_versions, extract_loader_version
+from game_detection import detect_game_versions, extract_game_version, extract_loader, extract_loader_version
 from i18n import tr
 
 # uid компонентов Prism/MultiMC -> загрузчик
@@ -29,6 +30,7 @@ SOURCE_LABELS = {
     "multimc": "MultiMC",
     "modrinth": "Modrinth App",
     "curseforge": "CurseForge",
+    "legacy": "Legacy Launcher",
 }
 
 
@@ -202,6 +204,93 @@ def find_official_instance(game_dir: str) -> List[Instance]:
     return [instance]
 
 
+# --- Legacy Launcher (legacylauncher.ru; не путать с TLauncher) ---
+
+def find_legacy_installs() -> List[str]:
+    """Папки установки Legacy Launcher из «Установки и удаления программ» (издатель «Legacy Launcher Team»)."""
+    if sys.platform != "win32":
+        return []
+    import winreg
+    result = []
+    roots = ((winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+             (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+             (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"))
+    for hive, path in roots:
+        try:
+            with winreg.OpenKey(hive, path) as key:
+                for i in range(winreg.QueryInfoKey(key)[0]):
+                    values = {}
+                    try:
+                        with winreg.OpenKey(key, winreg.EnumKey(key, i)) as app:
+                            for name in ("DisplayName", "Publisher", "InstallLocation"):
+                                try:
+                                    values[name] = str(winreg.QueryValueEx(app, name)[0])
+                                except OSError:
+                                    values[name] = ""
+                    except OSError:
+                        continue
+                    is_legacy = "legacy launcher" in values["DisplayName"].lower() \
+                        or values["Publisher"] == "Legacy Launcher Team"
+                    if is_legacy and values["InstallLocation"] and os.path.isdir(values["InstallLocation"]):
+                        result.append(os.path.normpath(values["InstallLocation"]))
+        except OSError:
+            continue
+    return list(dict.fromkeys(result))
+
+
+def read_properties(path: str) -> Dict[str, str]:
+    r"""Файл .properties (Java): «ключ=значение» с экранированием «\:», «\\» и \uXXXX."""
+    result = {}
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return result
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith(("#", "!")) or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        value = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), value.strip())
+        result[key.strip()] = re.sub(r"\\(.)", r"\1", value)
+    return result
+
+
+def _legacy_versions(game_dir: str, version_id: str) -> tuple:
+    """(версия игры, загрузчик, версия загрузчика) по выбранной в лаунчере версии или по папке versions."""
+    data = _read_json(os.path.join(game_dir, "versions", version_id, f"{version_id}.json")) if version_id else None
+    if isinstance(data, dict):
+        loader = extract_loader(version_id)
+        return extract_game_version(data), loader, extract_loader_version(loader, version_id) if loader else None
+    detected = detect_game_versions(game_dir)
+    if detected.best_guess:
+        game, loader = detected.best_guess
+        return game, loader, extract_loader_version(loader, detected.best_guess_id or "")
+    return None, None, None
+
+
+def find_legacy_instances(appdata: Optional[str] = None, installs: Optional[List[str]] = None) -> List[Instance]:
+    r"""Папка игры Legacy Launcher: из tl.properties рядом с лаунчером или %APPDATA%\.tlauncher\legacy.properties."""
+    appdata = appdata or _appdata()
+    configs = [os.path.join(d, "tl.properties") for d in (find_legacy_installs() if installs is None else installs)]
+    configs.append(os.path.join(appdata, ".tlauncher", "legacy.properties"))
+    configs = sorted((c for c in configs if os.path.isfile(c)), key=os.path.getmtime, reverse=True)
+    result, seen = [], set()
+    for config in configs:  # Самая свежая настройка — первой
+        props = read_properties(config)
+        game_dir = props.get("minecraft.gamedir") or os.path.join(appdata, ".minecraft")
+        key = os.path.normcase(os.path.normpath(game_dir))
+        if key in seen or not os.path.isdir(game_dir):
+            continue
+        seen.add(key)
+        version_id = props.get("login.version", "")
+        game, loader, loader_version = _legacy_versions(game_dir, "" if version_id.startswith("latest") else version_id)
+        name = "Legacy Launcher" if not result else f"Legacy Launcher ({os.path.basename(game_dir)})"
+        result.append(Instance(name=name, game_dir=game_dir, source="legacy", game_version=game, loader=loader,
+                               loader_version=loader_version))
+    return result
+
+
 def discover_instances() -> List[Instance]:
     """Находит установки во всех известных лаунчерах. Ошибки одного лаунчера не мешают остальным."""
     appdata = _appdata()
@@ -214,6 +303,7 @@ def discover_instances() -> List[Instance]:
         lambda: find_modrinth_instances(os.path.join(appdata, "ModrinthApp")),
         lambda: find_modrinth_instances(os.path.join(appdata, "com.modrinth.theseus")),
         lambda: find_curseforge_instances(os.path.join(home, "curseforge", "minecraft", "Instances")),
+        lambda: find_legacy_instances(appdata),
     ]
     result: List[Instance] = []
     seen = set()

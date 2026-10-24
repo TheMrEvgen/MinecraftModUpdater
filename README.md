@@ -10,7 +10,7 @@ rollback. Switch the language in Settings → Appearance → «Язык / Langua
 ## Возможности
 
 **Сборки**
-- Сборки из Prism Launcher, MultiMC, Modrinth App, CurseForge и официального лаунчера находятся автоматически,
+- Сборки из Prism Launcher, MultiMC, Modrinth App, CurseForge, Legacy Launcher и официального лаунчера находятся автоматически,
   любую папку игры или сервера можно добавить вручную.
 - Моды, шейдеры и ресурспаки — на отдельных вкладках.
 - Группы сборок, клонирование, сравнение двух сборок.

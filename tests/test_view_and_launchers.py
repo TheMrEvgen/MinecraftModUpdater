@@ -157,3 +157,25 @@ def test_proxy_tree_expand_and_filter():
     assert names() == ["Alpha", "Cloth"]  # Найденная зависимость видна вместе со своим модом
     proxy.set_filter(category=CAT_UPDATES, query="")
     assert names() == ["Beta"]
+
+
+def test_legacy_launcher_config(tmp_path):
+    import json
+
+    from launchers import find_legacy_instances, read_properties
+    install = tmp_path / "Legacy"
+    install.mkdir()
+    game = tmp_path / "game dir"
+    version = "fabric-loader-0.18.4-1.21.11"
+    (game / "versions" / version).mkdir(parents=True)
+    (game / "mods").mkdir()
+    (game / "versions" / version / f"{version}.json").write_text(json.dumps(
+        {"id": version, "inheritsFrom": "1.21.11", "libraries": []}), encoding="utf-8")
+    escaped = str(game).replace("\\", "\\\\").replace(":", "\:")
+    (install / "tl.properties").write_text(f"#comment\nminecraft.gamedir={escaped}\nlogin.version={version}\n"
+                                           "minecraft.gamedir.separate=none\n", encoding="utf-8")
+    assert read_properties(str(install / "tl.properties"))["minecraft.gamedir"] == str(game)
+    found = find_legacy_instances(appdata=str(tmp_path / "appdata"), installs=[str(install)])
+    assert len(found) == 1 and found[0].source == "legacy" and found[0].game_dir == str(game)
+    assert (found[0].game_version, found[0].loader, found[0].loader_version) == ("1.21.11", "fabric", "0.18.4")
+    assert find_legacy_instances(appdata=str(tmp_path / "appdata"), installs=[]) == []
