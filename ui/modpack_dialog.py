@@ -1,18 +1,19 @@
 """Окно установки готовой сборки из каталога: что внутри, куда ставить, загрузка с прогрессом."""
 from typing import Dict, Optional
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QButtonGroup, QFileDialog, QHBoxLayout, QLineEdit, QProgressBar, QRadioButton
 
 import modpack_install
 from i18n import tr
 from ui.dialogs import FramelessDialog
 from ui.widgets import button, label
+from workers import SafeThread
 
 LOADER_TITLES = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge", "quilt": "Quilt"}
 
 
-class _Worker(QThread):
+class _Worker(SafeThread):
     """Шаг 1 (prepare): скачать файл сборки и прочитать её. Шаг 2 (install): поставить в выбранное место."""
     progress = pyqtSignal(int, int, str)
     prepared = pyqtSignal(object)

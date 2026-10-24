@@ -21,7 +21,24 @@ from updater import UpdateTransaction, install_mod
 from i18n import tr
 
 
-class ScanWorker(QThread):
+_RUNNING: set = set()  # Запущенные потоки: ссылка живёт, пока поток действительно не завершится
+
+
+class SafeThread(QThread):
+    """
+    Поток, который не уничтожается раньше времени. Результат поток отправляет сигналом изнутри run(), и окно
+    в ответ часто «забывает» его (worker = None). Если в этот момент run() ещё не вышел, Python удаляет объект —
+    и Qt аварийно закрывает программу: «QThread: Destroyed while thread is still running». Поэтому ссылку держим
+    до встроенного сигнала finished — он приходит, только когда поток полностью завершился.
+    """
+
+    def start(self, *args):
+        _RUNNING.add(self)
+        self.finished.connect(lambda: _RUNNING.discard(self))
+        super().start(*args)
+
+
+class ScanWorker(SafeThread):
     """Сканирование модов и проверка обновлений. finished(None) означает отмену."""
     finished = pyqtSignal(object)
     progress = pyqtSignal(str)
@@ -55,7 +72,7 @@ class ScanWorker(QThread):
         logging.info(tr("Получен запрос на остановку сканирования."))
 
 
-class LocalScanWorker(QThread):
+class LocalScanWorker(SafeThread):
     """Быстрое локальное сканирование без сети. finished(None) означает отмену."""
     finished = pyqtSignal(object)
 
@@ -79,7 +96,7 @@ class LocalScanWorker(QThread):
         self.is_running = False
 
 
-class UpdateWorker(QThread):
+class UpdateWorker(SafeThread):
     """Скачивание и установка модов. Все изменения записываются в транзакцию для отката."""
     finished = pyqtSignal()
     progress = pyqtSignal(int, str)  # индекс мода, статус
@@ -136,7 +153,7 @@ class UpdateWorker(QThread):
         self.finished.emit()
 
 
-class ImportWorker(QThread):
+class ImportWorker(SafeThread):
     """Получение информации о модах из импортированного списка. finished(None) означает отмену."""
     finished = pyqtSignal(object)
     progress = pyqtSignal(str)
@@ -213,7 +230,7 @@ class ImportWorker(QThread):
         return mods_data
 
 
-class LoaderVersionWorker(QThread):
+class LoaderVersionWorker(SafeThread):
     """Проверка версии загрузчика."""
     finished = pyqtSignal(str, str, str)  # сообщение, ключ цвета ('ok', 'update', 'error'), последняя версия
 
@@ -240,7 +257,7 @@ class LoaderVersionWorker(QThread):
             self.finished.emit(f"⚠️ ({self.current_loader_version})", 'error', latest)
 
 
-class TaskWorker(QThread):
+class TaskWorker(SafeThread):
     """Универсальный поток для одиночной блокирующей операции (сетевой запрос и т.п.)."""
     succeeded = pyqtSignal(object)
     failed = pyqtSignal(str)
@@ -358,7 +375,7 @@ class IconLoader(QObject):
             self.pool.waitForDone(wait_ms)
 
 
-class SelfUpdateWorker(QThread):
+class SelfUpdateWorker(SafeThread):
     """Скачивание новой версии программы с проверкой контрольной суммы."""
     progress = pyqtSignal(int, int)
     succeeded = pyqtSignal(str)
@@ -387,7 +404,7 @@ class SelfUpdateWorker(QThread):
         self.succeeded.emit(path)
 
 
-class BackgroundCheckWorker(QThread):
+class BackgroundCheckWorker(SafeThread):
     """Фоновая проверка обновлений модов во всех сборках (для трея)."""
     finished_with = pyqtSignal(list)
 
