@@ -18,7 +18,7 @@ from mod_updater_logic import format_date
 from query import Query, is_abandoned, parse_query
 from view_model import (
     CAT_ALL, DEP_TYPE_LABELS, GROUP_TITLES, entry_key, entry_tags, format_size, group_of, matches_category,
-    side_tag, status_of, status_sort_key, status_style, subtitle_for, update_date,
+    side_tag, status_of, status_sort_key, status_style, subtitle_for, update_date, waiting_days,
 )
 from i18n import tr
 
@@ -272,6 +272,7 @@ class ModDelegate(QStyledItemDelegate):
         self.groups = False    # Заголовки групп («Обновления», «Актуальные»…)
         self.columns = set(DEFAULT_COLUMNS)
         self.abandoned_hint = True  # Пометка «давно не обновлялся»
+        self.min_age_days = 0.0  # «Ставить версии не раньше чем через N дней»
         self.is_expanded: Callable[[Dict], bool] = lambda entry: False
         self.anim: Dict[object, float] = {}  # Раскрытие дерева: ключ мода -> доля высоты его зависимостей (0..1)
         base = view.font()
@@ -519,6 +520,9 @@ class ModDelegate(QStyledItemDelegate):
         badges = []
         if entry.get("source") == "curseforge":
             badges.append((None, "CurseForge", t["text_muted"]))
+        wait = waiting_days(entry, self.min_age_days)
+        if wait and status_of(entry) == ModStatus.UPDATE_AVAILABLE:
+            badges.append((None, tr("ждёт {0} дн.", wait), t["text_muted"]))
         if entry.get("_pinned"):
             badges.append(("lock", "", t["text_muted"]))
         if entry.get("_note"):

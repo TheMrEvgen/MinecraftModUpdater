@@ -37,9 +37,11 @@ def resolve_versions(profile: Dict, game_version: Optional[str] = None,
     return game_version or found_version, loader or found_loader
 
 
-def collect_updates(mods_data: List[Dict], include_deps: bool, pinned: Iterable[str] = ()) -> List[Dict]:
-    """Моды, которые поставит «Обновить все»: обновления (и недостающие зависимости), кроме закреплённых и выключенных."""
-    from view_model import pin_key
+def collect_updates(mods_data: List[Dict], include_deps: bool, pinned: Iterable[str] = (),
+                    min_age_days: float = 0) -> List[Dict]:
+    """Моды, которые поставит «Обновить все»: обновления (и недостающие зависимости), кроме закреплённых, выключенных
+    и слишком свежих (min_age_days — «ставить версии не раньше чем через N дней»)."""
+    from view_model import pin_key, waiting_days
     pinned = set(pinned)
     statuses = {ModStatus.UPDATE_AVAILABLE, ModStatus.READY_TO_INSTALL}
     if include_deps:
@@ -49,13 +51,14 @@ def collect_updates(mods_data: List[Dict], include_deps: bool, pinned: Iterable[
         for entry in [mod] + mod.get('dependencies', []):
             pid = entry.get('project_id')
             if (pid and pid not in result and entry.get('download_url') and entry.get('status') in statuses
-                    and not entry.get('disabled') and pin_key(entry) not in pinned):
+                    and not entry.get('disabled') and pin_key(entry) not in pinned
+                    and not waiting_days(entry, min_age_days)):
                 result[pid] = entry
     return list(result.values())
 
 
 def check_profile(name: str, profile: Dict, cache_file: Optional[str] = None,
-                  is_cancelled: Callable[[], bool] = lambda: False) -> Optional[ProfileUpdates]:
+                  is_cancelled: Callable[[], bool] = lambda: False, min_age_days: float = 0) -> Optional[ProfileUpdates]:
     """Обновления модов одной сборки; None — сборку проверить нельзя (нет папки, версии игры)."""
     from scanner import scan_mods
     mods_path = MODS.path(profile.get("mods_path") or "")
@@ -67,7 +70,8 @@ def check_profile(name: str, profile: Dict, cache_file: Optional[str] = None,
     channel = UpdateChannel.from_value(profile.get("channel"), app_config.DEFAULT_CHANNEL)
     mods_data = scan_mods(mods_path, game_version, loader, cache_file or app_config.CACHE_FILE, channel,
                           is_cancelled=is_cancelled)
-    updates = [u for u in collect_updates(mods_data, include_deps=False, pinned=profile.get("pinned") or {})
+    updates = [u for u in collect_updates(mods_data, include_deps=False, pinned=profile.get("pinned") or {},
+                                          min_age_days=min_age_days)
                if u.get("status") == ModStatus.UPDATE_AVAILABLE]
     return ProfileUpdates(name, updates)
 
@@ -76,11 +80,12 @@ def check_all(config: Dict, cache_file: Optional[str] = None,
               is_cancelled: Callable[[], bool] = lambda: False) -> List[ProfileUpdates]:
     """Все сборки по очереди. Ошибка одной сборки не мешает остальным."""
     results = []
+    min_age = float((config.get("settings") or {}).get("update_min_age_days", 0) or 0)
     for name, profile in (config.get("profiles") or {}).items():
         if is_cancelled():
             break
         try:
-            result = check_profile(name, profile, cache_file, is_cancelled)
+            result = check_profile(name, profile, cache_file, is_cancelled, min_age)
         except Exception as e:  # Сеть, битая папка — пропускаем сборку, остальные проверяем
             if is_cancelled():
                 break

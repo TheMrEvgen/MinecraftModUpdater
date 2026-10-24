@@ -144,7 +144,8 @@ def run(argv: List[str]) -> int:
     mods_data = scan_mods(mods_path, game_version, loader, app_config.CACHE_FILE, channel,
                           progress=lambda msg: logging.info(msg), content=content)
     pinned = set(profile.get("pinned") or {})
-    updates = collect_updates(mods_data, include_deps=not args.no_deps, pinned=pinned)
+    updates = collect_updates(mods_data, include_deps=not args.no_deps, pinned=pinned,
+                              min_age_days=float(cfg["settings"].get("update_min_age_days", 0) or 0))
     skipped = [m['name'] for m in mods_data if m.get('download_url') and (m.get('disabled') or m.get('project_id') in pinned)]
     if skipped:
         _print(tr('Пропущены (закреплены или выключены): {0}', ', '.join(skipped)))

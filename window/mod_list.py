@@ -16,7 +16,7 @@ from ui.widgets import button, make_action
 from view_model import (
     CAT_ALL, CAT_DISABLED, CAT_INSTALL, CAT_NOT_FOUND, CAT_PROBLEMS, CAT_UPDATES, VIEW_FLAT, VIEW_MODES, VIEW_TREE,
     build_rows, category_counts, collect_tags, entry_key, format_size, is_updatable, iter_all_entries, pin_key,
-    status_of,
+    status_of, waiting_days,
 )
 from window.common import ANIMATION_MS, BULK_STATUSES, PAGE_MODS
 
@@ -149,7 +149,9 @@ class ModListMixin:
         self.selection_bar.update_btn.setEnabled(not busy and self.selection_bar.update_btn.isEnabled())
 
     def _bulk_candidates(self) -> List[dict]:
-        return [e for e in self.model.items() if is_updatable(e) and status_of(e) in BULK_STATUSES]
+        min_age = float(self.settings.get("update_min_age_days", 0) or 0)
+        return [e for e in self.model.items() if is_updatable(e) and status_of(e) in BULK_STATUSES
+                and not waiting_days(e, min_age)]  # Слишком свежие версии ждут (вручную поставить можно)
 
     def _refresh_tag_combo(self):
         current = self.tag_combo.currentData()
@@ -301,6 +303,7 @@ class ModListMixin:
         self.delegate.groups = bool(self.settings.get("group_by_status", True))
         self.delegate.columns = set(self.settings.get("columns") or ())
         self.delegate.abandoned_hint = bool(self.settings.get("abandoned_warning", True))
+        self.delegate.min_age_days = float(self.settings.get("update_min_age_days", 0) or 0)
         self.details.show_abandoned = self.delegate.abandoned_hint
         # Умолчание раскрытия применяем только при смене настройки, чтобы не сбрасывать «Раскрыть все» из меню строки
         expand = bool(self.settings.get("expand_dependencies", False))

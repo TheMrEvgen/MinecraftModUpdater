@@ -83,6 +83,32 @@ def is_updatable(entry: Dict) -> bool:
     return bool(entry.get("download_url")) and not entry.get("_pinned") and not entry.get("disabled")
 
 
+def new_version_age_days(entry: Dict) -> Optional[float]:
+    """Сколько дней назад вышла предлагаемая версия (None — дата неизвестна)."""
+    import datetime
+    published = (entry.get("_latest_info") or {}).get("date_published")
+    if not published:
+        return None
+    try:
+        then = datetime.datetime.fromisoformat(str(published).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=datetime.timezone.utc)
+    return (datetime.datetime.now(datetime.timezone.utc) - then).total_seconds() / 86400
+
+
+def waiting_days(entry: Dict, min_age_days: float) -> int:
+    """Сколько дней ещё ждать обновлению («Ставить версии не раньше чем через N дней»); 0 — ждать не нужно.
+    Касается только обновлений установленных модов: недостающие зависимости ставятся сразу."""
+    if not min_age_days or not entry.get("filepath") or not entry.get("download_url"):
+        return 0
+    age = new_version_age_days(entry)
+    if age is None or age >= min_age_days:
+        return 0
+    return max(1, int(min_age_days - age + 0.999))
+
+
 def iter_all_entries(mods_data: List[Dict]) -> Iterator[Dict]:
     for mod in mods_data:
         yield mod

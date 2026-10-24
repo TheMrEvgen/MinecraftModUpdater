@@ -333,7 +333,8 @@ class ProfilesMixin:
                          "success" if added else "info")
 
     def _on_settings_changed(self, settings: dict):
-        view_keys = ("view_mode", "compact_rows", "expand_dependencies", "group_by_status", "columns", "abandoned_warning")
+        view_keys = ("view_mode", "compact_rows", "expand_dependencies", "group_by_status", "columns", "abandoned_warning",
+                     "update_min_age_days")
         view_changed = any(self.settings.get(k) != settings.get(k) for k in view_keys if k in settings)
         accent_changed = settings.get("accent") != self.settings.get("accent") or \
             settings.get("sidebar_image") != self.settings.get("sidebar_image")

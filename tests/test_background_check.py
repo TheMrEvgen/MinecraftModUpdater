@@ -39,7 +39,7 @@ def test_collect_updates_skips_pinned_and_disabled():
 
 
 def test_check_all_survives_broken_profile(monkeypatch):
-    def fake(name, profile, cache_file=None, is_cancelled=lambda: False):
+    def fake(name, profile, cache_file=None, is_cancelled=lambda: False, min_age_days=0):
         if name == "broken":
             raise OSError("диск отвалился")
         return None if name == "no-folder" else ProfileUpdates(name, [update("x", "1")])
@@ -53,3 +53,20 @@ def test_check_all_survives_broken_profile(monkeypatch):
 def test_check_profile_without_folder(tmp_path):
     assert background_check.check_profile("Пусто", {"mods_path": ""}) is None
     assert background_check.check_profile("Нет папки", {"mods_path": str(tmp_path / "missing")}) is None
+
+
+def test_min_age_holds_back_fresh_versions():
+    import datetime
+    from view_model import waiting_days
+
+    def published(days_ago):
+        return (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_ago)).isoformat()
+
+    fresh = {**update("fresh", "2"), "filepath": "/mods/fresh.jar", "_latest_info": {"date_published": published(1)}}
+    mature = {**update("mature", "2"), "filepath": "/mods/mature.jar", "_latest_info": {"date_published": published(10)}}
+    dep = {**update("dep", "1"), "status": ModStatus.REQUIRED, "_latest_info": {"date_published": published(0)}}
+    assert waiting_days(fresh, 7) == 6 and waiting_days(mature, 7) == 0
+    assert waiting_days(fresh, 0) == 0  # Выключено — ждать не нужно
+    assert waiting_days(dep, 7) == 0  # Недостающая зависимость (не установлена) — ставится сразу
+    ids = {u["project_id"] for u in background_check.collect_updates([fresh, mature, dep], include_deps=True, min_age_days=7)}
+    assert ids == {"mature", "dep"}

@@ -102,7 +102,7 @@ class TrayMixin:
             if manual:
                 self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
             return  # Не мешаем обновлению и игре — проверим на следующем такте
-        config = {"profiles": copy.deepcopy(self.profiles)}
+        config = {"profiles": copy.deepcopy(self.profiles), "settings": dict(self.settings)}
         self._bg_worker = BackgroundCheckWorker(config)
         self._bg_worker.finished_with.connect(lambda results: self._on_background_checked(results, manual))
         if self.tray:

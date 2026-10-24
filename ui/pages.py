@@ -398,6 +398,19 @@ class SettingsPage(QWidget):
         self.changelog_before.toggled.connect(self._emit)
         body.addWidget(self.changelog_before)
         row = QHBoxLayout()
+        row.addWidget(label(tr("Ставить новые версии не раньше чем через:")))
+        self.min_age = QComboBox()
+        for days, title in ((0, tr("сразу")), (1, tr("1 день")), (3, tr("3 дня")), (7, tr("7 дней")), (14, tr("14 дней"))):
+            self.min_age.addItem(title, days)
+        self.min_age.currentIndexChanged.connect(self._emit)
+        row.addWidget(self.min_age)
+        row.addStretch()
+        body.addLayout(row)
+        hint = label(tr("В свежих версиях чаще бывают ошибки, и за несколько дней их обычно исправляют. Такие обновления "
+                        "видны в списке с пометкой «ждёт», но не попадают в «Обновить все» и уведомления; "
+                        "поставить вручную можно в любой момент."), "Faint", wrap=True)
+        body.addWidget(hint)
+        row = QHBoxLayout()
         row.addWidget(label(tr("Одновременных загрузок:")))
         self.parallel = QComboBox()
         self.parallel.addItems([str(i) for i in range(1, 7)])
@@ -678,6 +691,7 @@ class SettingsPage(QWidget):
         self.language.setCurrentIndex(max(0, self.language.findData(settings.get("language") or language())))
         self.minimal.setChecked(bool(settings.get("minimal_mode", False)))
         self.app_update_auto.setChecked(bool(settings.get("app_update_check", True)))
+        self.min_age.setCurrentIndex(max(0, self.min_age.findData(int(settings.get("update_min_age_days", 0) or 0))))
         self.close_to_tray.setChecked(bool(settings.get("close_to_tray", False)))
         self.background_check.setChecked(bool(settings.get("background_check", True)))
         self.background_interval.setCurrentIndex(
@@ -812,6 +826,7 @@ class SettingsPage(QWidget):
                 "language": self.language.currentData(),
                 "minimal_mode": self.minimal.isChecked(),
                 "app_update_check": self.app_update_auto.isChecked(),
+                "update_min_age_days": self.min_age.currentData(),
                 "close_to_tray": self.close_to_tray.isChecked(),
                 "background_check": self.background_check.isChecked(),
                 "background_interval_hours": self.background_interval.currentData(),
