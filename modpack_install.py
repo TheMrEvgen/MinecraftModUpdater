@@ -266,3 +266,231 @@ def download_pack(info: Dict, folder: str, session=None) -> str:
     with open(path, "wb") as f:
         f.write(response.content)
     return path
+
+
+# --- Обновление поставленной сборки ---
+#
+# При установке рядом со сборкой запоминается, какие файлы принадлежат ей (STATE_FILE): файлы сборки и хэши
+# распакованных настроек. Обновление меняет только их: моды, которые пользователь добавил сам, остаются,
+# а настройку из сборки перезаписываем, только если пользователь её не менял. Выключенный мод сборки остаётся
+# выключенным. Всё заменённое и удалённое уходит в бэкап, обновление можно отменить.
+
+STATE_DIR = "ModUpdater_Backups"
+STATE_FILE = "modpack.json"
+UPDATES_DIR = "modpack_updates"
+DISABLED = ".disabled"
+
+
+def state_path(game_dir: str) -> str:
+    return os.path.join(game_dir, STATE_DIR, STATE_FILE)
+
+
+def _abs(game_dir: str, relative: str) -> str:
+    return os.path.join(game_dir, *relative.split("/"))
+
+
+def _on_disk(game_dir: str, relative: str) -> Optional[str]:
+    """Как файл сборки лежит на диске: как есть, выключенным (.disabled) или его нет (None)."""
+    for candidate in (relative, relative + DISABLED):
+        if os.path.isfile(_abs(game_dir, candidate)):
+            return candidate
+    return None
+
+
+def _sha1(path: str) -> str:
+    digest = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _override_members(plan: PackPlan) -> Dict[str, zipfile.ZipInfo]:
+    """Файлы overrides архива: путь в папке игры → запись архива (client-overrides важнее overrides)."""
+    result = {}
+    with zipfile.ZipFile(plan.archive) as archive:
+        members = archive.infolist()
+    for prefix in plan.overrides:
+        for member in members:
+            if member.filename.startswith(prefix) and not member.is_dir():
+                relative = member.filename[len(prefix):]
+                if relative and not relative.startswith("/") and ".." not in relative.split("/"):
+                    result[relative] = member
+    return result
+
+
+def save_state(plan: PackPlan, project_id: str, game_dir: str, title: str = ""):
+    """Запоминает поставленную сборку: из какого проекта, какая версия и какие файлы — её."""
+    overrides = {}
+    for relative in _override_members(plan):
+        if os.path.isfile(_abs(game_dir, relative)):
+            overrides[relative] = _sha1(_abs(game_dir, relative))
+    state = {"project_id": project_id, "title": title or plan.name, "version": plan.version,
+             "game_version": plan.game_version, "loader": plan.loader, "loader_version": plan.loader_version,
+             "files": [f.path for f in plan.files], "overrides": overrides}
+    os.makedirs(os.path.dirname(state_path(game_dir)), exist_ok=True)
+    with open(state_path(game_dir), "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=1)
+
+
+def load_state(game_dir: str) -> Optional[Dict]:
+    """Сборка из каталога, поставленная программой, или None."""
+    try:
+        with open(state_path(game_dir), "r", encoding="utf-8") as f:
+            state = json.load(f)
+        return state if isinstance(state, dict) and state.get("project_id") else None
+    except (OSError, ValueError):
+        return None
+
+
+@dataclass
+class UpdatePlan:
+    download: List[PackFile]          # Новые и изменившиеся файлы сборки
+    remove: List[str]                 # Файлы старой версии, которых в новой нет (как лежат на диске)
+    overrides: List[str]              # Настройки, которые запишем: новые или не изменённые пользователем
+    kept: List[str]                   # Настройки, которые пользователь менял, — остаются его
+    user_mods: List[str]              # Моды, добавленные пользователем, — не трогаем
+
+    @property
+    def empty(self) -> bool:
+        return not (self.download or self.remove or self.overrides)
+
+
+def plan_update(state: Dict, plan: PackPlan, game_dir: str) -> UpdatePlan:
+    old_files = set(state.get("files") or [])
+    new_paths = {f.path for f in plan.files}
+    download = []
+    for item in plan.files:
+        if not item.url:
+            continue
+        current = _on_disk(game_dir, item.path)
+        if not current or not item.hashes or not _check_hash(_abs(game_dir, current), item.hashes):
+            download.append(item)
+    remove = sorted(filter(None, (_on_disk(game_dir, p) for p in old_files - new_paths)))
+    known = state.get("overrides") or {}
+    write, kept = [], []
+    members = _override_members(plan)
+    with zipfile.ZipFile(plan.archive) as archive:
+        for relative in sorted(members):
+            path = _abs(game_dir, relative)
+            if not os.path.isfile(path):
+                write.append(relative)
+                continue
+            current = _sha1(path)
+            if current == hashlib.sha1(archive.read(members[relative])).hexdigest():
+                continue  # В новой версии та же настройка
+            (write if known.get(relative) == current else kept).append(relative)
+    user_mods = []
+    mods_dir = os.path.join(game_dir, "mods")
+    if os.path.isdir(mods_dir):
+        for name in sorted(os.listdir(mods_dir)):
+            relative = "mods/" + (name[:-len(DISABLED)] if name.endswith(DISABLED) else name)
+            if relative.endswith(".jar") and relative not in old_files and relative not in new_paths:
+                user_mods.append(name)
+    return UpdatePlan(download, remove, write, kept, user_mods)
+
+
+def apply_update(update: UpdatePlan, plan: PackPlan, game_dir: str, progress: ProgressCallback = lambda d, t, s: None,
+                 cancelled: Callable[[], bool] = lambda: False, session=None) -> str:
+    """
+    Обновляет сборку по плану и возвращает папку бэкапа (для undo_update). Если хоть один файл не скачался,
+    или обновление отменили, всё уже сделанное откатывается и сборка остаётся прежней.
+    """
+    import datetime
+    import shutil
+    from mod_updater_logic import SESSION
+    session = session or SESSION
+    previous = load_state(game_dir) or {}
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    backup = os.path.join(game_dir, STATE_DIR, UPDATES_DIR, stamp)
+    os.makedirs(backup)
+    journal = {"created": stamp, "from": previous.get("version"), "to": plan.version,
+               "added": [], "backed_up": [], "state": previous}
+
+    def save_journal():
+        with open(os.path.join(backup, "journal.json"), "w", encoding="utf-8") as f:
+            json.dump(journal, f, ensure_ascii=False, indent=1)
+
+    def move_aside(relative: str):
+        if os.path.exists(_abs(game_dir, relative)):
+            target = _abs(backup, relative)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.move(_abs(game_dir, relative), target)
+            journal["backed_up"].append(relative)
+
+    def put(relative: str, data: bytes):
+        current = _on_disk(game_dir, relative)
+        if current:
+            move_aside(current)
+            relative = current  # Выключенный пользователем мод остаётся выключенным
+        destination = _abs(game_dir, relative)
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        with open(destination, "wb") as f:
+            f.write(data)
+        journal["added"].append(relative)
+
+    save_journal()
+    try:
+        downloaded = []
+        for i, item in enumerate(update.download):  # Сначала всё скачиваем — в папке игры пока ничего не меняется
+            if cancelled():
+                raise InstallCancelled()
+            progress(i, len(update.download), item.name or os.path.basename(item.path))
+            response = session.get(item.url, timeout=60)
+            response.raise_for_status()
+            part = os.path.join(backup, f"{i}.part")
+            with open(part, "wb") as f:
+                f.write(response.content)
+            if not _check_hash(part, item.hashes):
+                raise ValueError(tr("{0}: контрольная сумма не совпала", item.path))
+            downloaded.append((item.path, part))
+        if cancelled():
+            raise InstallCancelled()
+        progress(len(update.download), len(update.download), tr("Обновляем файлы сборки…"))
+        for relative, part in downloaded:
+            with open(part, "rb") as f:
+                put(relative, f.read())
+            os.remove(part)
+        for relative in update.remove:
+            move_aside(relative)
+        members = _override_members(plan)
+        with zipfile.ZipFile(plan.archive) as archive:
+            for relative in update.overrides:
+                with archive.open(members[relative]) as source:
+                    put(relative, source.read())
+        save_journal()
+    except BaseException:
+        save_journal()
+        undo_update(backup, game_dir)
+        raise
+    save_state(plan, previous.get("project_id", ""), game_dir, previous.get("title", ""))
+    return backup
+
+
+def undo_update(backup: str, game_dir: str):
+    """Возвращает сборку к состоянию до обновления: новые файлы удаляются, прежние возвращаются из бэкапа."""
+    import shutil
+    with open(os.path.join(backup, "journal.json"), "r", encoding="utf-8") as f:
+        journal = json.load(f)
+    for relative in journal.get("added", []):
+        if os.path.isfile(_abs(game_dir, relative)):
+            os.remove(_abs(game_dir, relative))
+    for relative in journal.get("backed_up", []):
+        if os.path.exists(_abs(backup, relative)):
+            os.makedirs(os.path.dirname(_abs(game_dir, relative)), exist_ok=True)
+            shutil.move(_abs(backup, relative), _abs(game_dir, relative))
+    if journal.get("state"):
+        with open(state_path(game_dir), "w", encoding="utf-8") as f:
+            json.dump(journal["state"], f, ensure_ascii=False, indent=1)
+    shutil.rmtree(backup, ignore_errors=True)
+
+
+def check_update(game_dir: str) -> Optional[Dict]:
+    """Вышла ли новая версия сборки: {"state", "latest"} или None (сборка не из каталога или уже новая)."""
+    state = load_state(game_dir)
+    if not state:
+        return None
+    latest = latest_pack_file(state["project_id"])
+    if latest.get("version") and latest["version"] != state.get("version"):
+        return {"state": state, "latest": latest}
+    return None

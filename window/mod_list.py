@@ -5,7 +5,7 @@ import os
 import webbrowser
 from typing import Iterator, List, Optional
 
-from PyQt6.QtCore import QEasingCurve, QItemSelectionModel, QVariantAnimation, Qt
+from PyQt6.QtCore import QEasingCurve, QItemSelectionModel, QPoint, QRect, QVariantAnimation, Qt
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QMenu
 
@@ -249,12 +249,28 @@ class ModListMixin:
             self._position_selection_bar()
         else:
             self.selection_bar.hide()
+            self._update_list_inset()
 
     def _position_selection_bar(self):
         bar = self.selection_bar
         bar.adjustSize()
         holder = self.list_holder.rect()
         bar.move((holder.width() - bar.width()) // 2, holder.height() - bar.height() - 16)
+        self._update_list_inset()
+
+    def _update_list_inset(self):
+        """Сколько снизу списка закрыто уведомлениями и панелью выделения — столько места оставляем под ними."""
+        view = self.view
+        area = QRect(view.mapTo(self, QPoint(0, 0)), view.size())
+        inset = 0
+        toasts = self.toasts.toasts if hasattr(self, "toasts") else []  # Окно ещё строится
+        for widget in [*toasts, self.selection_bar]:
+            if not widget.isVisible():
+                continue
+            rect = QRect(widget.mapTo(self, QPoint(0, 0)), widget.size())
+            if rect.intersects(area):
+                inset = max(inset, area.bottom() - rect.top() + 8)
+        view.set_bottom_inset(min(inset, area.height() // 2))
 
     def _on_select_all_clicked(self):
         visible = self._visible_entries()

@@ -1,4 +1,5 @@
-"""Окно установки готовой сборки из каталога: что внутри, куда ставить, загрузка с прогрессом."""
+"""Окна готовой сборки из каталога: установка (что внутри, куда ставить) и обновление до новой версии."""
+import logging
 from typing import Dict, Optional
 
 from PyQt6.QtCore import pyqtSignal
@@ -14,15 +15,20 @@ LOADER_TITLES = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge", "
 
 
 class _Worker(SafeThread):
-    """Шаг 1 (prepare): скачать файл сборки и прочитать её. Шаг 2 (install): поставить в выбранное место."""
+    """
+    Установка: prepare — скачать файл сборки и прочитать её, install — поставить в выбранное место и запомнить состав.
+    Обновление: prepare_update — скачать новую версию и сравнить с поставленной, update — обновить.
+    """
     progress = pyqtSignal(int, int, str)
     prepared = pyqtSignal(object)
-    installed = pyqtSignal(list)
+    installed = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(self, job: str, project_id: str = "", folder: str = "", plan=None, target=None):
+    def __init__(self, job: str, project_id: str = "", folder: str = "", plan=None, target=None, title: str = "",
+                 game_dir: str = "", update=None):
         super().__init__()
         self.job, self.project_id, self.folder, self.plan, self.target = job, project_id, folder, plan, target
+        self.title, self.game_dir, self.update = title, game_dir, update
         self._cancelled = False
 
     def stop(self):
@@ -34,9 +40,21 @@ class _Worker(SafeThread):
                 info = modpack_install.latest_pack_file(self.project_id)
                 path = modpack_install.download_pack(info, self.folder)
                 self.prepared.emit(modpack_install.load_plan(path))
-            else:
+            elif self.job == "install":
                 errors = modpack_install.install(self.plan, self.target, self.progress.emit, lambda: self._cancelled)
+                try:
+                    modpack_install.save_state(self.plan, self.project_id, self.target.game_dir, self.title)
+                except OSError as e:  # Без записи сборка работает, только не обновится из каталога
+                    logging.warning(tr("Сборка: не удалось запомнить состав: {0}", e))
                 self.installed.emit(errors)
+            elif self.job == "prepare_update":
+                info = modpack_install.latest_pack_file(self.project_id)
+                plan = modpack_install.load_plan(modpack_install.download_pack(info, self.folder))
+                state = modpack_install.load_state(self.game_dir) or {}
+                self.prepared.emit((plan, modpack_install.plan_update(state, plan, self.game_dir)))
+            else:
+                self.installed.emit(modpack_install.apply_update(self.update, self.plan, self.game_dir,
+                                                                 self.progress.emit, lambda: self._cancelled))
         except modpack_install.InstallCancelled:
             self.failed.emit("")
         except Exception as e:
@@ -141,14 +159,15 @@ class ModpackInstallDialog(FramelessDialog):
             widget.setEnabled(False)
         self.progress.setRange(0, 0)
         self.progress.show()
-        self._start(_Worker("install", plan=self.plan, target=self.target))
+        self._start(_Worker("install", self.hit.get("project_id") or "", plan=self.plan, target=self.target,
+                            title=self.hit.get("title") or ""))
 
     def _on_progress(self, done: int, total: int, text: str):
         self.progress.setRange(0, max(1, total))
         self.progress.setValue(done)
         self.progress_text.setText(tr("{0} из {1}: {2}", done, total, text))
 
-    def _on_installed(self, errors: list):
+    def _on_installed(self, errors):
         self.errors = errors
         self.accept()
 
@@ -165,6 +184,104 @@ class ModpackInstallDialog(FramelessDialog):
             self.progress_text.setText(tr("Отменяем…"))
             self.worker.stop()
             if self.worker.job == "prepare":
+                self.worker.wait(3000)
+                super().reject()
+        else:
+            super().reject()
+
+    def reject(self):
+        self._cancel()
+
+
+class ModpackUpdateDialog(FramelessDialog):
+    """Обновление поставленной сборки. После accept(): plan (новая версия) и backup (для отмены)."""
+
+    def __init__(self, parent, state: Dict, game_dir: str, downloads: str):
+        super().__init__(parent, tr("Обновление сборки"), 560)
+        self.state = state
+        self.game_dir = game_dir
+        self.plan = None
+        self.update = None
+        self.backup = ""
+        self.worker: Optional[_Worker] = None
+        self.body.addWidget(label(state.get("title") or "", "SectionTitle"))
+        self.info = label(tr("Скачиваем новую версию сборки и сравниваем с вашей…"), "Muted", wrap=True)
+        self.body.addWidget(self.info)
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setRange(0, 0)
+        self.body.addWidget(self.progress)
+        self.progress_text = label("", "Faint", wrap=True)
+        self.body.addWidget(self.progress_text)
+        self.body.addStretch()
+        self.cancel_btn = self.add_button(tr("Отмена"), False, self._cancel)
+        self.update_btn = self.add_button(tr("Обновить"), True, self._apply)
+        self.update_btn.setEnabled(False)
+        self.finish_layout()
+        self._start(_Worker("prepare_update", state.get("project_id") or "", downloads, game_dir=game_dir))
+
+    def _start(self, worker: _Worker):
+        self.worker = worker
+        worker.progress.connect(self._on_progress)
+        worker.prepared.connect(self._on_prepared)
+        worker.installed.connect(self._on_updated)
+        worker.failed.connect(self._on_failed)
+        worker.start()
+
+    def _on_prepared(self, result):
+        self.plan, self.update = result
+        self.progress.hide()
+        plan, update = self.plan, self.update
+        lines = [tr("Версия {0} → {1}", self.state.get("version") or "?", plan.version or "?")]
+        if (plan.game_version, plan.loader_version) != (self.state.get("game_version"), self.state.get("loader_version")):
+            lines.append(tr("Minecraft {0} · {1} {2}", plan.game_version or "?",
+                            LOADER_TITLES.get(plan.loader, plan.loader or "?"), plan.loader_version or ""))
+        lines.append(tr("Скачается файлов: {0} · уберётся старых: {1} · обновится настроек: {2}",
+                        len(update.download), len(update.remove), len(update.overrides)))
+        if update.user_mods:
+            lines.append(tr("Ваши моды останутся ({0}): {1}", len(update.user_mods),
+                            ", ".join(update.user_mods[:5]) + ("…" if len(update.user_mods) > 5 else "")))
+        if update.kept:
+            lines.append(tr("Настройки, которые вы меняли, не трогаем ({0}): {1}", len(update.kept),
+                            ", ".join(update.kept[:4]) + ("…" if len(update.kept) > 4 else "")))
+        if plan.manual:
+            lines.append(tr("{0} — автор разрешает скачивать только с сайта; ссылки покажем после обновления.",
+                            ", ".join(f.name for f in plan.manual[:4])))
+        lines.append(tr("Всё заменённое уходит в бэкап — обновление можно отменить."))
+        self.info.setText("\n".join(lines))
+        self.update_btn.setEnabled(True)
+
+    def _apply(self):
+        self.update_btn.setEnabled(False)
+        self.progress.setRange(0, 0)
+        self.progress.show()
+        self._start(_Worker("update", plan=self.plan, game_dir=self.game_dir, update=self.update))
+
+    def _on_progress(self, done: int, total: int, text: str):
+        self.progress.setRange(0, max(1, total))
+        self.progress.setValue(done)
+        self.progress_text.setText(tr("{0} из {1}: {2}", done, total, text))
+
+    def _on_updated(self, backup):
+        self.backup = backup
+        self.accept()
+
+    def _on_failed(self, error: str):
+        if not error:
+            super().reject()
+            return
+        self.progress.hide()
+        text = tr("Не удалось: {0}", error)
+        if self.worker.job == "update":
+            text += "\n" + tr("Сборка осталась как была.")
+        self.progress_text.setText(text)
+        self.update_btn.setEnabled(self.plan is not None)
+
+    def _cancel(self):
+        if self.worker and self.worker.isRunning():
+            self.progress_text.setText(tr("Отменяем…"))
+            self.worker.stop()
+            if self.worker.job == "prepare_update":
                 self.worker.wait(3000)
                 super().reject()
         else:

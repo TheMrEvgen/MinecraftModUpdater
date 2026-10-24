@@ -504,6 +504,8 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
                                            if d.get('dependency_type') in LINKING_DEPENDENCY_TYPES)
         standalone += [pid for pid in installed if pid in dependency_ids and pid not in nested_under_standalone]
 
+        reported = set()  # Мод-зависимость строится для каждого зависящего от него — в журнал пишем один раз
+
         def build_installed_entry(project_id: str) -> Dict:
             details = installed[project_id]
             entry = make_local_entry(details['local'], ModStatus.UP_TO_DATE)
@@ -516,7 +518,9 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
             latest = latest_by_project.get(project_id)
             if is_newer_version(latest, details['info']) and apply_install_info(entry, latest):
                 entry["status"] = ModStatus.UPDATE_AVAILABLE
-                logging.info(tr("Найдено обновление для '{0}': {1} -> {2}.", entry['name'], entry['current_version'], entry['new_version']))
+                if project_id not in reported:
+                    reported.add(project_id)
+                    logging.info(tr("Найдено обновление для '{0}': {1} -> {2}.", entry['name'], entry['current_version'], entry['new_version']))
             return entry
 
         mods_data: List[Dict] = []

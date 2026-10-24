@@ -837,6 +837,11 @@ class ModListView(QListView):
         """Пересчитать высоты строк (после смены вида или кадра анимации)."""
         self.scheduleDelayedItemsLayout()
 
+    def set_bottom_inset(self, height: int):
+        """Место снизу под плавающие уведомления и панель выделения: последние строки не прячутся под ними."""
+        if self.viewportMargins().bottom() != height:
+            self.setViewportMargins(0, 0, 0, height)
+
     def contextMenuEvent(self, event):
         index = self.indexAt(event.pos())
         entry = entry_at(index)

@@ -211,6 +211,98 @@ class CatalogMixin:
         if dialog.errors:
             show_message(self, QMessageBox.Icon.Warning, tr("Не всё скачалось"), "\n".join(dialog.errors[:12]))
 
+    # --- Обновление готовой сборки до новой версии ---
+
+    def _check_modpack_update(self):
+        """При открытии сборки из каталога: не вышла ли её новая версия (раз за запуск программы)."""
+        import modpack_install
+        name, game_dir = self.current_profile_name, self._profile().get("mods_path", "")
+        if name in self._modpack_checked or not self.settings.get("auto_check", True) \
+                or not modpack_install.load_state(game_dir):
+            return
+        self._modpack_checked.add(name)
+
+        def done(result):
+            if result and name == self.current_profile_name:
+                self.toasts.show(tr("Вышла новая версия сборки «{0}»: {1}", result["state"].get("title") or name,
+                                    result["latest"].get("version")), "info", tr("Обновить"),
+                                 lambda: self._update_modpack(name), timeout=15000)
+
+        self._run_task(modpack_install.check_update, (game_dir,), done, lambda e: None, None)
+
+    def _update_modpack(self, name: Optional[str] = None):
+        import modpack_install
+        from ui.modpack_dialog import ModpackUpdateDialog
+        if self._busy:
+            self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
+            return
+        if name and name != self.current_profile_name:
+            self._load_profile(name)
+        profile = self._profile()
+        game_dir = profile.get("mods_path", "")
+        state = modpack_install.load_state(game_dir)
+        if not state or not self._confirm_game_not_running([]):
+            return
+        dialog = ModpackUpdateDialog(self, state, game_dir, os.path.join(app_config.CONFIG_DIR, "modpacks"))
+        if not dialog.exec() or not dialog.backup:
+            return
+        plan, backup = dialog.plan, dialog.backup
+        old = (profile.get("game_version") or self.game_version, profile.get("loader_version") or self.current_loader_version)
+        title = state.get("title") or self.current_profile_name
+        self._forget_profile_lists()
+
+        def finish(launcher_change):
+            path, launcher_backup = launcher_change
+            self._after_launcher_change(plan.game_version if plan.game_version != old[0] else None,
+                                        plan.loader_version if plan.loader_version != old[1] else None)
+            self.toasts.show(tr("Сборка «{0}» обновлена до {1}.", title, plan.version), "success", tr("Отменить"),
+                             lambda: self._undo_modpack_update(game_dir, backup, path, launcher_backup, old),
+                             timeout=20000)
+            if plan.manual:
+                import webbrowser
+                self.toasts.show(tr("Скачайте с сайта CurseForge (автор запретил программам): {0}",
+                                    ", ".join(f.name for f in plan.manual[:5])), "warning", tr("Открыть страницы"),
+                                 lambda: [webbrowser.open(f.manual_url) for f in plan.manual if f.manual_url],
+                                 timeout=30000)
+
+        path = self._launcher_pack()
+        if not path or (plan.game_version, plan.loader_version) == old or not plan.game_version:
+            finish((None, None))
+            return
+        import launcher_pack
+        if plan.game_version != old[0]:
+            work = lambda: (path, launcher_pack.set_game_version(path, plan.game_version, plan.loader, plan.loader_version))
+        else:
+            work = lambda: (path, launcher_pack.set_loader_version(path, plan.loader, plan.loader_version))
+        self._run_task(work, (), finish, lambda e: (finish((None, None)), show_message(
+            self, QMessageBox.Icon.Warning, tr("Не удалось сменить версию в лаунчере"),
+            tr("{0}\n\nПоставьте Minecraft {1} и {2} {3} в лаунчере вручную.", e, plan.game_version, plan.loader or "",
+               plan.loader_version or ""))), None)
+
+    def _forget_profile_lists(self):
+        """Сборка изменилась целиком: забываем списки всех типов контента и перечитываем текущий."""
+        for content in CONTENT_TYPES:
+            self.sessions.pop(self._skey(content=content), None)
+        self.start_local_scan()
+
+    def _undo_modpack_update(self, game_dir: str, backup: str, launcher_path: Optional[str],
+                             launcher_backup: Optional[str], old: tuple):
+        import launcher_pack
+        import modpack_install
+        if not self._confirm_game_not_running([]):
+            return
+        try:
+            modpack_install.undo_update(backup, game_dir)
+            if launcher_path and launcher_backup:
+                launcher_pack.restore(launcher_path, launcher_backup)
+        except (OSError, ValueError) as e:
+            show_message(self, QMessageBox.Icon.Critical, tr("Не удалось вернуть"), str(e))
+            return
+        if self._profile().get("mods_path") == game_dir:
+            self._after_launcher_change(*old)
+            self._forget_profile_lists()
+        self.toasts.show(tr("Сборка возвращена к прежней версии."), "info")
+
     def _install_catalog_version(self, hit: dict, version: dict):
         if self._busy:
             self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")

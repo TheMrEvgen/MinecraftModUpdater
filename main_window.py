@@ -132,6 +132,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self.update_worker: Optional[UpdateWorker] = None
         self.loader_version_worker: Optional[LoaderVersionWorker] = None
         self._task_workers: List[TaskWorker] = []
+        self._modpack_checked: set = set()  # Сборки из каталога, для которых уже проверили новую версию
 
         self.icon_loader = IconLoader(app_config.ICON_CACHE_DIR, self)
         self.icon_loader.icon_ready.connect(self._on_icon_ready)
@@ -229,6 +230,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self.stack.addWidget(self.settings_page)
 
         self.toasts = ToastManager(root, t)
+        self.toasts.changed.connect(self._update_list_inset)
         self.drop_overlay = DropOverlay(root, t)
 
     def _build_mods_page(self) -> QWidget:

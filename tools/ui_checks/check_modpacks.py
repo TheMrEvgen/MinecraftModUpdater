@@ -109,4 +109,78 @@ check(f"моды скачаны: {len(mods)}, настройки распако�
 check(f"сборка в списке слева и открыта: {w.current_profile_name}", w.current_profile_name == instances[0]
       and w.profiles[instances[0]]["source"] == "prism")
 w.grab().save(f"{SHOTS}/03_installed.png")
+
+# --- Обновление сборки: делаем вид, что стоит старая версия, и обновляем до текущей ---
+import modpack_install  # noqa: E402
+from PyQt6.QtWidgets import QLabel, QPushButton  # noqa: E402
+
+game = f"{instance}/minecraft"
+saved = modpack_install.load_state(game)
+check(f"состав сборки запомнен: {saved and saved['version']}, файлов {len((saved or {}).get('files', []))}",
+      bool(saved and saved["project_id"] == hit["project_id"] and saved["files"]))
+pack_mod = sorted(f for f in saved["files"] if f.startswith("mods/"))[0]
+os.remove(f"{game}/{pack_mod}")                                  # Этот мод «изменился» в новой версии
+open(f"{game}/mods/my-own-mod.jar", "wb").write(b"mine")           # Свой мод пользователя
+open(f"{game}/mods/old-pack-mod.jar", "wb").write(b"old")          # Был в старой версии, в новой его нет
+config_file = sorted(saved["overrides"])[0]
+open(f"{game}/{config_file}", "a", encoding="utf-8").write(" # my change")  # Пользователь поменял настройку
+saved["version"], saved["files"] = "0.0-old", saved["files"] + ["mods/old-pack-mod.jar"]
+json.dump(saved, open(modpack_install.state_path(game), "w", encoding="utf-8"))
+
+w.settings["auto_check"] = True
+w._modpack_checked.clear()
+w._check_modpack_update()
+end = time.time() + 30
+texts = []
+while time.time() < end and not any("Вышла новая версия" in t for t in texts):
+    pump(0.3)
+    texts = [" ".join(l.text() for l in t.findChildren(QLabel)) for t in w.toasts.toasts]
+check(f"предложено обновить сборку: {[t for t in texts if 'Вышла' in t]}", any("Вышла новая версия" in t for t in texts))
+update_state = {}
+
+
+def drive_update():
+    dialog = QApplication.activeModalWidget()
+    if dialog is None or not hasattr(dialog, "update_btn"):
+        QTimer.singleShot(150, drive_update)
+        return
+    if dialog.update is None:
+        QTimer.singleShot(200, drive_update)
+        return
+    if "info" not in update_state:
+        update_state["info"] = dialog.info.text()
+        update_state["plan"] = dialog.update
+        dialog.grab().save(f"{SHOTS}/04_update_dialog.png")
+        dialog.update_btn.click()
+    if dialog.isVisible():
+        QTimer.singleShot(200, drive_update)
+    else:
+        update_state["backup"] = dialog.backup
+
+
+QTimer.singleShot(200, drive_update)
+w._update_modpack()
+pump(2)
+plan = update_state.get("plan")
+check(f"окно обновления: {update_state.get('info')!r}", "0.0-old" in update_state.get("info", ""))
+check(f"план: скачать {plan and [f.path for f in plan.download]}, убрать {plan and plan.remove}, "
+      f"свои моды {plan and plan.user_mods}, свои настройки {plan and plan.kept}",
+      plan and [f.path for f in plan.download] == [pack_mod] and plan.remove == ["mods/old-pack-mod.jar"]
+      and plan.user_mods == ["my-own-mod.jar"] and plan.kept == [config_file])
+check("мод сборки снова на месте, свой мод остался, старый убран",
+      os.path.isfile(f"{game}/{pack_mod}") and os.path.isfile(f"{game}/mods/my-own-mod.jar")
+      and not os.path.exists(f"{game}/mods/old-pack-mod.jar"))
+check("изменённая настройка не перезаписана", "# my change" in open(f"{game}/{config_file}", encoding="utf-8").read())
+check(f"версия сборки обновлена: {modpack_install.load_state(game)['version']}",
+      modpack_install.load_state(game)["version"] != "0.0-old")
+w.grab().save(f"{SHOTS}/05_updated.png")
+undo = [b for t in w.toasts.toasts for b in t.findChildren(QPushButton) if b.objectName() == "ToastAction"
+        and b.text() == "Отменить"]
+check(f"есть кнопка «Отменить»: {len(undo)}", len(undo) == 1)
+if undo:
+    undo[0].click()
+    pump(1)
+    check("отмена вернула прежнее состояние",
+          not os.path.exists(f"{game}/{pack_mod}") and os.path.isfile(f"{game}/mods/old-pack-mod.jar")
+          and modpack_install.load_state(game)["version"] == "0.0-old")
 print("done")

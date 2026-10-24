@@ -16,7 +16,7 @@ roll back any change. English and Russian interface.
 - **Works with your launcher** — Prism Launcher, MultiMC, Modrinth App, CurseForge, Legacy Launcher and the official
   launcher are found automatically. For Prism the app can even update the loader and the game version.
 - **Catalog** — mods, shaders, resource packs, data packs and ready-made modpacks from Modrinth and CurseForge,
-  installed with dependencies in one click.
+  installed with dependencies in one click. Installed modpacks update to new versions and keep the mods you added.
 - **When the game crashes** — crash report analysis, a hint which mod update started the crashes, and an automatic
   search for the problematic mod by elimination.
 - **Background** — tray icon, background update checks for all modpacks with Windows notifications, app self-update.
@@ -64,7 +64,8 @@ roll back any change. English and Russian interface.
 
 **Каталог Modrinth и CurseForge**
 - Поиск с фильтрами по категориям и версиям, страница проекта со скриншотами и версиями, массовая установка.
-- Готовые сборки: установка одной кнопкой — новой сборкой в Prism Launcher или в папку.
+- Готовые сборки: установка одной кнопкой — новой сборкой в Prism Launcher или в папку; обновление до новой
+  версии сборки с сохранением ваших модов и настроек.
 - Моды, которых нет на Modrinth, опознаются на CurseForge по отпечатку файла и обновляются так же.
   Если автор запретил скачивание сторонними программами, программа откроет страницу файла на сайте.
 

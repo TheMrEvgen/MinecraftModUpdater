@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QMenu, QMessageBox
 import config as app_config
 import i18n
 import icons
+import modpack_install
 from content import CONTENT_TYPES, ContentType, MODS, list_worlds, pick_world
 from enums import UpdateChannel
 from game_detection import detect_game_versions, extract_loader_version
@@ -194,6 +195,7 @@ class ProfilesMixin:
         self._load_content()
         self._restore_bisect_banner()
         self._show_readiness()
+        self._check_modpack_update()
         self._game_running = False
         self.game_banner.hide()
         self._refresh_play_button()
@@ -393,6 +395,9 @@ class ProfilesMixin:
         menu.addAction(make_action(menu, t, "folder", tr("Открыть папку"),
                                    lambda: self._open_path(self.profiles[name].get("mods_path", ""))))
         menu.addAction(make_action(menu, t, "layers", tr("Группа…"), lambda: self._set_profile_group(name)))
+        if modpack_install.load_state(self.profiles[name].get("mods_path", "")):
+            menu.addAction(make_action(menu, t, "download", tr("Обновить сборку из каталога…"),
+                                       lambda: self._update_modpack(name)))
         menu.addSeparator()
         menu.addAction(make_action(menu, t, "copy", tr("Клонировать сборку…"), lambda: self._clone_profile(name)))
         others = [n for n in self.profiles if n != name]

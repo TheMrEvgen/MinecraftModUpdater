@@ -260,6 +260,7 @@ class Toast(QFrame):
 
 class ToastManager(QObject):
     """Стек уведомлений в правом нижнем углу окна."""
+    changed = pyqtSignal()  # Уведомления появились, исчезли или сдвинулись
 
     def __init__(self, host: QWidget, tokens: dict):
         super().__init__(host)
@@ -296,6 +297,7 @@ class ToastManager(QObject):
             y -= toast.height()
             toast.move(self.host.width() - toast.width() - 20, y)
             y -= 10
+        self.changed.emit()
 
     def eventFilter(self, obj, event):
         if obj is self.host and event.type() == QEvent.Type.Resize:
