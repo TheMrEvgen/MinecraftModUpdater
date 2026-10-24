@@ -299,7 +299,7 @@ def html_to_markdown(html: str) -> str:
 
 # --- Каталог ---
 
-CLASS_IDS = {"mods": CLASS_MODS, "shaders": 6552, "resourcepacks": 12, "datapacks": 6945}
+CLASS_IDS = {"mods": CLASS_MODS, "shaders": 6552, "resourcepacks": 12, "datapacks": 6945, "modpacks": 4471}
 # Сортировка каталога программы → sortField CurseForge (2 — популярность, 3 — обновление, 6 — загрузки, 11 — выход, 12 — оценка)
 SORT_FIELDS = {"relevance": 2, "downloads": 6, "updated": 3, "newest": 11, "follows": 12}
 MAX_RESULTS = 10_000  # CurseForge не отдаёт результаты дальше 10 000-го
@@ -334,7 +334,7 @@ def search_hits(query: str, content_key: str = "mods", game_version: Optional[st
         params["categoryId"] = category_id
     data = _get("/mods/search", params)
     project_type = {"mods": "mod", "shaders": "shader", "resourcepacks": "resourcepack",
-                    "datapacks": "datapack"}.get(content_key, "mod")
+                    "datapacks": "datapack", "modpacks": "modpack"}.get(content_key, "mod")
     total = int((data.get("pagination") or {}).get("totalCount") or 0)
     return {"hits": [to_hit(mod, project_type) for mod in data.get("data") or []], "total_hits": min(total, MAX_RESULTS)}
 

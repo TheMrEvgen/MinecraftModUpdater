@@ -23,6 +23,7 @@
 | `launch_history.py` | История запусков игры (меню, вылет, время загрузки) и поиск операции с модами, после которой игра вылетает |
 | `launcher_pack.py` | Версии игры и загрузчика в сборке Prism/MultiMC (`mmc-pack.json`): правка с копией, требования из meta.prismlauncher.org |
 | `all_packs.py`, `ui/all_packs_dialog.py` | Все сборки сразу: поиск мода, одинаковые файлы и их объединение жёсткими ссылками (только по команде) |
+| `modpack_install.py`, `ui/modpack_dialog.py` | Готовая сборка из каталога: чтение .mrpack/.zip CurseForge, скачивание с проверкой хэшей, overrides, новый экземпляр Prism |
 | `background_check.py` | Проверка обновлений сборки без окна (общая для консоли и трея): `check_all`, `new_updates` |
 | `window/common.py` | Константы окна: страницы, статусы для «Обновить все», заголовки загрузчиков |
 | `ui/mod_list.py` | Список модов: `ModListModel` + `ModFilterProxy` + `ModDelegate` (вся строка рисуется делегатом) |

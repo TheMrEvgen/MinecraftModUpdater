@@ -4,11 +4,14 @@
 import os
 from typing import Dict, List, Optional
 
+from PyQt6.QtWidgets import QMessageBox
+
 import config as app_config
 from content import CONTENT_TYPES, ContentType, MODS
 from enums import ModStatus
 from i18n import tr
 from scanner import resolve_many_installs, resolve_project_install, scan_local
+from ui_components import show_message
 from view_model import iter_all_entries
 
 
@@ -37,6 +40,9 @@ class CatalogMixin:
         self.catalog_page.set_context(self.game_version, self.loader, self._installed_ids())
 
     def _install_from_catalog(self, hit: dict):
+        if self.catalog_page.content.key == "modpacks":
+            self._install_modpack(hit)
+            return
         if self._busy:
             self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
             return
@@ -138,6 +144,9 @@ class CatalogMixin:
     # ================================================================== Каталог: массовая установка и выбранная версия
 
     def _install_many_from_catalog(self, hits: List[dict]):
+        if self.catalog_page.content.key == "modpacks":
+            self.toasts.show(tr("Сборки ставятся по одной — нажмите «Установить» у нужной."), "info")
+            return
         if self._busy or not hits:
             if self._busy:
                 self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
@@ -163,6 +172,44 @@ class CatalogMixin:
         self._run_task(resolve_many_installs, (ids, self.game_version, self.loader, self._channel(), installed, content),
                        resolved, lambda e: (self.catalog_page.set_installing(ids, False),
                                             self.toasts.show(tr('Не удалось подготовить установку: {0}', e), "error")), None)
+
+    def _install_modpack(self, hit: dict):
+        """Готовая сборка из каталога: новая сборка Prism (если он есть) или папка на диске."""
+        import webbrowser
+
+        from launchers import _appdata, _prism_instance_dir
+        from ui.modpack_dialog import ModpackInstallDialog
+        prism_root = os.path.join(_appdata(), "PrismLauncher")
+        prism = _prism_instance_dir(prism_root) if os.path.isdir(prism_root) else None
+        default = os.path.join(os.path.expanduser("~"), "MinecraftModpacks")  # Латиница: Java не любит кириллицу в путях
+        dialog = ModpackInstallDialog(self, hit, prism, default, os.path.join(app_config.CONFIG_DIR, "modpacks"))
+        if not dialog.exec() or not dialog.target:
+            return
+        plan, target = dialog.plan, dialog.target
+        name, n = os.path.basename(target.instance_dir or target.game_dir), 2
+        base = name
+        while name in self.profiles:
+            name, n = f"{base} ({n})", n + 1
+        self.profiles[name] = {**app_config.default_profile(), "mods_path": target.game_dir,
+                               "game_version": plan.game_version or "", "loader": plan.loader or "fabric",
+                               "loader_version": plan.loader_version or "", "manual_mode": True, "source": target.source}
+        self.save_config()
+        self._refresh_sidebar()
+        self._load_profile(name)
+        self._refresh_sidebar()
+        if target.instance_dir:
+            self.toasts.show(tr("Сборка «{0}» установлена в Prism Launcher.", name), "success", tr("Играть"), self._play,
+                             timeout=15000)
+        else:
+            self.toasts.show(tr("Сборка «{0}» установлена в {1}. Поставьте загрузчик {2} {3} в лаунчере и укажите эту "
+                                "папку как папку игры.", name, target.game_dir, plan.loader or "", plan.loader_version or ""),
+                             "success", timeout=20000)
+        if plan.manual:
+            self.toasts.show(tr("Скачайте с сайта CurseForge (автор запретил программам): {0}",
+                                ", ".join(f.name for f in plan.manual[:5])), "warning", tr("Открыть страницы"),
+                             lambda: [webbrowser.open(f.manual_url) for f in plan.manual if f.manual_url], timeout=30000)
+        if dialog.errors:
+            show_message(self, QMessageBox.Icon.Warning, tr("Не всё скачалось"), "\n".join(dialog.errors[:12]))
 
     def _install_catalog_version(self, hit: dict, version: dict):
         if self._busy:

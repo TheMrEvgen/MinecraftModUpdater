@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 
 import curseforge
 import icons
-from content import CONTENT_TYPES, MODS, ContentType
+from content import CATALOG_TYPES, MODS, ContentType
 from mod_updater_logic import format_date, get_all_versions, get_categories, get_project, get_projects_info_from_ids, search_projects
 from theme import qcolor
 from ui.details_panel import PANEL_MAX, panel_width
@@ -30,7 +30,8 @@ PAGE_SIZE = 20
 SORTS = (("relevance", tr("По релевантности")), ("downloads", tr("Популярные")), ("updated", tr("Недавно обновлённые")),
          ("newest", tr("Новые")), ("follows", tr("Больше подписчиков")))
 SIDES = (("", tr("Любая сторона")), ("client", tr("Нужны на клиенте")), ("server", tr("Работают на сервере")))
-CONTENT_ICONS = {"mods": "package", "shaders": "sparkles", "resourcepacks": "image", "datapacks": "code"}
+CONTENT_ICONS = {"mods": "package", "shaders": "sparkles", "resourcepacks": "image", "datapacks": "code",
+                 "modpacks": "layers"}
 VERSION_TYPES = {"release": tr("релиз"), "beta": tr("бета"), "alpha": tr("альфа")}
 SIDE_TEXT = {"required": tr("нужен"), "optional": tr("необязателен"), "unsupported": tr("не нужен"), "unknown": "?"}
 
@@ -378,6 +379,7 @@ class CatalogDetails(QFrame):
         self.summary.setText(hit.get("description") or "")
         state = self.page.install_state(hit)
         self.install_btn.setVisible(state == "available")
+        self.install_btn.setText(tr("Установить сборку") if self.page.content.key == "modpacks" else tr("Установить"))
         self.mine_btn.setVisible(state == "installed")
         cats = [CATEGORY_LABELS.get(c, c) for c in hit.get("display_categories") or hit.get("categories") or []
                 if c not in LOADER_CATEGORIES]
@@ -407,6 +409,12 @@ class CatalogDetails(QFrame):
         pid = hit.get("project_id")
         self.page.run_task(get_project, (pid,), lambda project: self._on_project(pid, project, demote_headings),
                            lambda e: self.body.setMarkdown(tr('_Не удалось загрузить описание: {0}_', e)), None)
+        is_pack = self.page.content.key == "modpacks"
+        for w in (self.versions_title, self.versions_list, self.version_btn):
+            w.setVisible(not is_pack)
+        if is_pack:  # Сборка ставится целиком, последней версией — списки версий и зависимостей не нужны
+            self.deps.setText(tr("Ставится целиком: моды, настройки модов, ресурспаки и шейдеры сборки."))
+            return
         loaders = self.page.content.loaders(self.page.loader) if self.page.content is MODS else None
         self.page.run_task(get_all_versions, (pid, self.page.game_version, loaders),
                            lambda versions: self._on_versions(pid, versions),
@@ -516,13 +524,13 @@ class CatalogPage(QWidget):
         tabs = QHBoxLayout()
         tabs.setSpacing(6)
         self.tab_group = QButtonGroup(self)
-        for i, content in enumerate(CONTENT_TYPES):
+        for i, content in enumerate(CATALOG_TYPES):
             tab = button(f" {content.title}", "Segment", CONTENT_ICONS[content.key], tokens, "text_muted")
             tab.setCheckable(True)
             self.tab_group.addButton(tab, i)
             tabs.addWidget(tab)
         self.tab_group.buttons()[0].setChecked(True)
-        self.tab_group.idClicked.connect(lambda i: self._set_content(CONTENT_TYPES[i]))
+        self.tab_group.idClicked.connect(lambda i: self._set_content(CATALOG_TYPES[i]))
         tabs.addStretch()
         # Источник: Modrinth или CurseForge (переключатель — только если у сборки программы есть ключ CurseForge)
         self.source_group = QButtonGroup(self)
