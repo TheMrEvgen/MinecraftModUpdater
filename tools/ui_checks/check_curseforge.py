@@ -131,4 +131,27 @@ while time.time() < end and not page.details.versions:
 pump(1)
 check(f"панель проекта CurseForge: версий {len(page.details.versions)}", bool(page.details.versions))
 w.grab().save(f"{SHOTS}/04_catalog_details.png")
+# Импорт сборки CurseForge (.zip с manifest.json)
+import requests  # noqa: E402
+from view_model import subtitle_for  # noqa: E402
+
+packs = curseforge._get("/mods/search", {"gameId": 432, "classId": 4471, "gameVersion": "1.21.1", "modLoaderType": 4,
+                                          "sortField": 6, "sortOrder": "desc", "pageSize": 10})["data"]
+pack_file = next(f for p in packs for f in p.get("latestFiles") or []
+                 if f.get("downloadUrl") and not f.get("isServerPack") and f.get("fileLength", 0) < 30_000_000)
+pack_path = f"{SP}/downloads/curseforge/pack.zip"
+with open(pack_path, "wb") as f:
+    f.write(requests.get(pack_file["downloadUrl"], timeout=180).content)
+w._switch_page(mw.PAGE_MODS)
+w.sidebar.set_page(mw.PAGE_MODS)
+w._import_mrpack(pack_path)  # .zip — сборка CurseForge
+wait_idle()
+imported = [e for e in w._count_items if e.get("project_id", "").startswith("cf:")]
+check(f"сборка «{pack_file['fileName']}» открыта в режиме импорта: модов {len(imported)}", w.is_import_mode and len(imported) > 10)
+manual = [e for e in imported if not e.get("download_url")]
+if manual:
+    text, _ = subtitle_for(manual[0])
+    check(f"мод с запретом скачивания помечен: {manual[0]['name']} — {text}", "CurseForge" in text)
+w.grab().save(f"{SHOTS}/05_pack_import.png")
+w._exit_import_mode()
 print("done")

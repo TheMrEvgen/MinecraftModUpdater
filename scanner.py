@@ -774,6 +774,63 @@ def entries_from_mrpack(index: Dict) -> List[Dict]:
     return entries
 
 
+# --- Импорт сборки CurseForge (.zip с manifest.json) ---
+
+def read_curseforge_pack(path: str) -> Dict:
+    """manifest.json сборки CurseForge. ValueError — это не сборка CurseForge."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            manifest = json.loads(z.read("manifest.json").decode("utf-8-sig"))
+    except (OSError, KeyError, zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise ValueError(tr("Это не сборка CurseForge: {0}", e)) from e
+    if not isinstance(manifest, dict) or manifest.get("manifestType") != "minecraftModpack" \
+            or not isinstance(manifest.get("files"), list):
+        raise ValueError(tr("Это не сборка CurseForge: нет списка модов в manifest.json"))
+    return manifest
+
+
+def is_curseforge_pack(path: str) -> bool:
+    try:
+        read_curseforge_pack(path)
+        return True
+    except ValueError:
+        return False
+
+
+def curseforge_pack_game_info(manifest: Dict) -> tuple[Optional[str], Optional[str]]:
+    """(версия игры, загрузчик): «fabric-0.16.5» → fabric."""
+    minecraft = manifest.get("minecraft") or {}
+    loaders = minecraft.get("modLoaders") or []
+    primary = next((l for l in loaders if l.get("primary")), loaders[0] if loaders else {})
+    name = str(primary.get("id") or "").split("-")[0].lower()
+    return minecraft.get("version"), name if name in ("fabric", "forge", "neoforge", "quilt") else None
+
+
+def entries_from_curseforge_pack(manifest: Dict) -> List[Dict]:
+    """
+    Записи «к установке» для модов сборки CurseForge — ровно те файлы, что указаны в сборке.
+    Ресурспаки и шейдеры из сборки и папка overrides пропускаются (как и при импорте .mrpack).
+    """
+    import curseforge
+    if not curseforge.available():
+        raise ValueError(tr("Для сборок CurseForge нужна программа с поддержкой CurseForge (ключ API)."))
+    wanted = [f for f in manifest["files"] if f.get("fileID") and f.get("projectID") and f.get("required", True)]
+    files = curseforge.get_files_by_ids(f["fileID"] for f in wanted)
+    mods = curseforge.get_mods(f["projectID"] for f in wanted)
+    entries = []
+    for item in wanted:
+        file, mod = files.get(int(item["fileID"])), mods.get(int(item["projectID"]))
+        if not file or not mod or mod.get("classId", curseforge.CLASS_MODS) != curseforge.CLASS_MODS:
+            continue  # Нет файла или это ресурспак/шейдер
+        version = curseforge.to_version(file, mod)
+        entry = {"name": mod.get("name") or file.get("fileName"), "project_id": curseforge.project_id(mod["id"]),
+                 "current_version": "", "filepath": None, "status": ModStatus.READY_TO_INSTALL, "installed_info": None}
+        _apply_project_info(entry, curseforge.to_project(mod))
+        if apply_install_info(entry, version):
+            entries.append(entry)
+    return entries
+
+
 # --- Каталог: установка проекта вместе с обязательными зависимостями ---
 
 def resolve_project_install(project_id: str, game_version: str, loader: Optional[str], channel: UpdateChannel,

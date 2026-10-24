@@ -14,7 +14,10 @@ from exporters import (
 )
 from i18n import tr
 from mod_updater_logic import get_latest_loader_version
-from scanner import entries_from_mrpack, mrpack_game_info, read_mrpack
+from scanner import (
+    curseforge_pack_game_info, entries_from_curseforge_pack, entries_from_mrpack, is_curseforge_pack, mrpack_game_info,
+    read_curseforge_pack, read_mrpack,
+)
 from ui_components import ImportDialog, ShareDialog, SyncDialog, ask_choice, confirm, show_message
 from updater import UpdateTransaction, add_files
 from view_model import CAT_ALL
@@ -97,11 +100,15 @@ class TransferMixin:
         self._enter_import_mode(entries, game_version, loader)
 
     def import_mrpack_dialog(self):
-        path, _ = QFileDialog.getOpenFileName(self, tr("Открыть сборку"), "", "Modrinth Modpack (*.mrpack)")
+        path, _ = QFileDialog.getOpenFileName(self, tr("Открыть сборку"), "",
+                                              tr("Сборки Modrinth и CurseForge (*.mrpack *.zip)"))
         if path:
             self._import_mrpack(path)
 
     def _import_mrpack(self, path: str):
+        if path.lower().endswith(".zip"):  # Сборка CurseForge
+            self._import_curseforge_pack(path)
+            return
         try:
             index = read_mrpack(path)
         except ValueError as e:
@@ -111,6 +118,26 @@ class TransferMixin:
         name = index.get("name") or os.path.basename(path)
         self._run_task(entries_from_mrpack, (index,),
                        lambda entries: self._enter_import_mode(entries, game_version, loader, name),
+                       lambda e: show_message(self, QMessageBox.Icon.Critical, tr("Ошибка"), tr('Не удалось прочитать сборку:\n{0}', e)),
+                       tr("Читаем сборку…"))
+
+    def _import_curseforge_pack(self, path: str):
+        try:
+            manifest = read_curseforge_pack(path)
+        except ValueError as e:
+            show_message(self, QMessageBox.Icon.Critical, tr("Ошибка"), str(e))
+            return
+        game_version, loader = curseforge_pack_game_info(manifest)
+        name = manifest.get("name") or os.path.basename(path)
+
+        def loaded(entries):
+            manual = [e for e in entries if not e.get("download_url")]
+            self._enter_import_mode(entries, game_version, loader, name)
+            if manual:
+                self.toasts.show(tr("{0}: автор разрешает скачивать только с сайта CurseForge — ссылка в меню строки мода.",
+                                    ", ".join(e.get("name") or "?" for e in manual[:5])), "info", timeout=15000)
+
+        self._run_task(entries_from_curseforge_pack, (manifest,), loaded,
                        lambda e: show_message(self, QMessageBox.Icon.Critical, tr("Ошибка"), tr('Не удалось прочитать сборку:\n{0}', e)),
                        tr("Читаем сборку…"))
 
@@ -235,8 +262,9 @@ class TransferMixin:
         self.sidebar.set_page(PAGE_MODS)
         self.stack.setCurrentIndex(PAGE_MODS)
         packs = [f for f in files if f.lower().endswith(".mrpack")]
+        packs += [f for f in files if f.lower().endswith(".zip") and is_curseforge_pack(f)]  # Сборка CurseForge
         jars = [f for f in files if f.lower().endswith(".jar")]
-        zips = [f for f in files if f.lower().endswith(".zip")]
+        zips = [f for f in files if f.lower().endswith(".zip") and f not in packs]
         if packs:
             self._import_mrpack(packs[0])
         elif jars:

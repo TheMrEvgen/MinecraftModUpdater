@@ -127,3 +127,30 @@ def test_dependencies_satisfied_from_any_catalog(monkeypatch):
     deps = parent["dependencies"]
     assert [(d["name"], d["status"]) for d in deps] == [("Fabric API", ModStatus.REQUIRED)]
     assert deps[0]["download_url"] and deps[0]["new_version"] == "dep-1.0"
+
+
+def test_curseforge_pack_import(tmp_path, monkeypatch):
+    import json
+    import zipfile
+
+    import scanner
+    manifest = {"manifestType": "minecraftModpack", "name": "Пак",
+                "minecraft": {"version": "1.21.1", "modLoaders": [{"id": "fabric-0.16.5", "primary": True}]},
+                "files": [{"projectID": 100, "fileID": 1, "required": True},
+                          {"projectID": 300, "fileID": 3, "required": True},   # ресурспак — пропускается
+                          {"projectID": 400, "fileID": 4, "required": False}]}  # необязательный — пропускается
+    pack = tmp_path / "pack.zip"
+    with zipfile.ZipFile(pack, "w") as z:
+        z.writestr("manifest.json", json.dumps(manifest))
+    not_pack = tmp_path / "shader.zip"
+    with zipfile.ZipFile(not_pack, "w") as z:
+        z.writestr("shaders/x.fsh", "x")
+    assert scanner.is_curseforge_pack(str(pack)) and not scanner.is_curseforge_pack(str(not_pack))
+    loaded = scanner.read_curseforge_pack(str(pack))
+    assert scanner.curseforge_pack_game_info(loaded) == ("1.21.1", "fabric")
+    monkeypatch.setattr(curseforge, "available", lambda: True)
+    monkeypatch.setattr(curseforge, "get_files_by_ids", lambda ids: {1: cf_file(1, "map-1.0", "2026"), 3: cf_file(3, "rp", "2026")})
+    monkeypatch.setattr(curseforge, "get_mods", lambda ids: {100: cf_mod(allow=False), 300: {**cf_mod(), "id": 300, "classId": 12}})
+    entries = scanner.entries_from_curseforge_pack(loaded)
+    assert [e["project_id"] for e in entries] == ["cf:100"]
+    assert entries[0]["status"] == ModStatus.READY_TO_INSTALL and entries[0]["download_url"] is None and entries[0]["manual_url"]

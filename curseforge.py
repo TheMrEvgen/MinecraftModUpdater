@@ -354,3 +354,13 @@ def _real_link(href: str) -> str:
     if href.startswith("/"):
         return "https://www.curseforge.com" + href
     return href
+
+
+def get_files_by_ids(file_ids: Iterable[int]) -> Dict[int, Dict]:
+    """Файлы по номерам (сборки CurseForge перечисляют моды как projectID + fileID)."""
+    ids = sorted({int(i) for i in file_ids})
+    result: Dict[int, Dict] = {}
+    for start in range(0, len(ids), 500):
+        for file in _post("/mods/files", {"fileIds": ids[start:start + 500]}).get("data") or []:
+            result[int(file["id"])] = file
+    return result
