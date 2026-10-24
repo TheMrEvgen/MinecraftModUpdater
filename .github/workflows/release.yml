@@ -26,12 +26,23 @@ jobs:
 
       - name: PyInstaller со своим загрузчиком
         # Антивирусы часто ложно срабатывают на стандартный загрузчик PyInstaller (его же используют вирусы).
-        # Загрузчик, собранный из исходников, с их сигнатурами не совпадает.
-        env:
-          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+        # Загрузчик, собранный из исходников (официальный способ: bootloader/waf), с их сигнатурами не совпадает.
+        shell: pwsh
         run: |
           $version = python -c "import PyInstaller; print(PyInstaller.__version__)"
-          pip install --force-reinstall --no-deps --no-binary pyinstaller "pyinstaller==$version"
+          $stock = python -c "import PyInstaller, os; print(os.path.join(os.path.dirname(PyInstaller.__file__), 'bootloader', 'Windows-64bit-intel', 'runw.exe'))"
+          $stockHash = (Get-FileHash $stock).Hash
+          Write-Host "Стандартный загрузчик: $stockHash"
+          git clone --depth 1 --branch "v$version" https://github.com/pyinstaller/pyinstaller.git "$env:RUNNER_TEMP/pyinstaller"
+          Push-Location "$env:RUNNER_TEMP/pyinstaller/bootloader"
+          python ./waf all --target-arch=64bit
+          if ($LASTEXITCODE -ne 0) { throw "Загрузчик не собрался" }
+          Pop-Location
+          pip install --force-reinstall --no-deps "$env:RUNNER_TEMP/pyinstaller"
+          $own = python -c "import PyInstaller, os; print(os.path.join(os.path.dirname(PyInstaller.__file__), 'bootloader', 'Windows-64bit-intel', 'runw.exe'))"
+          $ownHash = (Get-FileHash $own).Hash
+          Write-Host "Свой загрузчик: $ownHash"
+          if ($ownHash -eq $stockHash) { throw "Загрузчик не заменился" }
 
       - name: Тег совпадает с версией программы
         if: github.event_name == 'push'
