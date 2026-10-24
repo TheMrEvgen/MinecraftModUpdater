@@ -54,6 +54,14 @@ rollback. Switch the language in Settings → Appearance → «Язык / Langua
   перезапускается.
 - Работа в фоне: значок в трее, автозапуск с Windows, проверка обновлений во всех сборках и уведомления Windows.
 
+## Download / Скачать
+
+**[ModUpdater.exe — latest release](https://github.com/TheMrEvgen/MinecraftModUpdater/releases/latest)** (Windows 10/11).
+
+Code signing: Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/) — *application in progress; until it is approved, release builds are
+unsigned.* See the [code signing policy](CODE_SIGNING.md) and the [privacy policy](PRIVACY.md).
+
 ## Запуск
 
 Скачайте `ModUpdater.exe` со страницы [выпусков](https://github.com/TheMrEvgen/MinecraftModUpdater/releases/latest) — это один файл, установка не обязательна.
@@ -105,3 +113,8 @@ build.bat                                 :: тесты и сборка .exe в 
 запуск игры с автоматическим поиском проблемного мода. Снимки экрана и логи сохраняются в рабочую папку.
 
 Что изменилось в версиях — в [CHANGELOG.md](CHANGELOG.md).
+
+## Лицензия / License
+
+[MIT](LICENSE) © TheMrEvgen. [Политика конфиденциальности / Privacy policy](PRIVACY.md) ·
+[Подпись кода / Code signing policy](CODE_SIGNING.md).
