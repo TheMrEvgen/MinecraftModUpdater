@@ -208,6 +208,10 @@ QMenu::icon {{ padding-left: 8px; }}
 #ModList {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 12px; }}
 #ListHeader {{ color: {t['text_muted']}; }}
 #DetailsPanel {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 12px; }}
+QListWidget#SettingsNav {{ background: transparent; border: none; outline: none; }}
+QListWidget#SettingsNav::item {{ color: {t['text_muted']}; padding: 7px 10px; border-radius: 8px; margin: 1px 0; }}
+QListWidget#SettingsNav::item:hover {{ background: {t['surface2']}; color: {t['text']}; }}
+QListWidget#SettingsNav::item:selected {{ background: {rgba(t['accent'], 0.14)}; color: {t['text']}; }}
 QListWidget {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 10px;
                           color: {t['text']}; }}
 QListWidget::item:selected {{ background: {rgba(t['accent'], 0.14)}; color: {t['text']}; }}

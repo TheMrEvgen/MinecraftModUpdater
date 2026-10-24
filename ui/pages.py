@@ -4,14 +4,14 @@ from typing import Dict, List
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFontDatabase
 from PyQt6.QtWidgets import (
-    QButtonGroup, QCheckBox, QColorDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
-    QRadioButton, QScrollArea, QComboBox, QVBoxLayout, QWidget,
+    QAbstractButton, QButtonGroup, QCheckBox, QColorDialog, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
+    QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QRadioButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 import icons
 from theme import ACCENTS, DEFAULT_ACCENT, THEME_TITLES
 from ui.shortcuts import ShortcutEditor
-from ui.widgets import EmptyState, button, label, refresh_button_icons
+from ui.widgets import EmptyState, SearchBox, button, label, refresh_button_icons
 from updater import KIND_LABELS, SNAPSHOT_REASONS
 from view_model import format_size
 from i18n import LANGUAGES, language, tr
@@ -237,8 +237,10 @@ class SettingsPage(QWidget):
         self.setObjectName("Page")
         self.tokens = tokens
         self._loading = False
-        outer = QVBoxLayout(self)
+        self._sections: List[tuple] = []  # (заголовок, карточка) — для навигации и поиска
+        outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -589,6 +591,7 @@ class SettingsPage(QWidget):
         body.addWidget(shortcuts)
         root.addWidget(card)
         root.addStretch()
+        self._build_navigation(outer, scroll)
 
     def _build_install_card(self, tokens: dict) -> QFrame:
         """Компактная карточка: строка статуса с кнопками, параметры и описание — по кнопке «Параметры»."""
@@ -641,6 +644,7 @@ class SettingsPage(QWidget):
         self._root.removeWidget(self.install_card)
         index = 1 if top else self._root.indexOf(self._hotkeys_card)
         self._root.insertWidget(index, self.install_card)
+        self._fill_navigation()
 
     @staticmethod
     def _add_with_hint(body, widget, hint: str = None):
@@ -657,11 +661,99 @@ class SettingsPage(QWidget):
         body.setContentsMargins(18, 16, 18, 16)
         body.setSpacing(10)
         body.addWidget(label(title, "SectionTitle"))
+        self._sections.append((title, card))
         return card, body
+
+    # --- Навигация и поиск по разделам ---
+
+    def _build_navigation(self, outer: QHBoxLayout, scroll: QScrollArea):
+        """Колонка слева: поиск по настройкам и список разделов (щелчок — прокрутить к разделу)."""
+        self._scroll = scroll
+        self.nav = QWidget()
+        self.nav.setFixedWidth(230)
+        lay = QVBoxLayout(self.nav)
+        lay.setContentsMargins(24, 30, 4, 20)
+        lay.setSpacing(10)
+        self.settings_search = SearchBox(self.tokens, tr("Найти настройку…"))
+        self.settings_search.setMinimumHeight(34)
+        self.settings_search.textChanged.connect(self._filter_sections)
+        lay.addWidget(self.settings_search)
+        self.nav_list = QListWidget()
+        self.nav_list.setObjectName("SettingsNav")
+        self.nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav_list.itemClicked.connect(lambda item: self._scroll_to(item.data(Qt.ItemDataRole.UserRole)))
+        lay.addWidget(self.nav_list, 1)
+        self.search_status = label("", "Faint", wrap=True)
+        self.search_status.hide()
+        lay.addWidget(self.search_status)
+        outer.insertWidget(0, self.nav)
+        self._fill_navigation()
+        scroll.verticalScrollBar().valueChanged.connect(self._sync_navigation)
+
+    def _fill_navigation(self):
+        """Разделы в порядке карточек на странице (карточка установки может переезжать)."""
+        if not hasattr(self, "nav_list"):
+            return
+        self.nav_list.clear()
+        for title, card in sorted(self._sections, key=lambda s: self._root.indexOf(s[1])):
+            item = QListWidgetItem(title)
+            item.setData(Qt.ItemDataRole.UserRole, card)
+            item.setHidden(card.isHidden())
+            self.nav_list.addItem(item)
+
+    def _scroll_to(self, card: QWidget):
+        top = card.mapTo(self._scroll.widget(), card.rect().topLeft()).y()
+        self._scroll.verticalScrollBar().setValue(max(0, top - 16))
+
+    def _sync_navigation(self, value: int):
+        """Подсветка раздела, который сейчас наверху страницы."""
+        current = None
+        for i in range(self.nav_list.count()):
+            item = self.nav_list.item(i)
+            card = item.data(Qt.ItemDataRole.UserRole)
+            if item.isHidden():
+                continue
+            if card.mapTo(self._scroll.widget(), card.rect().topLeft()).y() <= value + 80 or current is None:
+                current = item
+        if current is not None and current is not self.nav_list.currentItem():
+            self.nav_list.blockSignals(True)
+            self.nav_list.setCurrentItem(current)
+            self.nav_list.blockSignals(False)
+
+    @staticmethod
+    def _section_text(card: QWidget) -> str:
+        """Всё, что написано в карточке: заголовки, подписи, галочки, кнопки, пункты списков."""
+        import re
+        parts = [w.text() for w in card.findChildren(QLabel)]
+        parts += [w.text() for w in card.findChildren(QAbstractButton)]
+        for combo in card.findChildren(QComboBox):
+            parts += [combo.itemText(i) for i in range(combo.count())]
+        return re.sub(r"<[^>]+>", " ", " ".join(parts)).lower()
+
+    def _filter_sections(self, text: str):
+        query = text.strip().lower()
+        shown = 0
+        for i in range(self.nav_list.count()):
+            item = self.nav_list.item(i)
+            card = item.data(Qt.ItemDataRole.UserRole)
+            visible = not query or all(word in self._section_text(card) for word in query.split())
+            card.setVisible(visible)
+            item.setHidden(not visible)
+            shown += visible
+        self.search_status.setVisible(bool(query))
+        self.search_status.setText(tr("Ничего не найдено") if not shown else tr("Разделов: {0}", shown))
+        self._scroll.verticalScrollBar().setValue(0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "nav"):
+            self.nav.setVisible(self.width() >= 860)  # В узком окне колонка разделов прячется
 
     def set_tokens(self, tokens: dict):
         self.tokens = tokens
         refresh_button_icons(self, tokens)
+        if hasattr(self, "settings_search"):
+            self.settings_search.set_tokens(tokens)
 
     def load(self, theme: str, settings: Dict):
         self._loading = True
