@@ -399,6 +399,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
             self.card_group.addButton(card)
             self.cards[category] = card
             cards.addWidget(card)
+        cards.addStretch()  # Счётчики — по ширине содержимого, прижаты влево
         self.cards[CAT_ALL].setChecked(True)
         self.cards_widget = QWidget()
         self.cards_widget.setLayout(cards)

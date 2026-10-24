@@ -91,7 +91,8 @@ class SearchBox(QLineEdit):
 
 
 class StatCard(QPushButton):
-    """Карточка-сводка с числом; одновременно фильтр списка."""
+    """Счётчик-фильтр над списком: «число  подпись» в одну строку, ширина — по содержимому."""
+    HEIGHT = 38
 
     def __init__(self, title: str, category: str, color_key: str, tokens: dict, parent=None):
         super().__init__(parent)
@@ -103,11 +104,26 @@ class StatCard(QPushButton):
         self.tokens = tokens
         self.title = title
         self.count = 0
-        self.setFixedHeight(78)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(self.HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+
+    def _fonts(self):
+        number = QFont(self.font())
+        number.setPointSizeF(self.font().pointSizeF() + 1.5)
+        number.setWeight(QFont.Weight.Bold)
+        return number, QFont(self.font())
+
+    def sizeHint(self):
+        number, text = self._fonts()
+        width = QFontMetrics(number).horizontalAdvance(str(self.count)) + 8 + QFontMetrics(text).horizontalAdvance(self.title)
+        return QSize(width + 30, self.HEIGHT)
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
 
     def set_count(self, count: int):
         self.count = count
+        self.updateGeometry()
         self.update()
 
     def set_tokens(self, tokens: dict):
@@ -119,24 +135,18 @@ class StatCard(QPushButton):
         t = self.tokens
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = self.rect().adjusted(16, 10, -16, -10)
-        number_font = QFont(self.font())
-        number_font.setPointSizeF(self.font().pointSizeF() + 7)
-        number_font.setWeight(QFont.Weight.Bold)
-        small = QFont(self.font())
-        small.setPointSizeF(self.font().pointSizeF() - 0.5)
-        fm, fm_small = QFontMetrics(number_font), QFontMetrics(small)
+        number_font, text_font = self._fonts()
+        r = self.rect().adjusted(15, 0, -15, 0)
         active = self.count > 0 and self.color_key not in ("text",)
-        top = r.top() + max(0, (r.height() - fm.height() - fm_small.height()) // 2)
         p.setFont(number_font)
         p.setPen(qcolor(t[self.color_key] if active else t["text"]))
-        p.drawText(QRect(r.left(), top, r.width(), fm.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   str(self.count))
-        p.setFont(small)
-        p.setPen(qcolor(t["text_muted"]))
-        p.drawText(QRect(r.left(), top + fm.height(), r.width(), fm_small.height()),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   fm_small.elidedText(self.title, Qt.TextElideMode.ElideRight, r.width()))
+        number = str(self.count)
+        number_w = QFontMetrics(number_font).horizontalAdvance(number)
+        p.drawText(QRect(r.left(), r.top(), number_w + 2, r.height()), Qt.AlignmentFlag.AlignVCenter, number)
+        p.setFont(text_font)
+        p.setPen(qcolor(t["text"] if self.isChecked() else t["text_muted"]))
+        p.drawText(QRect(r.left() + number_w + 8, r.top(), r.width() - number_w - 8, r.height()),
+                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.title)
         p.end()
 
 

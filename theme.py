@@ -166,8 +166,8 @@ QPushButton::menu-indicator {{ width: 0; image: none; }}
 #SectionTitle {{ font-size: 11pt; font-weight: 700; }}
 
 /* --- Карточки-сводки (работают как фильтры) --- */
-#StatCard {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 12px;
-             padding: 10px 14px; text-align: left; }}
+#StatCard {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 19px;
+             padding: 0 14px; text-align: left; }}
 #StatCard:hover {{ border-color: {t['border_strong']}; background: {t['surface2']}; }}
 #StatCard:checked {{ border: 1px solid {rgba(t['accent'], 0.6)}; background: {rgba(t['accent'], 0.08)}; }}
 
