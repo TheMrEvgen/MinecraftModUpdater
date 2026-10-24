@@ -580,6 +580,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
         check_cancel()
         from_curseforge = _curseforge_entries(unknown, game_version, loader if content is MODS else None, channel,
                                               cache, progress, check_cancel, installed_keys(mods_data))
+        mark_cross_catalog_duplicates(mods_data, list(from_curseforge.values()))
         for local in unknown:
             entry = from_curseforge.get(local['path'])
             if entry is None:
@@ -662,6 +663,31 @@ def _curseforge_entries(locals_: List[Dict], game_version: str, loader: Optional
     if loader and result:  # У шейдеров и ресурспаков зависимостей нет
         _attach_curseforge_dependencies(result, set(installed or ()), game_version, loader, channel)
     return result
+
+
+def mark_cross_catalog_duplicates(modrinth_entries: List[Dict], curseforge_entries: List[Dict]):
+    """
+    Один и тот же мод из двух каталогов (например, Sodium и с Modrinth, и с CurseForge под другим именем файла) —
+    игра с такими дублями падает. Помечаем обе копии; выключенные не считаются.
+    """
+    by_key: Dict[str, Dict] = {}
+    for entry in modrinth_entries:
+        for item in [entry] + list(entry.get("dependencies") or []):
+            if item.get("filepath") and not item.get("disabled"):
+                for key in (_key(item.get("slug")), _key(item.get("name"))):
+                    if key:
+                        by_key.setdefault(key, item)
+    for entry in curseforge_entries:
+        if entry.get("disabled"):
+            continue
+        twin = next((by_key[k] for k in (_key(entry.get("slug")), _key(entry.get("name"))) if k in by_key), None)
+        if twin is None:
+            continue
+        twin_file = os.path.basename(twin["filepath"])
+        entry["duplicate_of"] = twin_file
+        entry["duplicate_source"] = "Modrinth"
+        twin.setdefault("duplicates", []).append(os.path.basename(entry["filepath"]))
+        logging.warning(tr("Один мод из двух каталогов: {0} и {1}", twin_file, os.path.basename(entry["filepath"])))
 
 
 def _key(text: Optional[str]) -> str:

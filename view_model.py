@@ -224,7 +224,10 @@ def build_rows(mods_data: List[Dict], mode: str = VIEW_FLAT) -> tuple[List[tuple
 def entry_issues(entry: Dict) -> List[str]:
     """Проблемы мода: недостающие обязательные и установленные несовместимые зависимости."""
     issues = []
-    if entry.get("duplicate_of"):
+    if entry.get("duplicate_of") and entry.get("duplicate_source"):  # Тот же мод из другого каталога
+        issues.append(tr('этот мод уже стоит с {0} ({1}) — оставьте одну копию, иначе игра упадёт',
+                         entry['duplicate_source'], entry['duplicate_of']))
+    elif entry.get("duplicate_of"):
         issues.append(tr('лишняя копия — основной файл {0}', entry['duplicate_of']))
     elif entry.get("duplicates"):
         issues.append(tr('дубликат: {0}', ', '.join(entry['duplicates'])))

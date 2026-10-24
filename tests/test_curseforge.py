@@ -154,3 +154,17 @@ def test_curseforge_pack_import(tmp_path, monkeypatch):
     entries = scanner.entries_from_curseforge_pack(loaded)
     assert [e["project_id"] for e in entries] == ["cf:100"]
     assert entries[0]["status"] == ModStatus.READY_TO_INSTALL and entries[0]["download_url"] is None and entries[0]["manual_url"]
+
+
+def test_same_mod_from_two_catalogs_is_flagged():
+    import scanner
+    from view_model import entry_issues
+    modrinth = [{"name": "Sodium", "slug": "sodium", "filepath": "/mods/sodium-0.6.jar", "dependencies": []},
+                {"name": "Lithium", "slug": "lithium", "filepath": "/mods/lithium.jar", "disabled": True}]
+    curse = [{"name": "Sodium", "slug": "sodium", "filepath": "/mods/sodium-fabric-cf.jar"},
+             {"name": "Lithium", "slug": "lithium", "filepath": "/mods/lithium-cf.jar"},  # Копия с Modrinth выключена
+             {"name": "JourneyMap", "slug": "journeymap", "filepath": "/mods/journeymap.jar"}]
+    scanner.mark_cross_catalog_duplicates(modrinth, curse)
+    assert curse[0]["duplicate_of"] == "sodium-0.6.jar" and "Modrinth" in entry_issues(curse[0])[0]
+    assert modrinth[0]["duplicates"] == ["sodium-fabric-cf.jar"]
+    assert "duplicate_of" not in curse[1] and "duplicate_of" not in curse[2]
