@@ -246,7 +246,7 @@ class TransferMixin:
         ok = any(f.lower().endswith((".jar", ".mrpack", ".zip")) for f in files) or (not files and event.mimeData().hasText())
         if ok and not self._busy:
             event.acceptProposedAction()
-            self.drop_overlay.setGeometry(self.centralWidget().rect().adjusted(262, 12, -12, -12))
+            self.drop_overlay.setGeometry(self.centralWidget().rect().adjusted(self.sidebar.width() + 12, 12, -12, -12))
             self.drop_overlay.show()
             self.drop_overlay.raise_()
         else:

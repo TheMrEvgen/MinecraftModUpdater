@@ -2,7 +2,7 @@
 from typing import Callable, Dict, List, Optional
 
 from PyQt6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QFont, QFontMetrics, QPainter, QPainterPath, QPixmap
+from PyQt6.QtGui import QAction, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QVBoxLayout,
@@ -417,10 +417,44 @@ class ProfileDelegate(QStyledItemDelegate):
     def __init__(self, parent, tokens: dict):
         super().__init__(parent)
         self.tokens = tokens
+        self.collapsed = False  # Свёрнутая боковая панель: только кружки с инициалами
 
     def sizeHint(self, option, index):
         data = index.data(PROFILE_ROLE) or {}
+        if self.collapsed:
+            return QSize(option.rect.width(), 10 if data.get("header") else 46)
         return QSize(option.rect.width(), 30 if data.get("header") else 50)
+
+    @staticmethod
+    def initials(name: str) -> str:
+        import re
+        version = re.match(r"\d[\d.]*", str(name))
+        if version:  # Сборка названа версией игры: «1.21.11» → «1.21»
+            return version.group(0)[:4].rstrip(".")
+        words = [w for w in str(name).replace("_", " ").replace("-", " ").split() if w]
+        if len(words) >= 2:
+            return (words[0][0] + words[1][0]).upper()
+        return (str(name)[:2] or "?").upper()
+
+    def _paint_collapsed(self, p: QPainter, option, data: Dict, selected: bool, hovered: bool):
+        t = self.tokens
+        if data.get("header"):  # Граница групп — тонкая черта
+            p.setPen(QPen(qcolor(t["border"]), 1))
+            y = option.rect.center().y()
+            p.drawLine(option.rect.left() + 18, y, option.rect.right() - 18, y)
+            return
+        size = 36
+        circle = QRectF(option.rect.center().x() - size / 2, option.rect.center().y() - size / 2, size, size)
+        color = data.get("color") or t["accent"]
+        p.setPen(QPen(qcolor(t["accent"]), 2) if selected else Qt.PenStyle.NoPen)
+        p.setBrush(qcolor(color, 0.22 if selected else 0.14 if hovered else 0.09))
+        p.drawEllipse(circle)
+        font = QFont(option.font)
+        font.setWeight(QFont.Weight.Bold)
+        font.setPointSizeF(max(option.font.pointSizeF() - 1, 7))
+        p.setFont(font)
+        p.setPen(qcolor(t["text"] if selected else t["text_muted"]))
+        p.drawText(circle, Qt.AlignmentFlag.AlignCenter, self.initials(data.get("name", "")))
 
     @staticmethod
     def _header_font(base):
@@ -438,6 +472,10 @@ class ProfileDelegate(QStyledItemDelegate):
         r = option.rect.adjusted(6, 2, -6, -2)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver) and not data.get("header")
+        if self.collapsed:
+            self._paint_collapsed(p, option, data, selected, hovered)
+            p.restore()
+            return
         if selected or hovered:
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(qcolor(t["accent"], 0.12) if selected else qcolor(t["surface2"]))
@@ -484,6 +522,8 @@ class Sidebar(QFrame):
     add_profile_clicked = pyqtSignal()
     page_changed = pyqtSignal(int)
     profiles_reordered = pyqtSignal(list)  # [(имя, группа)] в новом порядке
+    collapse_toggled = pyqtSignal(bool)  # Пользователь свернул/развернул панель кнопкой
+    WIDE, NARROW = 250, 72
 
     PAGES = (("package", tr("Моды")), ("compass", tr("Каталог")), ("history", tr("История")), ("bar_chart", tr("Статистика")),
              ("terminal", tr("Журнал")), ("settings", tr("Настройки")))
@@ -491,9 +531,11 @@ class Sidebar(QFrame):
     def __init__(self, tokens: dict, app_version: str, parent=None):
         super().__init__(parent)
         self.setObjectName("Sidebar")
-        self.setFixedWidth(250)
+        self.setFixedWidth(self.WIDE)
         self.tokens = tokens
+        self.collapsed = False
         layout = QVBoxLayout(self)
+        self._layout = layout
         layout.setContentsMargins(12, 16, 12, 14)
         layout.setSpacing(4)
 
@@ -503,18 +545,25 @@ class Sidebar(QFrame):
         self.logo.setFixedSize(34, 34)
         self.logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         brand.addWidget(self.logo)
-        titles = QVBoxLayout()
+        self.titles = QWidget()
+        titles = QVBoxLayout(self.titles)
+        titles.setContentsMargins(0, 0, 0, 0)
         titles.setSpacing(0)
         titles.addWidget(label("Mod Updater", "AppTitle"))
         titles.addWidget(label(tr('ВЕРСИЯ {0}', app_version).upper(), "AppVersion"))
-        brand.addLayout(titles)
+        brand.addWidget(self.titles)
         brand.addStretch()
+        self.collapse_btn = button("", "IconButton", "chevron_left", tokens, "text_muted", tr("Свернуть панель"))
+        self.collapse_btn.setFixedSize(26, 26)
+        self.collapse_btn.clicked.connect(lambda: self.collapse_toggled.emit(not self.collapsed))
+        brand.addWidget(self.collapse_btn)
         layout.addLayout(brand)
         layout.addSpacing(18)
 
         header = QHBoxLayout()
         header.setContentsMargins(8, 0, 0, 0)
-        header.addWidget(label(tr("СБОРКИ"), "SectionLabel"))
+        self.section_label = label(tr("СБОРКИ"), "SectionLabel")
+        header.addWidget(self.section_label)
         header.addStretch()
         self.add_btn = button("", "IconButton", "plus", tokens, "text_muted", tr("Добавить сборку"))
         self.add_btn.setFixedSize(28, 28)
@@ -545,6 +594,7 @@ class Sidebar(QFrame):
         self.nav_buttons = []
         for i, (icon_name, text) in enumerate(self.PAGES):
             btn = button(f"  {text}", "NavButton", icon_name, tokens, "text_muted")
+            btn.setProperty("nav_text", text)
             btn.setCheckable(True)
             btn.setIconSize(QSize(17, 17))
             self.nav_group.addButton(btn, i)
@@ -553,6 +603,29 @@ class Sidebar(QFrame):
         self.nav_buttons[0].setChecked(True)
         self.nav_group.idClicked.connect(self._on_nav)
         self.set_tokens(tokens)
+
+    def set_collapsed(self, collapsed: bool):
+        """Свёрнутая панель: значки страниц и кружки сборок, названия — во всплывающих подсказках."""
+        if collapsed == self.collapsed:
+            return
+        self.collapsed = collapsed
+        self.setFixedWidth(self.NARROW if collapsed else self.WIDE)
+        self._layout.setContentsMargins(8 if collapsed else 12, 16, 8 if collapsed else 12, 14)
+        self.titles.setVisible(not collapsed)
+        self.section_label.setVisible(not collapsed)
+        self.add_btn.setVisible(not collapsed)
+        name = "chevron_right" if collapsed else "chevron_left"
+        self.collapse_btn.setProperty("icon_name", name)
+        self.collapse_btn.setIcon(icons.icon(name, self.tokens["text_muted"], 16))
+        self.collapse_btn.setToolTip(tr("Развернуть панель") if collapsed else tr("Свернуть панель"))
+        self.logo.setVisible(not collapsed)
+        for btn in self.nav_buttons:
+            text = btn.property("nav_text")
+            btn.setText("" if collapsed else f"  {text}")
+            btn.setToolTip(text if collapsed else "")
+        self.profile_delegate.collapsed = collapsed
+        self.profile_list.doItemsLayout()
+        self.profile_list.viewport().update()
 
     def set_background(self, path: str):
         """Своя картинка под боковой панелью (с затемнением, чтобы текст оставался читаемым)."""
@@ -620,7 +693,9 @@ class Sidebar(QFrame):
             for data in items:
                 item = QListWidgetItem(data["name"])
                 item.setData(PROFILE_ROLE, data)
-                item.setToolTip(data.get("tooltip", ""))
+                # В свёрнутой панели видно только инициалы — название и путь в подсказке
+                item.setToolTip(f"<b>{data['name']}</b><br>{data.get('subtitle', '')}"
+                                + (f"<br>{data['tooltip']}" if data.get("tooltip") else ""))
                 self.profile_list.addItem(item)
                 if data["name"] == current:
                     self.profile_list.setCurrentItem(item)

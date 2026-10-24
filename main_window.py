@@ -177,6 +177,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self.sidebar.profile_context_menu.connect(self._show_profile_menu)
         self.sidebar.add_profile_clicked.connect(self._show_add_profile_menu)
         self.sidebar.page_changed.connect(self._switch_page)
+        self.sidebar.collapse_toggled.connect(self._on_sidebar_toggled)
         self.sidebar.profiles_reordered.connect(self._on_profiles_reordered)
         layout.addWidget(self.sidebar)
 
@@ -581,11 +582,26 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.drop_overlay.setGeometry(self.centralWidget().rect().adjusted(260, 12, -12, -12))
+        self._apply_sidebar_width()
+        self.drop_overlay.setGeometry(self.centralWidget().rect().adjusted(self.sidebar.width() + 10, 12, -12, -12))
         from ui.details_panel import panel_width
         self.details.setFixedWidth(panel_width(self.stack.width() - 56))
         if self.palette.isVisible():
             self.palette.open()
+
+    AUTO_COLLAPSE_WIDTH = 1150  # Уже — боковая панель сворачивается сама
+
+    def _apply_sidebar_width(self):
+        if not hasattr(self, "sidebar"):
+            return
+        self.sidebar.set_collapsed(bool(self.settings.get("sidebar_collapsed")) or self.width() < self.AUTO_COLLAPSE_WIDTH)
+
+    def _on_sidebar_toggled(self, collapsed: bool):
+        if not collapsed and self.width() < self.AUTO_COLLAPSE_WIDTH:
+            self.toasts.show(tr("Окно слишком узкое — панель развернётся, когда окно станет шире."), "info")
+        self.settings["sidebar_collapsed"] = collapsed
+        self.save_config()
+        self._apply_sidebar_width()
 
     def closeEvent(self, event):
         if self._hide_to_tray():  # «Оставаться в трее»: окно прячется, программа работает дальше
