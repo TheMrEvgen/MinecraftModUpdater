@@ -579,7 +579,7 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
                    if not (installed_infos.get(local['sha1']) or {}).get('project_id')]
         check_cancel()
         from_curseforge = _curseforge_entries(unknown, game_version, loader if content is MODS else None, channel,
-                                              cache, progress, check_cancel)
+                                              cache, progress, check_cancel, installed_keys(mods_data))
         for local in unknown:
             entry = from_curseforge.get(local['path'])
             if entry is None:
@@ -595,10 +595,11 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
 
 def _curseforge_entries(locals_: List[Dict], game_version: str, loader: Optional[str], channel: UpdateChannel,
                         cache: Optional["ModCache"], progress: ProgressCallback = lambda msg: None,
-                        check_cancel: Callable[[], None] = lambda: None) -> Dict[str, Dict]:
+                        check_cancel: Callable[[], None] = lambda: None, installed: Optional[set] = None) -> Dict[str, Dict]:
     """
     Файлы, которых нет на Modrinth, — по отпечатку на CurseForge. Путь → запись мода (как у Modrinth):
-    установленная версия, страница, иконка и последняя подходящая версия. Без ключа API — пусто.
+    установленная версия, страница, иконка, последняя подходящая версия и недостающие обязательные зависимости.
+    installed — ключи уже установленных модов (installed_keys). Без ключа API — пусто.
     """
     import curseforge
     if not locals_ or not curseforge.available():
@@ -658,7 +659,64 @@ def _curseforge_entries(locals_: List[Dict], game_version: str, loader: Optional
             if built:
                 result[built[0]] = built[1]
     logging.info(tr("CurseForge: узнано {0} из {1} модов, которых нет на Modrinth.", len(result), len(locals_)))
+    if loader and result:  # У шейдеров и ресурспаков зависимостей нет
+        _attach_curseforge_dependencies(result, set(installed or ()), game_version, loader, channel)
     return result
+
+
+def _key(text: Optional[str]) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def installed_keys(entries: List[Dict]) -> set:
+    """Адреса и названия установленных модов — зависимость считается выполненной, из какого бы каталога ни стояла."""
+    keys = set()
+    for entry in entries:
+        for item in [entry] + list(entry.get("dependencies") or []):
+            if item.get("filepath"):
+                keys.update(k for k in (_key(item.get("slug")), _key(item.get("name"))) if k)
+    return keys
+
+
+def _attach_curseforge_dependencies(result: Dict[str, Dict], installed: set, game_version: str, loader: str,
+                                    channel: UpdateChannel):
+    """Обязательные зависимости модов с CurseForge, которых нет в сборке (с поиском версии под сборку)."""
+    import curseforge
+    installed = installed | {k for e in result.values() for k in (_key(e.get("slug")), _key(e.get("name"))) if k}
+    wanted: Dict[int, List[Dict]] = {}
+    for entry in result.values():
+        for dep in (entry.get("installed_info") or {}).get("dependencies") or []:
+            dep_id = curseforge.mod_id(dep.get("project_id"))
+            if dep.get("dependency_type") == "required" and dep_id:
+                wanted.setdefault(dep_id, []).append(entry)
+    if not wanted:
+        return
+    try:
+        dep_mods = curseforge.get_mods(wanted)
+    except requests.RequestException as e:
+        logging.warning(tr("CurseForge недоступен: {0}", e))
+        return
+    for dep_id, parents in wanted.items():
+        mod = dep_mods.get(dep_id)
+        if not mod or mod.get("isAvailable") is False:
+            continue
+        project = curseforge.to_project(mod)
+        if {_key(mod.get("slug")), _key(mod.get("name"))} & installed or not dependency_applies(project, loader):
+            continue  # Уже стоит (в том числе с Modrinth) или нужна другому загрузчику
+        try:
+            newest = curseforge.latest_file(curseforge.files_for(dep_id, game_version, loader), game_version, loader,
+                                            channel.value)
+        except requests.RequestException:
+            newest = None
+        dep_entry = {"name": project["title"], "project_id": project["id"], "current_version": "", "filepath": None,
+                     "status": ModStatus.REQUIRED, "new_version": "", "new_version_date": "", "download_url": None,
+                     "new_filename": None, "new_hashes": None, "installed_info": None, "type": "required",
+                     "installed": False}
+        _apply_project_info(dep_entry, project)
+        if newest:
+            apply_install_info(dep_entry, curseforge.to_version(newest, mod))
+        for parent in parents:
+            parent.setdefault("dependencies", []).append(dict(dep_entry))
 
 
 # --- Импорт .mrpack ---

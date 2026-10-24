@@ -106,3 +106,24 @@ def test_without_key_curseforge_is_skipped(tmp_path):
     import scanner
     assert os.environ.get("CURSEFORGE_API_KEY") == "" and not curseforge.available()
     assert scanner._curseforge_entries([{"path": "x", "sha1": "s"}], "1.21.1", "fabric", UpdateChannel.RELEASE, None) == {}
+
+
+def test_dependencies_satisfied_from_any_catalog(monkeypatch):
+    import scanner
+    parent = {"name": "Ящики", "slug": "drawers", "installed_info": {"dependencies": [
+        {"project_id": "cf:306612", "dependency_type": "required"},
+        {"project_id": "cf:500", "dependency_type": "required"},
+        {"project_id": "cf:600", "dependency_type": "optional"}]}}
+    api = {**cf_mod(), "id": 306612, "name": "Fabric API", "slug": "fabric-api"}
+    lib = {**cf_mod(), "id": 500, "name": "Lib Forge Only", "slug": "lib", "latestFilesIndexes": [{"modLoader": 1}]}
+    monkeypatch.setattr(curseforge, "get_mods", lambda ids: {306612: api, 500: lib})
+    monkeypatch.setattr(curseforge, "files_for", lambda mod, gv, loader: [cf_file(9, "dep-1.0", "2026-01-01")])
+    result = {"a.jar": parent}
+    # Fabric API уже стоит с Modrinth (тот же адрес), Lib — только для Forge: обе зависимости не нужны
+    scanner._attach_curseforge_dependencies(result, {"fabricapi"}, "1.21.1", "fabric", UpdateChannel.RELEASE)
+    assert parent.get("dependencies", []) == []
+    # Без Fabric API в сборке — требуется, с версией для установки
+    scanner._attach_curseforge_dependencies(result, set(), "1.21.1", "fabric", UpdateChannel.RELEASE)
+    deps = parent["dependencies"]
+    assert [(d["name"], d["status"]) for d in deps] == [("Fabric API", ModStatus.REQUIRED)]
+    assert deps[0]["download_url"] and deps[0]["new_version"] == "dep-1.0"
