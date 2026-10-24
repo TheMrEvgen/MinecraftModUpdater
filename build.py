@@ -102,6 +102,7 @@ def build_executable(onedir: bool = False):
         '--onedir' if onedir else '--onefile',
         '--windowed',     # Запускать без консольного окна (консольный режим подключается к консоли сам)
         '--clean',        # Очистить кэш PyInstaller перед сборкой
+        '--noupx',        # Без UPX-сжатия: на сжатые .exe антивирусы реагируют чаще
         '--noconfirm',
         '--version-file', VERSION_FILE # Добавляем информацию о версии
     ]

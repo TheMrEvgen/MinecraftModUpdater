@@ -5,6 +5,7 @@ name: Выпуск
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:  # Пробная сборка без выпуска: .exe прикладывается к запуску как артефакт
 
 permissions:
   contents: write
@@ -23,7 +24,17 @@ jobs:
           cache: pip
       - run: pip install -r requirements-dev.txt
 
+      - name: PyInstaller со своим загрузчиком
+        # Антивирусы часто ложно срабатывают на стандартный загрузчик PyInstaller (его же используют вирусы).
+        # Загрузчик, собранный из исходников, с их сигнатурами не совпадает.
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+        run: |
+          $version = python -c "import PyInstaller; print(PyInstaller.__version__)"
+          pip install --force-reinstall --no-deps --no-binary pyinstaller "pyinstaller==$version"
+
       - name: Тег совпадает с версией программы
+        if: github.event_name == 'push'
         shell: pwsh
         run: |
           $version = python -c "import build; print(build.VERSION)"
@@ -47,9 +58,17 @@ jobs:
           $hash = (Get-FileHash ModUpdater.exe -Algorithm SHA256).Hash.ToLower()
           # Формат sha256sum с переводом строки \n — проверяется и программой, и `sha256sum -c`
           [IO.File]::WriteAllText("$PWD/ModUpdater.exe.sha256", "$hash  ModUpdater.exe`n")
-          python tools/release_notes.py "${{ github.ref_name }}" notes.md
+          if ("${{ github.event_name }}" -eq "push") { python tools/release_notes.py "${{ github.ref_name }}" notes.md }
+
+      - name: Пробная сборка — .exe к запуску
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v5
+        with:
+          name: ModUpdater-test-build
+          path: ModUpdater.exe
 
       - name: Выпуск на GitHub
+        if: github.event_name == 'push'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
