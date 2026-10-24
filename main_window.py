@@ -293,7 +293,10 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self.loader_chip.clicked.connect(self._on_loader_chip_clicked)
         self.channel_chip = ChipButton()
         self.channel_chip.clicked.connect(self._show_channel_menu)
-        for chip in (self.game_chip, self.loader_chip, self.channel_chip):
+        self.world_chip = ChipButton()  # Только на вкладке «Датапаки»
+        self.world_chip.clicked.connect(self._show_world_menu)
+        self.world_chip.hide()
+        for chip in (self.game_chip, self.loader_chip, self.channel_chip, self.world_chip):
             chips.addWidget(chip)
         chips.addSpacing(6)
         self.path_icon = QLabel()

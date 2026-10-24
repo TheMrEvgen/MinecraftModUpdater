@@ -30,7 +30,7 @@ PAGE_SIZE = 20
 SORTS = (("relevance", tr("По релевантности")), ("downloads", tr("Популярные")), ("updated", tr("Недавно обновлённые")),
          ("newest", tr("Новые")), ("follows", tr("Больше подписчиков")))
 SIDES = (("", tr("Любая сторона")), ("client", tr("Нужны на клиенте")), ("server", tr("Работают на сервере")))
-CONTENT_ICONS = {"mods": "package", "shaders": "sparkles", "resourcepacks": "image"}
+CONTENT_ICONS = {"mods": "package", "shaders": "sparkles", "resourcepacks": "image", "datapacks": "code"}
 VERSION_TYPES = {"release": tr("релиз"), "beta": tr("бета"), "alpha": tr("альфа")}
 SIDE_TEXT = {"required": tr("нужен"), "optional": tr("необязателен"), "unsupported": tr("не нужен"), "unknown": "?"}
 

@@ -23,7 +23,7 @@ from typing import List, Optional
 
 import config as app_config
 from background_check import collect_updates, resolve_versions
-from content import CONTENT_TYPES, content_by_key
+from content import CONTENT_TYPES, content_by_key, pick_world
 from enums import ModStatus, UpdateChannel
 from i18n import tr
 
@@ -72,7 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-deps", action="store_true", help=tr("не устанавливать недостающие обязательные зависимости"))
     parser.add_argument("--force", action="store_true", help=tr("не проверять, запущена ли игра"))
     parser.add_argument("--content", choices=[c.key for c in CONTENT_TYPES], default="mods",
-                        help=tr("что обновлять: моды, шейдеры или ресурспаки"))
+                        help=tr("что обновлять: моды, шейдеры, ресурспаки или датапаки"))
+    parser.add_argument("--world", help=tr("мир для датапаков (по умолчанию — последний сыгранный)"))
     parser.add_argument("--no-snapshot", action="store_true", help=tr("не сохранять снимок сборки перед обновлением"))
     return parser
 
@@ -108,7 +109,8 @@ def run(argv: List[str]) -> int:
             profile_name = "(--game-dir)"
             profile["manual_mode"] = False
     content = content_by_key(args.content)
-    mods_path = content.path(profile.get("mods_path", ""))
+    world = pick_world(profile.get("mods_path", ""), args.world or profile.get("datapack_world")) if content.per_world else None
+    mods_path = content.path(profile.get("mods_path", ""), world)
     if not os.path.isdir(mods_path):
         _print(tr('Папка {0} не найдена: {1}', content.folder, mods_path))
         return EXIT_USAGE

@@ -25,11 +25,11 @@ class CatalogMixin:
     def _refresh_catalog_context(self):
         self.catalog_page.set_context(self.game_version, self.loader, self._installed_ids())
         # Типы контента, которые ещё не открывались: читаем их папки, чтобы отметить уже установленное
-        game_dir = self._profile().get("mods_path", "")
         for content in CONTENT_TYPES:
             key = self._skey(content=content)
-            if content is not self.content and key not in self.sessions and os.path.isdir(content.path(game_dir)):
-                self._run_task(scan_local, (content.path(game_dir), app_config.CACHE_FILE, content),
+            folder = self._content_folder(content)
+            if content is not self.content and key not in self.sessions and folder and os.path.isdir(folder):
+                self._run_task(scan_local, (folder, app_config.CACHE_FILE, content),
                                lambda data, k=key: self._on_catalog_folder_read(k, data), lambda e: None, None)
 
     def _on_catalog_folder_read(self, key: tuple, data: List[dict]):
@@ -72,7 +72,11 @@ class CatalogMixin:
         if len(entries) > 1:
             deps = ", ".join(e.get("name") for e in entries[1:])
             self.toasts.show(tr('Вместе с «{0}» будут установлены зависимости: {1}', entries[0].get('name'), deps), "info")
-        folder = content.path(self._profile().get("mods_path", ""))
+        folder = self._content_folder(content)
+        if not folder:  # Датапак без мира: ставить некуда
+            self.catalog_page.set_installing([e["project_id"] for e in entries], False)
+            self.toasts.show(tr("Датапаки ставятся в мир, а миров в этой сборке пока нет — создайте мир в игре."), "warning")
+            return
         self._catalog_installing = [e["project_id"] for e in entries]
         self._catalog_content = content
         self.catalog_page.set_installing(self._catalog_installing, True)
@@ -174,7 +178,11 @@ class CatalogMixin:
                        lambda e: self._on_catalog_failed(pid, e), None)
 
     def _start_catalog_install(self, entries: List[dict], content):
-        folder = content.path(self._profile().get("mods_path", ""))
+        folder = self._content_folder(content)
+        if not folder:  # Датапак без мира: ставить некуда
+            self.catalog_page.set_installing([e["project_id"] for e in entries], False)
+            self.toasts.show(tr("Датапаки ставятся в мир, а миров в этой сборке пока нет — создайте мир в игре."), "warning")
+            return
         self._catalog_installing = [e["project_id"] for e in entries]
         self._catalog_content = content
         self.catalog_page.set_installing(self._catalog_installing, True)

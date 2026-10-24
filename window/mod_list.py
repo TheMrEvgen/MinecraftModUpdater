@@ -104,6 +104,10 @@ class ModListMixin:
             self.empty_state.set_content(t, "folder", tr("Папка игры не найдена"),
                                          tr("Укажите папку игры, в которой лежит папка mods, или найдите сборки "
                                          "в Prism Launcher, Modrinth App и CurseForge."), [b1, b2])
+        elif self.content.per_world and not self._datapack_world():
+            self.empty_state.set_content(t, "code", tr("Миров пока нет"),
+                                         tr("Датапаки ставятся в конкретный мир. Создайте мир в игре — "
+                                            "и он появится здесь."))
         elif self._busy in ("local", "import") and not self.model.items():
             self.empty_state.set_content(t, "refresh", tr("Загрузка…"), tr("Читаем список модов."))
         elif not self.model.items():

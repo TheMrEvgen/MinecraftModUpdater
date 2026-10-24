@@ -195,3 +195,22 @@ def test_scan_skips_fabric_api_on_neoforge(tmp_path, monkeypatch):
     assert neo[0]["dependencies"] == []
     fabric = scanner.scan_mods(str(tmp_path), "1.21.11", "fabric", None)
     assert [d["name"] for d in fabric[0]["dependencies"]] == ["Fabric API"]
+
+
+def test_datapacks_live_in_worlds(tmp_path):
+    import os
+    import time
+
+    from content import DATAPACKS, MODS, list_worlds, pick_world
+    for world in ("Старый", "Новый"):
+        (tmp_path / "saves" / world).mkdir(parents=True)
+        (tmp_path / "saves" / world / "level.dat").write_bytes(b"x")
+        time.sleep(0.02)
+    (tmp_path / "saves" / "НеМир").mkdir()  # Без level.dat — не мир
+    os.utime(tmp_path / "saves" / "Новый" / "level.dat")
+    assert list_worlds(str(tmp_path)) == ["Новый", "Старый"]
+    assert pick_world(str(tmp_path), "Старый") == "Старый" and pick_world(str(tmp_path), "Удалённый") == "Новый"
+    assert pick_world(str(tmp_path / "нет"), None) is None
+    assert DATAPACKS.path(str(tmp_path), "Новый") == os.path.join(str(tmp_path), "saves", "Новый", "datapacks")
+    assert DATAPACKS.path(str(tmp_path)) == "" and MODS.path(str(tmp_path), "Новый") == os.path.join(str(tmp_path), "mods")
+    assert DATAPACKS.loaders("fabric") == ["datapack"]

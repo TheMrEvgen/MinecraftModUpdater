@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QMenu, QMessageBox
 import config as app_config
 import i18n
 import icons
-from content import CONTENT_TYPES, ContentType, MODS
+from content import CONTENT_TYPES, ContentType, MODS, list_worlds, pick_world
 from enums import UpdateChannel
 from game_detection import detect_game_versions, extract_loader_version
 from i18n import tr
@@ -100,7 +100,38 @@ class ProfilesMixin:
         self._load_profile(name)
 
     def _skey(self, profile: Optional[str] = None, content: Optional[ContentType] = None) -> tuple:
-        return profile or self.current_profile_name, (content or self.content).key
+        content = content or self.content
+        name = profile or self.current_profile_name
+        if content.per_world:  # Датапаки у каждого мира свои
+            return name, f"{content.key}:{self._datapack_world(name) or ''}"
+        return name, content.key
+
+    def _datapack_world(self, profile_name: Optional[str] = None) -> Optional[str]:
+        """Мир для вкладки «Датапаки»: выбранный в сборке или последний сыгранный."""
+        profile = self.profiles.get(profile_name or self.current_profile_name) or {}
+        return pick_world(profile.get("mods_path", ""), profile.get("datapack_world"))
+
+    def _content_folder(self, content: Optional[ContentType] = None) -> str:
+        content = content or self.content
+        return content.path(self._profile().get("mods_path", ""), self._datapack_world() if content.per_world else None)
+
+    def _show_world_menu(self):
+        from PyQt6.QtWidgets import QMenu
+        worlds = list_worlds(self._profile().get("mods_path", ""))
+        menu = QMenu(self)
+        current = self._datapack_world()
+        for world in worlds:
+            action = menu.addAction(("✓  " if world == current else "     ") + world)
+            action.triggered.connect(lambda _=False, w=world: self._set_datapack_world(w))
+        if not worlds:
+            menu.addAction(tr("Миров пока нет")).setEnabled(False)
+        menu.exec(self.world_chip.mapToGlobal(self.world_chip.rect().bottomLeft()))
+
+    def _set_datapack_world(self, world: str):
+        self._remember_session()
+        self._profile()["datapack_world"] = world
+        self.save_config()
+        self._load_content()
 
     def _drop_sessions(self, profile: str):
         for key in [k for k in self.sessions if k[0] == profile]:
@@ -130,7 +161,7 @@ class ProfilesMixin:
     def _load_content(self):
         """Показывает текущий тип контента: из памяти или с локальным сканированием папки."""
         game_dir = self._profile().get("mods_path", "")
-        self.mods_path = self.content.path(game_dir)
+        self.mods_path = self._content_folder()
         self._loaded_key = self._skey()
         self._update_header()
         self.cards[CAT_ALL].title = tr('Все {0}', self.content.title.lower())
@@ -203,6 +234,10 @@ class ProfilesMixin:
         self.channel_chip.setText(f"{self._channel().display_name}  ▾")
         self.channel_chip.setToolTip(tr("Какие версии модов предлагать: только релизы, с бетами или все"))
         self.path_label.setFullText(profile.get("mods_path") or tr("Папка не указана"))
+        world = self._datapack_world() if self.content.per_world else None
+        self.world_chip.setVisible(self.content.per_world)
+        self.world_chip.setText(tr("Мир: {0}  ▾", world) if world else tr("Миров нет"))
+        self.world_chip.setToolTip(tr("Датапаки у каждого мира свои — выберите мир"))
         self.path_icon.setPixmap(icons.pixmap("folder", t["text_faint"], 14))
 
     @staticmethod
