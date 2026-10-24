@@ -230,6 +230,7 @@
  "Готово: {0} {1} обновлено": "Done: {0} {1} updated",
  "Готово: успешно {0}, ошибок {1}.": "Done: {0} succeeded, {1} failed.",
  "Готовы к {0}: {1} из {2}": "Ready for {0}: {1} of {2}",
+ "Готовые сборки с {0}: ставятся новой сборкой — со всеми модами, настройками и ресурспаками.": "Ready-made modpacks from {0}: installed as a new modpack — with all mods, settings and resource packs.",
  "Группа": "Group",
  "Группа сборки": "Modpack group",
  "Группа…": "Group…",

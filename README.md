@@ -1,11 +1,38 @@
 # Minecraft Mod Updater
 
+[![Latest release](https://img.shields.io/github/v/release/TheMrEvgen/MinecraftModUpdater?include_prereleases&label=release)](https://github.com/TheMrEvgen/MinecraftModUpdater/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/TheMrEvgen/MinecraftModUpdater/total)](https://github.com/TheMrEvgen/MinecraftModUpdater/releases)
+[![Tests](https://github.com/TheMrEvgen/MinecraftModUpdater/actions/workflows/tests.yml/badge.svg)](https://github.com/TheMrEvgen/MinecraftModUpdater/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+A Windows desktop app that keeps Minecraft mods up to date. It finds the modpacks of your launchers, recognizes
+installed mods on **Modrinth** and **CurseForge**, installs updates together with required dependencies — and lets you
+roll back any change. English and Russian interface.
+
+![Mod list](docs/screenshots/mods.png)
+
+- **Updates you can trust** — every change is recorded and can be undone; a snapshot of the modpack is made before big
+  updates; “What's new” shows changelogs before updating; fresh releases can be held back for a few days.
+- **Works with your launcher** — Prism Launcher, MultiMC, Modrinth App, CurseForge, Legacy Launcher and the official
+  launcher are found automatically. For Prism the app can even update the loader and the game version.
+- **Catalog** — mods, shaders, resource packs, data packs and ready-made modpacks from Modrinth and CurseForge,
+  installed with dependencies in one click.
+- **When the game crashes** — crash report analysis, a hint which mod update started the crashes, and an automatic
+  search for the problematic mod by elimination.
+- **Background** — tray icon, background update checks for all modpacks with Windows notifications, app self-update.
+
+| | |
+|---|---|
+| ![Mod details](docs/screenshots/details.png) | ![Catalog](docs/screenshots/catalog.png) |
+| ![Statistics](docs/screenshots/statistics.png) | ![Settings](docs/screenshots/settings.png) |
+
+---
+
+## По-русски
+
 Программа для Windows, которая следит за модами Minecraft: находит обновления на [Modrinth](https://modrinth.com)
 и [CurseForge](https://www.curseforge.com/minecraft), ставит их вместе с зависимостями и позволяет откатить любое
-изменение. Интерфейс на русском и английском.
-
-*English: a Windows app that keeps Minecraft mods up to date via Modrinth, with dependencies, snapshots and one-click
-rollback. Switch the language in Settings → Appearance → «Язык / Language».*
+изменение. Язык интерфейса — в «Настройки → Оформление → Язык / Language».
 
 ## Возможности
 

@@ -652,7 +652,14 @@ class CatalogPage(QWidget):
         loader_title = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge", "quilt": "Quilt"}.get(loader, loader)
         filters = f"Minecraft {game_version or '?'}" + (f" · {loader_title}" if self.content is MODS and loader else "")
         site = "CurseForge" if self.source == "curseforge" else "Modrinth"
-        self.context_label.setText(tr('Моды, шейдеры и ресурспаки с {0} для текущей сборки: {1}. Обязательные зависимости ставятся автоматически.', site, filters))
+        if self.content.key == "modpacks":
+            self.context_label.setText(tr("Готовые сборки с {0}: ставятся новой сборкой — со всеми модами, настройками "
+                                          "и ресурспаками.", site))
+        else:
+            self.context_label.setText(tr('Моды, шейдеры и ресурспаки с {0} для текущей сборки: {1}. Обязательные зависимости ставятся автоматически.', site, filters))
+        is_pack = self.content.key == "modpacks"  # Сторона и «установленные» к готовым сборкам не относятся
+        self.side_combo.setVisible(not is_pack)
+        self.hide_installed.setVisible(not is_pack)
         if changed and self.isVisible():
             self.refresh()
         self._apply_hidden()
