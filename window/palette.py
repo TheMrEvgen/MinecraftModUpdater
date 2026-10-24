@@ -19,6 +19,8 @@ class PaletteMixin:
             Command(tr("Обновить все"), self.update_all, "download", keywords=tr("установить")),
             Command(tr("Найти моды в каталоге"), self._open_catalog_search, "compass", keywords=tr("modrinth поиск скачать новые")),
             Command(tr("Создать снимок сборки"), lambda: self._create_snapshot("manual"), "camera", keywords=tr("бэкап резерв")),
+            Command(tr("Моды во всех сборках"), self._show_all_packs, "layers",
+                    keywords=tr("поиск где стоит место диск одинаковые ссылки")),
             Command(tr("Перейти на другую версию Minecraft"), self.migrate_game_version, "trending_up",
                     keywords=tr("миграция обновить версию игры")),
             Command(tr("Открыть .mrpack"), self.import_mrpack_dialog, "package", keywords=tr("импорт сборка")),

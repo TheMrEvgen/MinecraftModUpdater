@@ -702,6 +702,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         tools.addAction(bisect)
         tools.addAction(make_action(tools, t, "shield", tr("Проверить целостность файлов"), self._check_integrity))
         menu.addAction(make_action(menu, t, "bar_chart", tr("Статистика сборки"), lambda: self._switch_page(PAGE_STATS)))
+        menu.addAction(make_action(menu, t, "layers", tr("Моды во всех сборках…"), self._show_all_packs))
         menu.addSeparator()
         for icon_name, text, slot in (("share", tr("Поделиться списком…"), self.share_mod_list),
                                       ("save", tr("Экспорт JSON для сервера…"), self.export_server_json),

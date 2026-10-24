@@ -19,7 +19,7 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 CACHE_DIR = os.path.join(CONFIG_DIR, "cache")
 CACHE_FILE = os.path.join(CACHE_DIR, "mod_cache.db")
 ICON_CACHE_DIR = os.path.join(CACHE_DIR, "icons96")
-APP_VERSION = "3.4.0-beta"
+APP_VERSION = "3.5.0-beta"
 # Репозиторий на GitHub (owner/repo): «Сообщить об ошибке» и выпуски программы
 GITHUB_REPOSITORY = "TheMrEvgen/MinecraftModUpdater"
 CURRENT_LOG: str = ""  # Путь к логу текущего запуска (для отчёта о сбое)

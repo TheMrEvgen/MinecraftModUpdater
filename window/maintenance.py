@@ -127,3 +127,11 @@ class MaintenanceMixin:
         self._load_profile(self.current_profile_name if self.current_profile_name in self.profiles
                            else next(iter(self.profiles)))
         self.toasts.show(tr("Настройки импортированы."), "success")
+
+    # ================================================================== Все сборки: поиск и место на диске
+
+    def _show_all_packs(self):
+        from ui.all_packs_dialog import AllPacksDialog
+        dialog = AllPacksDialog(self, self.tokens, self.profiles, app_config.CACHE_FILE, self._run_task,
+                                on_changed=lambda: self.sessions.clear())
+        dialog.exec()
