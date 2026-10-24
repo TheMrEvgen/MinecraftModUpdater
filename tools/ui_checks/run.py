@@ -28,7 +28,7 @@ import requests
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(os.path.dirname(HERE))
-SCENARIOS = ["flow", "features", "tools", "audit", "game", "app_update", "tray", "curseforge", "datapacks"]
+SCENARIOS = ["flow", "features", "tools", "audit", "game", "app_update", "tray", "curseforge", "datapacks", "onboarding"]
 SMALL_PACK = ("sodium", "lithium", "modmenu")  # Самые старые версии под 1.21.1 — для них точно есть обновления
 SMALL_GAME_VERSION = "1.21.1"
 LOADER_VERSION_ID = "fabric-loader-0.16.0-1.21.1"

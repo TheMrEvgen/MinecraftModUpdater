@@ -82,6 +82,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self.resize(1320, 820)
         self.setAcceptDrops(True)
 
+        self._first_run = not os.path.exists(app_config.CONFIG_FILE)  # Мастер первого запуска — только для новичков
         cfg = app_config.load_config()
         self.config_theme: str = cfg.get("theme", "system")
         self.profiles: Dict[str, dict] = cfg["profiles"]
@@ -154,6 +155,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
             self._merge_discovered(discover_instances())
         self._refresh_sidebar()
         QTimer.singleShot(0, lambda: self._load_profile(self.current_profile_name))
+        QTimer.singleShot(600, self._maybe_onboarding)
         QTimer.singleShot(4000, self._offer_install)
         QTimer.singleShot(6000, self._check_app_update)
         self._game_timer = QTimer(self, interval=2000)  # Наблюдение за игрой: запущена ли, не вылетела ли

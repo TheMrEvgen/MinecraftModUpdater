@@ -6,6 +6,7 @@ import sys
 import time
 from typing import List
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 import config as app_config
@@ -127,6 +128,33 @@ class AppMixin:
         self.save_config()
         self.toasts.show(tr("Установите программу: ярлыки, открытие .mrpack двойным щелчком и ссылки modupdater://."),
                          "info", tr("Подробнее"), lambda: self._switch_page(self.PAGE_SETTINGS_INDEX), timeout=12000)
+
+    def _maybe_onboarding(self):
+        """Мастер первого запуска: язык и тема → сборки → установка. Только если настроек ещё не было."""
+        import i18n
+        import installer
+        from ui.onboarding import OnboardingDialog
+        from ui.widgets import profile_subtitle
+        if not getattr(self, "_first_run", False) or self.settings.get("onboarding_done"):
+            return
+        self.settings["onboarding_done"] = True
+        self.settings["install_offered"] = True  # Установку предлагает сам мастер — без отдельного уведомления
+        self.save_config()
+        found = [{"name": name, "subtitle": profile_subtitle(p)} for name, p in self.profiles.items() if p.get("mods_path")]
+        supported = installer.supported()
+        dialog = OnboardingDialog(self, self.config_theme, found, supported, supported and installer.state().installed)
+        if not dialog.exec():
+            return
+        self.save_config()  # Тема выбрана в мастере
+        if dialog.language != i18n.language():
+            self.settings["language"] = dialog.language
+            self.save_config()
+            self.toasts.show("Язык сменится после перезапуска · Language changes after a restart", "info",
+                             "Перезапустить / Restart", self._restart_app, timeout=20000)
+        if dialog.add_manually:
+            QTimer.singleShot(0, self._add_profile)
+        if dialog.install_options:
+            QTimer.singleShot(200, lambda: self._install_app(dialog.install_options))
 
     def _install_app(self, options: dict):
         import installer
