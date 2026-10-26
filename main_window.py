@@ -35,7 +35,10 @@ from updater import backup_root, list_snapshots, list_transactions
 from view_model import CAT_ALL, CAT_DISABLED, CAT_INSTALL, CAT_NOT_FOUND, CAT_PROBLEMS, CAT_UPDATES
 from window.app import AppMixin
 from window.catalog import CatalogMixin
-from window.common import CONTENT_ICONS, PAGE_CATALOG, PAGE_HISTORY, PAGE_LOG, PAGE_MODS, PAGE_SETTINGS, PAGE_STATS
+from window.common import (
+    CONTENT_ICONS, PAGE_CATALOG, PAGE_DOWNLOADS, PAGE_HISTORY, PAGE_LOG, PAGE_MODS, PAGE_SETTINGS, PAGE_STATS,
+)
+from window.downloads import DownloadsMixin
 from window.game import GameMixin
 from window.maintenance import MaintenanceMixin
 from window.mod_actions import ModActionsMixin
@@ -70,7 +73,7 @@ class QtLogHandler(logging.Handler):
 
 class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin, ModpackMixin, CatalogMixin,
                     PaletteMixin, ModActionsMixin, GameMixin, MaintenanceMixin, AppMixin, PreferencesMixin, TrayMixin,
-                    QMainWindow):
+                    DownloadsMixin, QMainWindow):
     """Главное окно. Методы по темам — в примесях window/*.py, здесь — интерфейс, тема, страницы и закрытие."""
     PAGE_MODS_INDEX, PAGE_CATALOG_INDEX, PAGE_HISTORY_INDEX, PAGE_STATS_INDEX = PAGE_MODS, PAGE_CATALOG, PAGE_HISTORY, PAGE_STATS
     PAGE_SETTINGS_INDEX = PAGE_SETTINGS
@@ -228,6 +231,7 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self.settings_page.autostart_toggled.connect(self._set_autostart)
         self.settings_page.background_check_requested.connect(lambda: self._start_background_check(manual=True))
         self.stack.addWidget(self.settings_page)
+        self._setup_downloads()
 
         self.toasts = ToastManager(root, t)
         self.toasts.changed.connect(self._update_list_inset)
@@ -528,8 +532,11 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         t = self.tokens = make_tokens(self._resolve_theme(), self.settings.get("accent"))
         QApplication.instance().setStyleSheet(build_stylesheet(t, self._theme_assets(t)))
         for widget in (self.sidebar, self.history_page, self.log_page, self.settings_page, self.details, self.search,
-                       self.drop_overlay, self.toasts, self.catalog_page, self.palette, self.stats_page):
+                       self.drop_overlay, self.toasts, self.catalog_page, self.palette, self.stats_page,
+                       self.downloads_page):
             widget.set_tokens(t)
+        self.download_indicator.tokens = t
+        self.download_indicator.update()
         refresh_button_icons(self.bisect_banner, t)
         self.readiness_icon.setPixmap(icons.pixmap("trending_up", t["info"], 18))
         self.game_icon.setPixmap(icons.pixmap("play", t["accent"], 18))
@@ -665,6 +672,8 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
             self._refresh_catalog_context()
         elif page == PAGE_STATS:
             self._refresh_stats()
+        elif page == PAGE_DOWNLOADS:
+            self.downloads_page.refresh()
         elif page == PAGE_SETTINGS:
             self.settings_page.load(self.config_theme, {**self.settings, "view_mode": self._view_mode()})
             self.settings_page.set_backup_usage(self._backup_usage_text())

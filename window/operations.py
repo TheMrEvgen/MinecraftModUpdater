@@ -8,6 +8,7 @@ from typing import Callable, Dict, List, Optional
 from PyQt6.QtWidgets import QMessageBox
 
 import config as app_config
+import downloads
 from content import DISABLED_SUFFIX, MODS
 from enums import ModStatus
 from i18n import plural, tr
@@ -216,6 +217,13 @@ class OperationsMixin:
         self._update_folder = folder
         self.update_worker = UpdateWorker(entries, folder, transaction,
                                           max_workers=self.settings.get("parallel_downloads", 3))
+        worker = self.update_worker
+        self._update_job = self._start_download(
+            tr("Моды: {0}", self.current_profile_name) if len(entries) > 1 else entries[0].get("name") or "?",
+            "mods", worker.stop)
+        for i, entry in enumerate(entries):
+            self._update_job.add_file(str(i), entry.get("name") or entry.get("new_filename") or "?",
+                                      entry.get("new_size") or 0)
         self.update_worker.progress.connect(self._on_update_progress)
         self.update_worker.download_progress.connect(self._on_download_progress)
         self.update_worker.finished.connect(self._on_update_finished)
@@ -231,6 +239,13 @@ class OperationsMixin:
         source = self.update_worker.mods_to_update[index]
         status = ModStatus(status_value)
         success = status in (ModStatus.UPDATED, ModStatus.INSTALLED)
+        job = getattr(self, "_update_job", None)
+        if job:
+            if status == ModStatus.DOWNLOADING:
+                job.file_started(str(index))
+            elif status != ModStatus.FINISHING:
+                job.file_done(str(index), status.value if status.is_error else "",
+                              cancelled=status == ModStatus.CANCELLED)
         for entry in self._entries_like(source):
             entry["status"] = status
             entry.pop("_progress", None)
@@ -260,6 +275,9 @@ class OperationsMixin:
     def _on_download_progress(self, index: int, downloaded: int, total: int):
         if not self.update_worker or total <= 0:
             return
+        job = getattr(self, "_update_job", None)
+        if job:
+            job.file_progress(str(index), downloaded, total)
         source = self.update_worker.mods_to_update[index]
         for entry in self._entries_like(source):
             entry["_progress"] = downloaded / total
@@ -274,6 +292,11 @@ class OperationsMixin:
         results = worker.results
         failed = [worker.mods_to_update[i] for i, s in results.items() if s.is_error]
         succeeded = sum(1 for s in results.values() if s in (ModStatus.UPDATED, ModStatus.INSTALLED))
+        job, self._update_job = getattr(self, "_update_job", None), None
+        if job:
+            cancelled = not worker.is_running
+            job.finish(downloads.CANCELLED if cancelled else downloads.FAILED if failed else downloads.DONE,
+                       tr("Установлено: {0}", succeeded) + (tr(", ошибок: {0}", len(failed)) if failed else ""))
         transaction = worker.transaction
         if self._catalog_installing:
             self._finish_catalog_install(worker)

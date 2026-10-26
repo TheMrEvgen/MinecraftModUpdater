@@ -25,10 +25,11 @@ class _Worker(SafeThread):
     failed = pyqtSignal(str)
 
     def __init__(self, job: str, project_id: str = "", folder: str = "", plan=None, target=None, title: str = "",
-                 game_dir: str = "", update=None):
+                 game_dir: str = "", update=None, download=None):
         super().__init__()
         self.job, self.project_id, self.folder, self.plan, self.target = job, project_id, folder, plan, target
         self.title, self.game_dir, self.update = title, game_dir, update
+        self.download = download  # downloads.DownloadJob — ход загрузки на странице «Загрузки»
         self._cancelled = False
 
     def stop(self):
@@ -41,7 +42,8 @@ class _Worker(SafeThread):
                 path = modpack_install.download_pack(info, self.folder)
                 self.prepared.emit(modpack_install.load_plan(path))
             elif self.job == "install":
-                errors = modpack_install.install(self.plan, self.target, self.progress.emit, lambda: self._cancelled)
+                errors = modpack_install.install(self.plan, self.target, self.progress.emit, lambda: self._cancelled,
+                                                 job=self.download)
                 try:
                     modpack_install.save_state(self.plan, self.project_id, self.target.game_dir, self.title)
                 except OSError as e:  # Без записи сборка работает, только не обновится из каталога
@@ -54,7 +56,8 @@ class _Worker(SafeThread):
                 self.prepared.emit((plan, modpack_install.plan_update(state, plan, self.game_dir)))
             else:
                 self.installed.emit(modpack_install.apply_update(self.update, self.plan, self.game_dir,
-                                                                 self.progress.emit, lambda: self._cancelled))
+                                                                 self.progress.emit, lambda: self._cancelled,
+                                                                 job=self.download))
         except modpack_install.InstallCancelled:
             self.failed.emit("")
         except Exception as e:
@@ -62,7 +65,7 @@ class _Worker(SafeThread):
 
 
 class ModpackInstallDialog(FramelessDialog):
-    """После accept(): plan, target, errors — сборка установлена."""
+    """После accept(): plan и target — что и куда ставить. Сама установка идёт в фоне (окно её запускает)."""
 
     def __init__(self, parent, hit: Dict, prism_instances: Optional[str], default_folder: str, downloads: str,
                  minecraft_dir: Optional[str] = None):
@@ -168,13 +171,7 @@ class ModpackInstallDialog(FramelessDialog):
             self.target = modpack_install.official_target(self.minecraft_dir, name)
         else:
             self.target = modpack_install.folder_target(self.folder_edit.text().strip(), name)
-        for widget in (self.name_edit, self.prism_radio, self.official_radio, self.folder_radio, self.folder_edit,
-                       self.install_btn):
-            widget.setEnabled(False)
-        self.progress.setRange(0, 0)
-        self.progress.show()
-        self._start(_Worker("install", self.hit.get("project_id") or "", plan=self.plan, target=self.target,
-                            title=self.hit.get("title") or ""))
+        self.accept()  # Качается в фоне: ход — в индикаторе и на странице «Загрузки»
 
     def _on_progress(self, done: int, total: int, text: str):
         self.progress.setRange(0, max(1, total))
@@ -208,7 +205,8 @@ class ModpackInstallDialog(FramelessDialog):
 
 
 class ModpackUpdateDialog(FramelessDialog):
-    """Обновление поставленной сборки. После accept(): plan (новая версия) и backup (для отмены)."""
+    """Обновление поставленной сборки. После accept(): plan (новая версия) и update (что поменять) — само
+    обновление идёт в фоне (окно его запускает)."""
 
     def __init__(self, parent, state: Dict, game_dir: str, downloads: str):
         super().__init__(parent, tr("Обновление сборки"), 560)
@@ -266,10 +264,7 @@ class ModpackUpdateDialog(FramelessDialog):
         self.update_btn.setEnabled(True)
 
     def _apply(self):
-        self.update_btn.setEnabled(False)
-        self.progress.setRange(0, 0)
-        self.progress.show()
-        self._start(_Worker("update", plan=self.plan, game_dir=self.game_dir, update=self.update))
+        self.accept()
 
     def _on_progress(self, done: int, total: int, text: str):
         self.progress.setRange(0, max(1, total))

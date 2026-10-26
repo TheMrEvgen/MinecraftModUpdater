@@ -226,28 +226,42 @@ class _Meter:
 
 
 def download_files(jobs: List[tuple], progress: ProgressCallback, cancelled: Callable[[], bool], session,
-                   workers: int = 4) -> Dict[str, str]:
+                   workers: int = 4, job=None) -> Dict[str, str]:
     """
     Качает файлы сборки по несколько сразу: jobs — [(PackFile, куда сохранить)]. Проверяет контрольные суммы.
     Возвращает ошибки {путь в сборке: текст}; при отмене — InstallCancelled (недокачанное удаляется).
+    job — downloads.DownloadJob: туда же сообщается о каждом файле (страница «Загрузки»).
     """
     import concurrent.futures
     meter = _Meter(len(jobs), sum(item.size for item, _ in jobs), progress)
     stop = []
+    if job:
+        for item, _ in jobs:
+            job.add_file(item.path, item.name or os.path.basename(item.path), item.size)
 
     def fetch(item: PackFile, destination: str):
         name = item.name or os.path.basename(item.path)
         os.makedirs(os.path.dirname(destination), exist_ok=True)
+        if stop or cancelled():
+            raise InstallCancelled()
+        if job:
+            job.file_started(item.path)
         response = session.get(item.url, timeout=60, stream=True)
+        written = 0
         try:
             response.raise_for_status()
+            headers = getattr(response, "headers", None) or {}
+            size = int(headers.get("Content-Length") or 0) or item.size
             with open(destination, "wb") as f:
                 chunks = response.iter_content(256 * 1024) if hasattr(response, "iter_content") else [response.content]
                 for chunk in chunks:
                     if stop or cancelled():
                         raise InstallCancelled()
                     f.write(chunk)
+                    written += len(chunk)
                     meter.add(len(chunk), name)
+                    if job:
+                        job.file_progress(item.path, written, size)
         except BaseException:
             if os.path.exists(destination):
                 os.remove(destination)
@@ -260,6 +274,8 @@ def download_files(jobs: List[tuple], progress: ProgressCallback, cancelled: Cal
             os.remove(destination)
             raise ValueError(tr("контрольная сумма не совпала"))
         meter.add(0, name, file_done=True)
+        if job:
+            job.file_done(item.path)
 
     errors = {}
     progress(0, len(jobs), tr("Начинаем загрузку…"))
@@ -274,6 +290,8 @@ def download_files(jobs: List[tuple], progress: ProgressCallback, cancelled: Cal
                     raise
                 except Exception as e:  # Один файл не скачался — остальные качаем
                     errors[item.path] = str(e)
+                    if job:
+                        job.file_done(item.path, str(e))
                     logging.warning(tr("Сборка: не удалось скачать {0}: {1}", item.path, e))
         except InstallCancelled:
             stop.append(True)
@@ -285,7 +303,7 @@ def download_files(jobs: List[tuple], progress: ProgressCallback, cancelled: Cal
 
 
 def install(plan: PackPlan, target: Target, progress: ProgressCallback = lambda d, t, s: None,
-            cancelled: Callable[[], bool] = lambda: False, session=None) -> List[str]:
+            cancelled: Callable[[], bool] = lambda: False, session=None, job=None) -> List[str]:
     """Ставит сборку. Возвращает ошибки (пустой список — всё скачано). Файлы «только с сайта» пропускаются."""
     from mod_updater_logic import SESSION
     session = session or SESSION
@@ -299,7 +317,7 @@ def install(plan: PackPlan, target: Target, progress: ProgressCallback = lambda 
         write_prism_instance(target, plan)
     files = [f for f in plan.files if f.url]
     jobs = [(f, os.path.join(target.game_dir, *f.path.split("/")) + ".part") for f in files]
-    failed = download_files(jobs, progress, cancelled, session)
+    failed = download_files(jobs, progress, cancelled, session, job=job)
     for item, part in jobs:
         if item.path not in failed:
             os.replace(part, part[:-len(".part")])
@@ -496,7 +514,7 @@ def plan_update(state: Dict, plan: PackPlan, game_dir: str) -> UpdatePlan:
 
 
 def apply_update(update: UpdatePlan, plan: PackPlan, game_dir: str, progress: ProgressCallback = lambda d, t, s: None,
-                 cancelled: Callable[[], bool] = lambda: False, session=None) -> str:
+                 cancelled: Callable[[], bool] = lambda: False, session=None, job=None) -> str:
     """
     Обновляет сборку по плану и возвращает папку бэкапа (для undo_update). Если хоть один файл не скачался,
     или обновление отменили, всё уже сделанное откатывается и сборка остаётся прежней.
@@ -538,7 +556,7 @@ def apply_update(update: UpdatePlan, plan: PackPlan, game_dir: str, progress: Pr
     try:
         # Сначала всё скачиваем — в папке игры пока ничего не меняется
         jobs = [(item, os.path.join(backup, f"{i}.part")) for i, item in enumerate(update.download)]
-        failed = download_files(jobs, progress, cancelled, session)
+        failed = download_files(jobs, progress, cancelled, session, job=job)
         if failed:
             raise ValueError("\n".join(f"{path}: {error}" for path, error in list(failed.items())[:12]))
         downloaded = [(item.path, part) for item, part in jobs]

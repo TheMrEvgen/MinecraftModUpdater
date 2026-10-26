@@ -604,7 +604,13 @@ class Sidebar(QFrame):
             layout.addWidget(btn)
         self.nav_buttons[0].setChecked(True)
         self.nav_group.idClicked.connect(self._on_nav)
+        self.download_indicator = None
         self.set_tokens(tokens)
+
+    def set_download_indicator(self, widget: QWidget):
+        """Индикатор загрузки — под списком сборок, над меню страниц (виден на любой странице)."""
+        self.download_indicator = widget
+        self._layout.insertWidget(self._layout.indexOf(self.profile_list) + 1, widget)
 
     def set_collapsed(self, collapsed: bool):
         """Свёрнутая панель: значки страниц и кружки сборок, названия — во всплывающих подсказках."""
@@ -626,6 +632,8 @@ class Sidebar(QFrame):
             btn.setText("" if collapsed else f"  {text}")
             btn.setToolTip(text if collapsed else "")
         self.profile_delegate.collapsed = collapsed
+        if self.download_indicator:
+            self.download_indicator.set_collapsed(collapsed)
         self.profile_list.doItemsLayout()
         self.profile_list.viewport().update()
 
@@ -676,7 +684,13 @@ class Sidebar(QFrame):
         self.page_changed.emit(page)
 
     def set_page(self, page: int):
-        self.nav_buttons[page].setChecked(True)
+        if page < len(self.nav_buttons):
+            self.nav_buttons[page].setChecked(True)
+        else:  # Страница не из меню («Загрузки»): ни одна кнопка не выделена
+            self.nav_group.setExclusive(False)
+            for btn in self.nav_buttons:
+                btn.setChecked(False)
+            self.nav_group.setExclusive(True)
         self._refresh_nav_icons()
 
     def set_profiles(self, profiles: List[Dict], current: str):

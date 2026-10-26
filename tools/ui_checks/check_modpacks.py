@@ -55,6 +55,33 @@ def pump(sec=0.3):
         time.sleep(0.01)
 
 
+def wait_downloads(label, timeout=300):
+    """Сборка качается в фоне: ждём конца загрузки, по пути смотрим индикатор и страницу «Загрузки»."""
+    import downloads
+    seen = {}
+    end = time.time() + timeout
+    while time.time() < end:
+        pump(0.3)
+        active = downloads.MANAGER.active()
+        if active and "indicator" not in seen and active[0].totals()["bytes"] > 0:
+            pump(1.2)
+            seen["indicator"] = w.download_indicator.isVisible()
+            w._switch_page(mw.PAGE_DOWNLOADS)
+            pump(1.2)
+            page = w.downloads_page
+            seen["page"] = (page.job_title.text(), page.files_model.rowCount(), page.tiles["speed"].value.text())
+            check(f"{label}: на странице идущая загрузка", page.selected is active[0])
+            w.grab().save(f"{SHOTS}/{label}_downloads.png")
+            w._switch_page(mw.PAGE_MODS)
+        if not active and downloads.MANAGER.all():
+            break
+    pump(1)
+    job = downloads.MANAGER.all()[0]
+    check(f"{label}: загрузка в фоне, индикатор {seen.get('indicator')}, страница {seen.get('page')}, итог {job.state}",
+          job.state == downloads.DONE and (label == "update"  # Один маленький файл — успевает скачаться мгновенно
+                                           or seen.get("indicator") and seen.get("page", ("", 0))[1] > 0))
+
+
 def check(label, condition):
     print(("OK   " if condition else "FAIL ") + label, flush=True)
 
@@ -99,7 +126,7 @@ def drive():
 
 QTimer.singleShot(200, drive)
 w._install_modpack(hit)
-pump(1)
+wait_downloads("install")
 check(f"окно показало, что внутри: {state.get('info')}", "Minecraft" in state.get("info", ""))
 check("предложена новая сборка Prism", state.get("prism_offered"))
 instances = os.listdir(f"{FAKE_APPDATA}/PrismLauncher/instances")
@@ -165,7 +192,7 @@ def drive_update():
 
 QTimer.singleShot(200, drive_update)
 w._update_modpack()
-pump(2)
+wait_downloads("update")
 plan = update_state.get("plan")
 check(f"окно обновления: {update_state.get('info')!r}", "0.0-old" in update_state.get("info", ""))
 check(f"план: скачать {plan and [f.path for f in plan.download]}, убрать {plan and plan.remove}, "
@@ -213,7 +240,7 @@ def drive_official():
 
 QTimer.singleShot(200, drive_official)
 w._install_modpack(hit)
-pump(1)
+wait_downloads("install")
 check("предложена установка в Minecraft Launcher", official_state.get("offered"))
 installs = official_launcher.installations(FAKE_MC)
 check(f"установка в launcher_profiles.json: {[(i['name'], i['version_id']) for i in installs]}",

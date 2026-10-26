@@ -13,6 +13,7 @@ from i18n import tr
 from scanner import resolve_many_installs, resolve_project_install, scan_local
 from ui_components import show_message
 from view_model import iter_all_entries
+from window.common import PAGE_DOWNLOADS
 
 
 class CatalogMixin:
@@ -174,9 +175,7 @@ class CatalogMixin:
                                             self.toasts.show(tr('Не удалось подготовить установку: {0}', e), "error")), None)
 
     def _install_modpack(self, hit: dict):
-        """Готовая сборка из каталога: новая сборка Prism (если он есть) или папка на диске."""
-        import webbrowser
-
+        """Готовая сборка из каталога: новая сборка Prism, установка Minecraft Launcher или папка. Качается в фоне."""
         from launchers import _appdata, _prism_instance_dir
         from ui.modpack_dialog import ModpackInstallDialog
         prism_root = os.path.join(_appdata(), "PrismLauncher")
@@ -188,7 +187,32 @@ class CatalogMixin:
                                       minecraft if os.path.isdir(minecraft) else None)
         if not dialog.exec() or not dialog.target:
             return
+        import downloads
+        from ui.modpack_dialog import _Worker
         plan, target = dialog.plan, dialog.target
+        title = target.name or os.path.basename(target.instance_dir or target.game_dir)
+        worker = _Worker("install", hit.get("project_id") or "", plan=plan, target=target, title=hit.get("title") or "")
+        job = worker.download = self._start_download(tr("Сборка «{0}»", title), "modpack", worker.stop)
+
+        def failed(error: str):
+            import shutil
+            shutil.rmtree(target.instance_dir or target.game_dir, ignore_errors=True)  # Папка новая — убираем начатое
+            job.finish(downloads.FAILED if error else downloads.CANCELLED, error or tr("Отменено"))
+            if error:
+                self.toasts.show(tr("Сборка «{0}» не установлена: {1}", title, error), "error", timeout=15000)
+
+        worker.installed.connect(lambda errors: self._on_modpack_installed(plan, target, errors, job))
+        worker.failed.connect(failed)
+        worker.start()
+        self.toasts.show(tr("«{0}» качается в фоне.", title), "info", tr("Загрузки"),
+                         lambda: self._switch_page(PAGE_DOWNLOADS), timeout=8000)
+
+    def _on_modpack_installed(self, plan, target, errors: list, job):
+        import webbrowser
+
+        import downloads
+        job.finish(downloads.FAILED if errors else downloads.DONE,
+                   tr("Не скачалось файлов: {0}", len(errors)) if errors else tr("Установлена"))
         name, n = target.name or os.path.basename(target.instance_dir or target.game_dir), 2
         base = name
         while name in self.profiles:
@@ -200,12 +224,13 @@ class CatalogMixin:
             self.profiles[name]["launcher_id"] = target.launcher_id
         self.save_config()
         self._refresh_sidebar()
-        self._load_profile(name)
-        self._refresh_sidebar()
+        if not self._busy:  # Пользователь ничем не занят — сразу показываем новую сборку
+            self._load_profile(name)
+            self._refresh_sidebar()
         if target.instance_dir or target.launcher_id:
             self.toasts.show(tr("Сборка «{0}» установлена в {1}.", name,
                                 "Prism Launcher" if target.instance_dir else "Minecraft Launcher"),
-                             "success", tr("Играть"), self._play, timeout=15000)
+                             "success", tr("Открыть"), lambda: self._load_profile(name), timeout=15000)
         else:
             self.toasts.show(tr("Сборка «{0}» установлена в {1}. Поставьте загрузчик {2} {3} в лаунчере и укажите эту "
                                 "папку как папку игры.", name, target.game_dir, plan.loader or "", plan.loader_version or ""),
@@ -214,8 +239,8 @@ class CatalogMixin:
             self.toasts.show(tr("Скачайте с сайта CurseForge (автор запретил программам): {0}",
                                 ", ".join(f.name for f in plan.manual[:5])), "warning", tr("Открыть страницы"),
                              lambda: [webbrowser.open(f.manual_url) for f in plan.manual if f.manual_url], timeout=30000)
-        if dialog.errors:
-            show_message(self, QMessageBox.Icon.Warning, tr("Не всё скачалось"), "\n".join(dialog.errors[:12]))
+        if errors:
+            show_message(self, QMessageBox.Icon.Warning, tr("Не всё скачалось"), "\n".join(errors[:12]))
 
     # --- Обновление готовой сборки до новой версии ---
 
@@ -250,12 +275,36 @@ class CatalogMixin:
         if not state or not self._confirm_game_not_running([]):
             return
         dialog = ModpackUpdateDialog(self, state, game_dir, os.path.join(app_config.CONFIG_DIR, "modpacks"))
-        if not dialog.exec() or not dialog.backup:
+        if not dialog.exec() or not dialog.update:
             return
-        plan, backup = dialog.plan, dialog.backup
+        import downloads
+        from ui.modpack_dialog import _Worker
+        plan = dialog.plan
         old = (profile.get("game_version") or self.game_version, profile.get("loader_version") or self.current_loader_version)
         title = state.get("title") or self.current_profile_name
-        self._forget_profile_lists()
+        worker = _Worker("update", plan=plan, game_dir=game_dir, update=dialog.update)
+        job = worker.download = self._start_download(tr("Обновление сборки «{0}»", title), "modpack", worker.stop)
+        self._set_busy("task", tr("Обновляем сборку «{0}»…", title))  # Файлы сборки меняются — другие операции ждут
+
+        def failed(error: str):
+            self._set_busy(None)
+            job.finish(downloads.FAILED if error else downloads.CANCELLED, tr("Сборка осталась как была"))
+            if error:
+                self.toasts.show(tr("Сборка «{0}» не обновлена: {1}", title, error) + " " + tr("Сборка осталась как была."),
+                                 "error", timeout=15000)
+
+        def updated(backup: str):
+            self._set_busy(None)
+            job.finish(downloads.DONE, tr("Обновлена до {0}", plan.version))
+            self._after_modpack_update(game_dir, title, plan, backup, old)
+
+        worker.installed.connect(updated)
+        worker.failed.connect(failed)
+        worker.start()
+
+    def _after_modpack_update(self, game_dir: str, title: str, plan, backup: str, old: tuple):
+        if self._profile().get("mods_path") == game_dir:
+            self._forget_profile_lists()
 
         def finish(launcher_change):
             launcher, launcher_backup = launcher_change
