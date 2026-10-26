@@ -15,7 +15,7 @@ GAME_VERSION_RE = r"(?:1\.\d+(?:\.\d+)?|[2-9]\d\.\d+(?:\.\d+)?)"
 _LOADER_VERSION_PATTERNS = {
     'fabric': r'fabric-loader-([\d\.\w-]+)-',
     'quilt': r'quilt-loader-([\d\.\w-]+)-',
-    'forge': r'forge-([\d\.]+)',
+    'forge': r'forge(?:\d[\d.]*)?-([\d\.]+)',  # 1.20.1-forge-47.2.0 и старое 1.8.9-forge1.8.9-11.15.1.2318
     'neoforge': r'neoforge-([\d\.]+)',
 }
 
@@ -63,10 +63,10 @@ def extract_game_version(data: dict) -> Optional[str]:
 
 
 def extract_loader(version_id: str) -> Optional[str]:
-    """Определяет загрузчик по id версии. Граница слова отличает 'forge' от 'neoforge'."""
+    """Определяет загрузчик по id версии. Без букв вокруг: 'forge' не путается с 'neoforge', а 'forge1.8.9' — Forge."""
     version_id_lower = version_id.lower()
     for loader in SUPPORTED_LOADERS:
-        if re.search(r'\b' + re.escape(loader) + r'\b', version_id_lower):
+        if re.search(r'(?<![a-z])' + re.escape(loader) + r'(?![a-z])', version_id_lower):
             return loader
     return None
 

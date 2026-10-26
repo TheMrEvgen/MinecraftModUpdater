@@ -7,7 +7,7 @@ import logging
 import time
 from typing import List, Optional
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QEvent, QTimer
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
 
 import background_check
@@ -30,6 +30,7 @@ class TrayMixin:
         if TrayIcon.available():
             self.tray = TrayIcon(self)
             self.tray.open_requested.connect(self._show_from_tray)
+            self.tray.toggle_requested.connect(self._toggle_from_tray)
             self.tray.check_requested.connect(lambda: self._start_background_check(manual=True))
             self.tray.quit_requested.connect(self._quit_from_tray)
             self.tray.messageClicked.connect(self._on_tray_message_clicked)
@@ -60,6 +61,20 @@ class TrayMixin:
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.ActivationChange and not self.isActiveWindow():
+            self._deactivated_at = time.monotonic()  # Щелчок по значку в трее сначала забирает у окна фокус
+        super().changeEvent(event)
+
+    def _toggle_from_tray(self):
+        """Щелчок по значку: окно впереди — убрать (в трей или свернуть), иначе — показать."""
+        in_front = self.isVisible() and not self.isMinimized() and (
+            self.isActiveWindow() or time.monotonic() - getattr(self, "_deactivated_at", 0.0) < 1.0)
+        if not in_front:
+            self._show_from_tray()
+        elif not self._hide_to_tray():
+            self.showMinimized()
 
     def _hide_to_tray(self) -> bool:
         """Закрытие окна при включённом «оставаться в трее». False — трея нет, закрываемся по-настоящему."""

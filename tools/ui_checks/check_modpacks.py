@@ -29,6 +29,11 @@ os.makedirs(SHOTS, exist_ok=True)
 import launchers  # noqa: E402
 
 launchers._appdata = lambda: FAKE_APPDATA  # «Prism» — папка в песочнице
+import official_launcher  # noqa: E402
+
+FAKE_MC = f"{FAKE_APPDATA}/.minecraft"
+os.makedirs(FAKE_MC)
+official_launcher.minecraft_dir = lambda: FAKE_MC  # «Minecraft Launcher» — тоже в песочнице
 from PyQt6.QtCore import QEventLoop, Qt, QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 from main import create_app  # noqa: E402
@@ -183,4 +188,46 @@ if undo:
     check("отмена вернула прежнее состояние",
           not os.path.exists(f"{game}/{pack_mod}") and os.path.isfile(f"{game}/mods/old-pack-mod.jar")
           and modpack_install.load_state(game)["version"] == "0.0-old")
+
+# --- Установка в Minecraft Launcher ---
+official_state = {}
+
+
+def drive_official():
+    dialog = QApplication.activeModalWidget()
+    if dialog is None or not hasattr(dialog, "official_radio"):
+        QTimer.singleShot(150, drive_official)
+        return
+    if dialog.plan is None:
+        QTimer.singleShot(200, drive_official)
+        return
+    if "offered" not in official_state:
+        official_state["offered"] = dialog.official_radio.isVisible()
+        dialog.official_radio.setChecked(True)
+        dialog.name_edit.setText("FO Official")
+        dialog.grab().save(f"{SHOTS}/06_official_dialog.png")
+        dialog.install_btn.click()
+    if dialog.isVisible():
+        QTimer.singleShot(200, drive_official)
+
+
+QTimer.singleShot(200, drive_official)
+w._install_modpack(hit)
+pump(1)
+check("предложена установка в Minecraft Launcher", official_state.get("offered"))
+installs = official_launcher.installations(FAKE_MC)
+check(f"установка в launcher_profiles.json: {[(i['name'], i['version_id']) for i in installs]}",
+      len(installs) == 1 and installs[0]["name"] == "FO Official" and installs[0]["version_id"].startswith("fabric-loader-"))
+vid = installs[0]["version_id"] if installs else ""
+check(f"версия Fabric в versions: {vid}", os.path.isfile(f"{FAKE_MC}/versions/{vid}/{vid}.json"))
+check(f"моды в своей папке игры: {installs and installs[0]['game_dir']}",
+      bool(installs) and len(os.listdir(f"{installs[0]['game_dir']}/mods")) > 10)
+profile = w._profile()
+check(f"сборка открыта и связана с установкой: {w.current_profile_name}",
+      w.current_profile_name == "FO Official" and profile.get("source") == "official"
+      and profile.get("launcher_id") == (installs and installs[0]["id"]))
+target = w._launcher_target()
+check(f"версии меняет программа: {target}", target is not None and target.kind == "official")
+found = [i.name for i in launchers.find_official_instances(FAKE_MC)]
+check(f"поиск сборок находит установку: {found}", found == ["FO Official"])
 print("done")

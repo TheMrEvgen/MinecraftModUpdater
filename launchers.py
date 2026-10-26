@@ -42,19 +42,23 @@ class Instance:
     game_version: Optional[str] = None
     loader: Optional[str] = None
     loader_version: Optional[str] = None
+    launcher_id: str = ""  # Установка официального лаунчера (ключ в launcher_profiles.json)
 
     def to_profile(self, channel: str) -> Dict:
         has_meta = bool(self.game_version and self.loader)
-        return {
+        profile = {
             "mods_path": self.game_dir,
             "game_version": self.game_version or "",
             "loader": self.loader or "fabric",
             # Версии из метаданных лаунчера точнее автоопределения по папке versions
-            "manual_mode": has_meta and self.source != "official",
+            "manual_mode": has_meta and (self.source != "official" or bool(self.launcher_id)),
             "channel": channel,
             "source": self.source,
             "loader_version": self.loader_version or "",
         }
+        if self.launcher_id:
+            profile["launcher_id"] = self.launcher_id
+        return profile
 
 
 def _appdata() -> str:
@@ -193,15 +197,41 @@ def find_curseforge_instances(root: str) -> List[Instance]:
 
 # --- Официальный лаунчер ---
 
-def find_official_instance(game_dir: str) -> List[Instance]:
-    if not os.path.isdir(os.path.join(game_dir, "mods")):
-        return []
-    detected = detect_game_versions(game_dir)
-    instance = Instance(name="Minecraft (.minecraft)", game_dir=game_dir, source="official")
-    if detected.best_guess:
-        instance.game_version, instance.loader = detected.best_guess
-        instance.loader_version = extract_loader_version(instance.loader, detected.best_guess_id or "")
-    return [instance]
+def find_official_instances(mc_dir: str) -> List[Instance]:
+    """Установки официального лаунчера с модами; без launcher_profiles.json — сама папка .minecraft."""
+    import official_launcher
+    result, seen = [], set()
+    for item in official_launcher.installations(mc_dir):  # Недавние первыми: из общих папок берём недавнюю
+        key = os.path.normcase(os.path.normpath(item["game_dir"]))
+        if key in seen or not os.path.isdir(item["game_dir"]):
+            continue
+        # Версии всегда лежат в versions самого .minecraft, даже если папка игры у установки своя
+        data = _read_json_safe(os.path.join(mc_dir, "versions", item["version_id"], f"{item['version_id']}.json"))
+        loader = extract_loader(item["version_id"])
+        game = extract_game_version(data) if data else extract_game_version({"id": item["version_id"]})
+        if not loader and not os.path.isdir(os.path.join(item["game_dir"], "mods")):
+            continue  # Ванильная установка — обновлять нечего
+        seen.add(key)
+        result.append(Instance(name=item["name"] or "Minecraft", game_dir=item["game_dir"], source="official",
+                               game_version=game, loader=loader,
+                               loader_version=extract_loader_version(loader, item["version_id"]) if loader else None,
+                               launcher_id=item["id"]))
+    key = os.path.normcase(os.path.normpath(mc_dir))
+    if key not in seen and os.path.isdir(os.path.join(mc_dir, "mods")):
+        detected = detect_game_versions(mc_dir)
+        instance = Instance(name="Minecraft (.minecraft)", game_dir=mc_dir, source="official")
+        if detected.best_guess:
+            instance.game_version, instance.loader = detected.best_guess
+            instance.loader_version = extract_loader_version(instance.loader, detected.best_guess_id or "")
+        result.append(instance)
+    return result
+
+
+def _read_json_safe(path: str):
+    try:
+        return _read_json(path)
+    except (OSError, ValueError):
+        return None
 
 
 # --- Legacy Launcher (legacylauncher.ru; не путать с TLauncher) ---
@@ -296,8 +326,8 @@ def discover_instances() -> List[Instance]:
     appdata = _appdata()
     home = os.path.expanduser("~")
     finders = [
-        lambda: find_official_instance(os.path.join(appdata, ".minecraft") if sys.platform == "win32"
-                                       else os.path.join(home, ".minecraft")),
+        lambda: find_official_instances(os.path.join(appdata, ".minecraft") if sys.platform == "win32"
+                                        else os.path.join(home, ".minecraft")),
         lambda: find_prism_instances(os.path.join(appdata, "PrismLauncher"), "prism"),
         lambda: find_prism_instances(os.path.join(appdata, "MultiMC"), "multimc"),
         lambda: find_modrinth_instances(os.path.join(appdata, "ModrinthApp")),

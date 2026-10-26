@@ -196,14 +196,24 @@ class GameMixin:
         if not plan:
             self.toasts.show(tr("Не удалось найти лаунчер для этой сборки."), "warning", tr("Настроить"), self._edit_current_profile)
             return
+        profile = self._profile()
+        installation = profile.get("launcher_id") if profile.get("source") == "official" else None
+        if installation:  # Лаунчер откроется сразу с этой установкой: она станет «последней запущенной»
+            import official_launcher
+            official_launcher.mark_last_used(official_launcher.minecraft_dir(), installation)
         try:
             game_runner.launch(plan)
         except OSError as e:
             show_message(self, QMessageBox.Icon.Critical, tr("Не удалось запустить"), str(e))
             return
         self._launched_at = time.time()
-        self.toasts.show(tr('Запускаем игру через {0}…', plan.title) if plan.opens_instance else
-                         tr('Открыт {0} — запустите сборку «{1}» там.', plan.title, self.current_profile_name), "info")
+        if plan.opens_instance:
+            text = tr('Запускаем игру через {0}…', plan.title)
+        elif installation:
+            text = tr('Открыт {0} с установкой «{1}» — нажмите «Играть».', plan.title, self.current_profile_name)
+        else:
+            text = tr('Открыт {0} — запустите сборку «{1}» там.', plan.title, self.current_profile_name)
+        self.toasts.show(text, "info")
 
     def _poll_game(self):
         """Раз в несколько секунд: запущена ли игра этой сборки (файлы модов заняты) и не вылетела ли она."""

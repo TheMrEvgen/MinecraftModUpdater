@@ -14,7 +14,8 @@ roll back any change. English and Russian interface.
 - **Updates you can trust** — every change is recorded and can be undone; a snapshot of the modpack is made before big
   updates; “What's new” shows changelogs before updating; fresh releases can be held back for a few days.
 - **Works with your launcher** — Prism Launcher, MultiMC, Modrinth App, CurseForge, Legacy Launcher and the official
-  launcher are found automatically. For Prism the app can even update the loader and the game version.
+  launcher are found automatically. For Prism and the official launcher (Fabric/Quilt) the app can even update the
+  loader and the game version.
 - **Catalog** — mods, shaders, resource packs, data packs and ready-made modpacks from Modrinth and CurseForge,
   installed with dependencies in one click. Installed modpacks update to new versions and keep the mods you added.
 - **When the game crashes** — crash report analysis, a hint which mod update started the crashes, and an automatic

@@ -538,6 +538,8 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
                 if dep_type == 'embedded' or (dep_type == 'incompatible' and not is_installed):
                     continue
                 project = projects_info.get(dep_pid, {})
+                if not is_installed and not project and not latest_by_project.get(dep_pid):
+                    continue  # Проект удалён или скрыт: ни названия, ни файла — поставить всё равно нечего
                 if content.has_dependencies and not is_installed and not dependency_applies(project, loader):
                     logging.debug(f"Зависимость {project.get('title', dep_pid)} мода {project_id} относится к другому "
                                   f"загрузчику ({', '.join(project.get('loaders') or [])}) — пропущена.")
@@ -592,6 +594,8 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
                 entry["project_id"] = None
             mods_data.append(entry)
 
+        if content.has_dependencies:
+            drop_satisfied_dependencies(mods_data)
         return mods_data
     finally:
         if cache:
@@ -706,6 +710,34 @@ def installed_keys(entries: List[Dict]) -> set:
             if item.get("filepath"):
                 keys.update(k for k in (_key(item.get("slug")), _key(item.get("name"))) if k)
     return keys
+
+
+MIN_KEY = 3  # Короче — слишком много случайных совпадений («api», «lib»)
+
+
+def drop_satisfied_dependencies(mods_data: List[Dict]):
+    """
+    Убирает «недостающие» зависимости, которые на самом деле стоят: под другим каталогом (мод нашёлся на CurseForge,
+    а зависимость указана с Modrinth) или в jar, который не опознан ни в одном каталоге (в готовых сборках таких
+    много). Сверяются адрес проекта и название с названиями установленных модов и id мода внутри их jar.
+    """
+    def missing(dep: Dict) -> bool:
+        return not dep.get("filepath") and dep.get("status") in (ModStatus.REQUIRED, ModStatus.OPTIONAL)
+
+    if not any(missing(d) for e in mods_data for d in e.get("dependencies") or []):
+        return
+    from crash_analysis import mod_ids_from_jar
+    keys = set(installed_keys(mods_data))
+    for entry in mods_data:
+        path = entry.get("filepath")
+        if path:
+            keys.update(_key(i) for i in mod_ids_from_jar(path))
+            keys.add(_key(re.split(r"[-_+ ]v?\d", enabled_name(os.path.basename(path)))[0]))
+    keys = {k for k in keys if len(k) >= MIN_KEY}
+    for entry in mods_data:
+        deps = entry.get("dependencies")
+        if deps:
+            entry["dependencies"] = [d for d in deps if not (missing(d) and {_key(d.get("slug")), _key(d.get("name"))} & keys)]
 
 
 def _attach_curseforge_dependencies(result: Dict[str, Dict], installed: set, game_version: str, loader: str,

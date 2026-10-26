@@ -64,10 +64,12 @@ class _Worker(SafeThread):
 class ModpackInstallDialog(FramelessDialog):
     """После accept(): plan, target, errors — сборка установлена."""
 
-    def __init__(self, parent, hit: Dict, prism_instances: Optional[str], default_folder: str, downloads: str):
+    def __init__(self, parent, hit: Dict, prism_instances: Optional[str], default_folder: str, downloads: str,
+                 minecraft_dir: Optional[str] = None):
         super().__init__(parent, tr("Установка сборки"), 560)
         self.hit = hit
         self.prism_instances = prism_instances
+        self.minecraft_dir = minecraft_dir
         self.plan = None
         self.target = None
         self.errors = []
@@ -81,12 +83,16 @@ class ModpackInstallDialog(FramelessDialog):
         self.body.addWidget(self.name_edit)
         self.where = QButtonGroup(self)
         self.prism_radio = QRadioButton(tr("Новая сборка в Prism Launcher — «Играть» работает сразу"))
+        self.official_radio = QRadioButton(tr("Новая установка в Minecraft Launcher — со своей папкой игры"))
         self.folder_radio = QRadioButton(tr("Папка на диске (запустить в своём лаунчере)"))
         self.where.addButton(self.prism_radio)
+        self.where.addButton(self.official_radio)
         self.where.addButton(self.folder_radio)
         self.prism_radio.setVisible(bool(prism_instances))
+        self.official_radio.setVisible(False)  # Только для Fabric/Quilt — станет ясно, когда прочитаем сборку
         (self.prism_radio if prism_instances else self.folder_radio).setChecked(True)
         self.body.addWidget(self.prism_radio)
+        self.body.addWidget(self.official_radio)
         self.body.addWidget(self.folder_radio)
         row = QHBoxLayout()
         self.folder_edit = QLineEdit(default_folder)
@@ -147,15 +153,23 @@ class ModpackInstallDialog(FramelessDialog):
         self.info.setText(text)
         self.folder_hint.setText(tr("Внутри появится папка сборки. Загрузчик ({0} {1}) поставьте в лаунчере сами, указав "
                                     "эту папку как папку игры.", loader, plan.loader_version or ""))
+        import official_launcher
+        official = bool(self.minecraft_dir and official_launcher.can_install(plan.loader) and plan.loader_version)
+        self.official_radio.setVisible(official)
+        if official and not self.prism_instances:
+            self.official_radio.setChecked(True)
         self.install_btn.setEnabled(bool(plan.game_version))
 
     def _install(self):
         name = self.name_edit.text().strip() or self.plan.name
         if self.prism_radio.isChecked() and self.prism_instances:
             self.target = modpack_install.prism_target(self.prism_instances, name)
+        elif self.official_radio.isChecked() and self.minecraft_dir:
+            self.target = modpack_install.official_target(self.minecraft_dir, name)
         else:
             self.target = modpack_install.folder_target(self.folder_edit.text().strip(), name)
-        for widget in (self.name_edit, self.prism_radio, self.folder_radio, self.folder_edit, self.install_btn):
+        for widget in (self.name_edit, self.prism_radio, self.official_radio, self.folder_radio, self.folder_edit,
+                       self.install_btn):
             widget.setEnabled(False)
         self.progress.setRange(0, 0)
         self.progress.show()

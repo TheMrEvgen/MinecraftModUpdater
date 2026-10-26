@@ -2,7 +2,9 @@
 Установка готовой сборки из каталога (без Qt): .mrpack (Modrinth) или .zip с manifest.json (CurseForge).
 
     plan = load_plan(путь к файлу сборки)          — что внутри: версия игры, загрузчик, файлы, overrides
-    target = prism_target(...) | folder_target(...) — куда ставить: новая сборка Prism или папка
+    target = prism_target(...) | official_target(...) | folder_target(...)
+                                                    — куда ставить: новая сборка Prism, установка Minecraft Launcher
+                                                      (Fabric/Quilt) или папка
     install(plan, target, progress, cancelled)     — скачать файлы с проверкой хэшей и распаковать overrides
 
 Сборка ставится в новую пустую папку, поэтому настройки модов, ресурспаки и шейдеры из сборки (overrides)
@@ -119,6 +121,9 @@ class Target:
     game_dir: str
     instance_dir: Optional[str] = None  # Для Prism: папка экземпляра (в ней mmc-pack.json и instance.cfg)
     source: str = "manual"
+    minecraft_dir: Optional[str] = None  # Для Minecraft Launcher: его .minecraft (versions, launcher_profiles.json)
+    name: str = ""                       # Название установки в Minecraft Launcher
+    launcher_id: str = ""                # Заполняется после установки: id новой установки лаунчера
 
 
 def unique_dir(parent: str, name: str) -> str:
@@ -136,6 +141,12 @@ def folder_target(parent: str, name: str) -> Target:
 def prism_target(instances_root: str, name: str, source: str = "prism") -> Target:
     instance = unique_dir(instances_root, name)
     return Target(game_dir=os.path.join(instance, "minecraft"), instance_dir=instance, source=source)
+
+
+def official_target(minecraft_dir: str, name: str) -> Target:
+    """Новая установка в Minecraft Launcher: своя папка игры в .minecraft/modpacks/<название>."""
+    return Target(game_dir=unique_dir(os.path.join(minecraft_dir, "modpacks"), name), source="official",
+                  minecraft_dir=minecraft_dir, name=name)
 
 
 def write_prism_instance(target: Target, plan: PackPlan, session=None):
@@ -174,37 +185,131 @@ def _check_hash(path: str, hashes: Dict[str, str]) -> bool:
     return True  # Хэша нет — проверить нечем
 
 
+class _Meter:
+    """Сколько скачано и с какой скоростью — для строки прогресса («12,3 из 845,0 МБ · 4,2 МБ/с»)."""
+    WINDOW = 3.0  # Скорость считаем по последним секундам: видно, если загрузка встала
+
+    def __init__(self, total_files: int, total_bytes: int, progress: ProgressCallback):
+        import collections
+        import threading
+        import time
+        self._time = time.monotonic
+        self.lock = threading.Lock()
+        self.total_files, self.total_bytes, self.progress = total_files, total_bytes, progress
+        self.files = 0
+        self.bytes = 0
+        self.current = ""
+        self.samples = collections.deque([(self._time(), 0)])
+        self.reported = 0.0
+
+    def add(self, count: int, name: str = "", file_done: bool = False):
+        with self.lock:
+            self.bytes += count
+            self.files += 1 if file_done else 0
+            self.current = name or self.current
+            now = self._time()
+            self.samples.append((now, self.bytes))
+            while len(self.samples) > 2 and now - self.samples[0][0] > self.WINDOW:
+                self.samples.popleft()
+            if not file_done and now - self.reported < 0.25:
+                return
+            self.reported = now
+            text = self.text()
+        self.progress(self.files, self.total_files, text)
+
+    def text(self) -> str:
+        from view_model import format_size
+        (start, first), (end, last) = self.samples[0], self.samples[-1]
+        speed = (last - first) / (end - start) if end > start else 0
+        total = format_size(max(self.total_bytes, self.bytes)) if self.total_bytes else "?"
+        return tr("{0} · {1} из {2} · {3}/с", self.current, format_size(self.bytes), total, format_size(speed))
+
+
+def download_files(jobs: List[tuple], progress: ProgressCallback, cancelled: Callable[[], bool], session,
+                   workers: int = 4) -> Dict[str, str]:
+    """
+    Качает файлы сборки по несколько сразу: jobs — [(PackFile, куда сохранить)]. Проверяет контрольные суммы.
+    Возвращает ошибки {путь в сборке: текст}; при отмене — InstallCancelled (недокачанное удаляется).
+    """
+    import concurrent.futures
+    meter = _Meter(len(jobs), sum(item.size for item, _ in jobs), progress)
+    stop = []
+
+    def fetch(item: PackFile, destination: str):
+        name = item.name or os.path.basename(item.path)
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        response = session.get(item.url, timeout=60, stream=True)
+        try:
+            response.raise_for_status()
+            with open(destination, "wb") as f:
+                chunks = response.iter_content(256 * 1024) if hasattr(response, "iter_content") else [response.content]
+                for chunk in chunks:
+                    if stop or cancelled():
+                        raise InstallCancelled()
+                    f.write(chunk)
+                    meter.add(len(chunk), name)
+        except BaseException:
+            if os.path.exists(destination):
+                os.remove(destination)
+            raise
+        finally:
+            close = getattr(response, "close", None)
+            if close:
+                close()
+        if not _check_hash(destination, item.hashes):
+            os.remove(destination)
+            raise ValueError(tr("контрольная сумма не совпала"))
+        meter.add(0, name, file_done=True)
+
+    errors = {}
+    progress(0, len(jobs), tr("Начинаем загрузку…"))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(fetch, item, destination): item for item, destination in jobs}
+        try:
+            for future in concurrent.futures.as_completed(futures):
+                item = futures[future]
+                try:
+                    future.result()
+                except InstallCancelled:
+                    raise
+                except Exception as e:  # Один файл не скачался — остальные качаем
+                    errors[item.path] = str(e)
+                    logging.warning(tr("Сборка: не удалось скачать {0}: {1}", item.path, e))
+        except InstallCancelled:
+            stop.append(True)
+            executor.shutdown(wait=True, cancel_futures=True)
+            raise
+    if cancelled():
+        raise InstallCancelled()
+    return errors
+
+
 def install(plan: PackPlan, target: Target, progress: ProgressCallback = lambda d, t, s: None,
             cancelled: Callable[[], bool] = lambda: False, session=None) -> List[str]:
     """Ставит сборку. Возвращает ошибки (пустой список — всё скачано). Файлы «только с сайта» пропускаются."""
     from mod_updater_logic import SESSION
     session = session or SESSION
+    version_id = None
+    if target.minecraft_dir:  # Сначала загрузчик: если его справочник недоступен, моды качать незачем
+        import official_launcher
+        version_id = official_launcher.install_loader(target.minecraft_dir, plan.loader, plan.game_version,
+                                                      plan.loader_version, session)
     os.makedirs(target.game_dir, exist_ok=True)
     if target.instance_dir:
         write_prism_instance(target, plan)
-    errors = []
     files = [f for f in plan.files if f.url]
-    for i, item in enumerate(files):
-        if cancelled():
-            raise InstallCancelled()
-        progress(i, len(files), item.name or os.path.basename(item.path))
-        destination = os.path.join(target.game_dir, *item.path.split("/"))
-        os.makedirs(os.path.dirname(destination), exist_ok=True)
-        try:
-            response = session.get(item.url, timeout=60)
-            response.raise_for_status()
-            with open(destination + ".part", "wb") as f:
-                f.write(response.content)
-            if not _check_hash(destination + ".part", item.hashes):
-                os.remove(destination + ".part")
-                errors.append(tr("{0}: контрольная сумма не совпала", item.path))
-                continue
-            os.replace(destination + ".part", destination)
-        except Exception as e:  # Один файл не скачался — остальные ставим
-            errors.append(f"{item.path}: {e}")
-            logging.warning(tr("Сборка: не удалось скачать {0}: {1}", item.path, e))
+    jobs = [(f, os.path.join(target.game_dir, *f.path.split("/")) + ".part") for f in files]
+    failed = download_files(jobs, progress, cancelled, session)
+    for item, part in jobs:
+        if item.path not in failed:
+            os.replace(part, part[:-len(".part")])
+    errors = [f"{path}: {error}" for path, error in failed.items()]
     progress(len(files), len(files), tr("Распаковываем настройки сборки…"))
     _extract_overrides(plan, target.game_dir)
+    if version_id:
+        import official_launcher
+        target.launcher_id, _ = official_launcher.add_installation(target.minecraft_dir, target.name, version_id,
+                                                                   target.game_dir)
     return errors
 
 
@@ -431,21 +536,12 @@ def apply_update(update: UpdatePlan, plan: PackPlan, game_dir: str, progress: Pr
 
     save_journal()
     try:
-        downloaded = []
-        for i, item in enumerate(update.download):  # Сначала всё скачиваем — в папке игры пока ничего не меняется
-            if cancelled():
-                raise InstallCancelled()
-            progress(i, len(update.download), item.name or os.path.basename(item.path))
-            response = session.get(item.url, timeout=60)
-            response.raise_for_status()
-            part = os.path.join(backup, f"{i}.part")
-            with open(part, "wb") as f:
-                f.write(response.content)
-            if not _check_hash(part, item.hashes):
-                raise ValueError(tr("{0}: контрольная сумма не совпала", item.path))
-            downloaded.append((item.path, part))
-        if cancelled():
-            raise InstallCancelled()
+        # Сначала всё скачиваем — в папке игры пока ничего не меняется
+        jobs = [(item, os.path.join(backup, f"{i}.part")) for i, item in enumerate(update.download)]
+        failed = download_files(jobs, progress, cancelled, session)
+        if failed:
+            raise ValueError("\n".join(f"{path}: {error}" for path, error in list(failed.items())[:12]))
+        downloaded = [(item.path, part) for item, part in jobs]
         progress(len(update.download), len(update.download), tr("Обновляем файлы сборки…"))
         for relative, part in downloaded:
             with open(part, "rb") as f:

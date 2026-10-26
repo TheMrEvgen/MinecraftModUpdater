@@ -182,24 +182,30 @@ class CatalogMixin:
         prism_root = os.path.join(_appdata(), "PrismLauncher")
         prism = _prism_instance_dir(prism_root) if os.path.isdir(prism_root) else None
         default = os.path.join(os.path.expanduser("~"), "MinecraftModpacks")  # Латиница: Java не любит кириллицу в путях
-        dialog = ModpackInstallDialog(self, hit, prism, default, os.path.join(app_config.CONFIG_DIR, "modpacks"))
+        import official_launcher
+        minecraft = official_launcher.minecraft_dir()
+        dialog = ModpackInstallDialog(self, hit, prism, default, os.path.join(app_config.CONFIG_DIR, "modpacks"),
+                                      minecraft if os.path.isdir(minecraft) else None)
         if not dialog.exec() or not dialog.target:
             return
         plan, target = dialog.plan, dialog.target
-        name, n = os.path.basename(target.instance_dir or target.game_dir), 2
+        name, n = target.name or os.path.basename(target.instance_dir or target.game_dir), 2
         base = name
         while name in self.profiles:
             name, n = f"{base} ({n})", n + 1
         self.profiles[name] = {**app_config.default_profile(), "mods_path": target.game_dir,
                                "game_version": plan.game_version or "", "loader": plan.loader or "fabric",
                                "loader_version": plan.loader_version or "", "manual_mode": True, "source": target.source}
+        if target.launcher_id:
+            self.profiles[name]["launcher_id"] = target.launcher_id
         self.save_config()
         self._refresh_sidebar()
         self._load_profile(name)
         self._refresh_sidebar()
-        if target.instance_dir:
-            self.toasts.show(tr("Сборка «{0}» установлена в Prism Launcher.", name), "success", tr("Играть"), self._play,
-                             timeout=15000)
+        if target.instance_dir or target.launcher_id:
+            self.toasts.show(tr("Сборка «{0}» установлена в {1}.", name,
+                                "Prism Launcher" if target.instance_dir else "Minecraft Launcher"),
+                             "success", tr("Играть"), self._play, timeout=15000)
         else:
             self.toasts.show(tr("Сборка «{0}» установлена в {1}. Поставьте загрузчик {2} {3} в лаунчере и укажите эту "
                                 "папку как папку игры.", name, target.game_dir, plan.loader or "", plan.loader_version or ""),
@@ -252,11 +258,11 @@ class CatalogMixin:
         self._forget_profile_lists()
 
         def finish(launcher_change):
-            path, launcher_backup = launcher_change
+            launcher, launcher_backup = launcher_change
             self._after_launcher_change(plan.game_version if plan.game_version != old[0] else None,
                                         plan.loader_version if plan.loader_version != old[1] else None)
             self.toasts.show(tr("Сборка «{0}» обновлена до {1}.", title, plan.version), "success", tr("Отменить"),
-                             lambda: self._undo_modpack_update(game_dir, backup, path, launcher_backup, old),
+                             lambda: self._undo_modpack_update(game_dir, backup, launcher, launcher_backup, old),
                              timeout=20000)
             if plan.manual:
                 import webbrowser
@@ -265,15 +271,16 @@ class CatalogMixin:
                                  lambda: [webbrowser.open(f.manual_url) for f in plan.manual if f.manual_url],
                                  timeout=30000)
 
-        path = self._launcher_pack()
-        if not path or (plan.game_version, plan.loader_version) == old or not plan.game_version:
+        launcher = self._launcher_target()
+        if not launcher or (plan.game_version, plan.loader_version) == old or not plan.game_version:
             finish((None, None))
             return
         import launcher_pack
-        if plan.game_version != old[0]:
-            work = lambda: (path, launcher_pack.set_game_version(path, plan.game_version, plan.loader, plan.loader_version))
-        else:
-            work = lambda: (path, launcher_pack.set_loader_version(path, plan.loader, plan.loader_version))
+        launcher.game_version = old[0]
+
+        def work():
+            return launcher, launcher_pack.change_versions(launcher, plan.game_version, plan.loader, plan.loader_version)
+
         self._run_task(work, (), finish, lambda e: (finish((None, None)), show_message(
             self, QMessageBox.Icon.Warning, tr("Не удалось сменить версию в лаунчере"),
             tr("{0}\n\nПоставьте Minecraft {1} и {2} {3} в лаунчере вручную.", e, plan.game_version, plan.loader or "",
@@ -285,16 +292,15 @@ class CatalogMixin:
             self.sessions.pop(self._skey(content=content), None)
         self.start_local_scan()
 
-    def _undo_modpack_update(self, game_dir: str, backup: str, launcher_path: Optional[str],
-                             launcher_backup: Optional[str], old: tuple):
+    def _undo_modpack_update(self, game_dir: str, backup: str, launcher, launcher_backup: Optional[str], old: tuple):
         import launcher_pack
         import modpack_install
         if not self._confirm_game_not_running([]):
             return
         try:
             modpack_install.undo_update(backup, game_dir)
-            if launcher_path and launcher_backup:
-                launcher_pack.restore(launcher_path, launcher_backup)
+            if launcher and launcher_backup:
+                launcher_pack.undo(launcher, launcher_backup)
         except (OSError, ValueError) as e:
             show_message(self, QMessageBox.Icon.Critical, tr("Не удалось вернуть"), str(e))
             return

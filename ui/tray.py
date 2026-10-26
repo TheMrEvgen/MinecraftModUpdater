@@ -8,6 +8,7 @@ from i18n import tr
 
 class TrayIcon(QSystemTrayIcon):
     open_requested = pyqtSignal()
+    toggle_requested = pyqtSignal()  # Щелчок по значку: открыть окно или, если оно уже впереди, убрать
     check_requested = pyqtSignal()
     quit_requested = pyqtSignal()
 
@@ -30,8 +31,10 @@ class TrayIcon(QSystemTrayIcon):
         self.set_status("")
 
     def _on_activated(self, reason):
-        # Щелчок или двойной щелчок по значку — открыть окно; правая кнопка — меню (его показывает Qt)
-        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
+        # Щелчок — открыть или убрать окно, двойной щелчок — открыть; правая кнопка — меню (его показывает Qt)
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self.toggle_requested.emit()
+        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.open_requested.emit()
 
     def set_status(self, text: str):

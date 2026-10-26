@@ -10,6 +10,7 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QMenu
 
 import icons
+from enums import ModStatus
 from i18n import tr
 from ui.mod_list import entry_at, meta_at
 from ui.widgets import button, make_action
@@ -40,6 +41,7 @@ class ModListMixin:
         for entry in iter_all_entries(mods_data):
             entry["_pinned"] = bool(entry.get("filepath")) and pin_key(entry) in pinned
         self._apply_personal_flags(mods_data)
+        self._apply_ignored_dependencies(mods_data)
         rows, self._count_items = build_rows(mods_data, self._view_mode())
         self.model.set_rows(rows)
         items = self.model.items()
@@ -55,6 +57,35 @@ class ModListMixin:
                 self._select_entry(match)
             else:
                 self._close_details()
+
+    def _apply_ignored_dependencies(self, mods_data: List[dict]):
+        """Зависимости, которые пользователь отметил «не нужна»: убираем из списка, но храним рядом — их можно вернуть."""
+        ignored = set(self._profile().get("ignored_deps") or [])
+        for entry in mods_data:
+            deps = (entry.get("dependencies") or []) + entry.pop("_ignored_deps", [])
+            entry["dependencies"] = [d for d in deps if d.get("filepath") or d.get("project_id") not in ignored]
+            hidden = [d for d in deps if not d.get("filepath") and d.get("project_id") in ignored]
+            if hidden:
+                entry["_ignored_deps"] = hidden
+
+    def _ignore_dependency(self, entry: dict, ignore: bool = True):
+        profile = self._profile()
+        ignored = [p for p in profile.get("ignored_deps") or [] if p != entry.get("project_id")]
+        if ignore:
+            ignored.append(entry["project_id"])
+        profile["ignored_deps"] = ignored
+        self.save_config()
+        self._set_data(self.mods_data)
+        if ignore:
+            self.toasts.show(tr("«{0}» больше не считается недостающим в этой сборке.", entry.get("name")), "info",
+                             tr("Отменить"), lambda: self._ignore_dependency(entry, False), timeout=10000)
+
+    def _restore_ignored_dependencies(self, name: str):
+        self.profiles[name]["ignored_deps"] = []
+        self.save_config()
+        if name == self.current_profile_name:
+            self._set_data(self.mods_data)
+        self.toasts.show(tr("Скрытые зависимости снова показываются."), "info")
 
     def _refresh_counts(self):
         counts = category_counts(self._count_items)
@@ -479,6 +510,11 @@ class ModListMixin:
             menu.addAction(make_action(menu, t, "tag", tr("Метки…"), lambda: self._show_tags_menu(entry, pos)))
         if self._abandoned(entry):
             menu.addAction(make_action(menu, t, "compass", tr("Найти замену в каталоге"), lambda: self._find_replacement(entry)))
+        if not entry.get("filepath") and entry.get("project_id") and entry.get("_required_by") \
+                and status_of(entry) in (ModStatus.REQUIRED, ModStatus.OPTIONAL) and not self.is_import_mode:
+            menu.addSeparator()
+            menu.addAction(make_action(menu, t, "check_circle", tr("Не нужен — сборка работает без него"),
+                                       lambda: self._ignore_dependency(entry)))
         if self._view_mode() == VIEW_TREE:
             menu.addSeparator()
             menu.addAction(make_action(menu, t, "chevron_down", tr("Раскрыть все зависимости"), lambda: self._expand_all(True)))

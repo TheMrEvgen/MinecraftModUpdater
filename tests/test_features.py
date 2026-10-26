@@ -214,3 +214,26 @@ def test_datapacks_live_in_worlds(tmp_path):
     assert DATAPACKS.path(str(tmp_path), "Новый") == os.path.join(str(tmp_path), "saves", "Новый", "datapacks")
     assert DATAPACKS.path(str(tmp_path)) == "" and MODS.path(str(tmp_path), "Новый") == os.path.join(str(tmp_path), "mods")
     assert DATAPACKS.loaders("fabric") == ["datapack"]
+
+
+def test_dependency_installed_from_other_catalog_is_not_missing(tmp_path):
+    import zipfile
+
+    from enums import ModStatus
+    from scanner import drop_satisfied_dependencies
+    jar = tmp_path / "rs-unknown-build.jar"
+    with zipfile.ZipFile(jar, "w") as z:
+        z.writestr("META-INF/neoforge.mods.toml", '[[mods]]\nmodId="refinedstorage"\n')
+    data = [
+        {"name": "Cable Tiers", "filepath": str(tmp_path / "cable.jar"), "dependencies": [
+            {"name": "Refined Storage", "slug": "refined-storage", "project_id": "abc", "filepath": None,
+             "status": ModStatus.REQUIRED},
+            {"name": "Kotlin for Forge", "slug": "kotlin-for-forge", "project_id": "kff", "filepath": None,
+             "status": ModStatus.REQUIRED},
+            {"name": "Cooking for Blockheads", "slug": "cooking-for-blockheads", "project_id": "cfb", "filepath": None,
+             "status": ModStatus.REQUIRED}]},
+        {"name": "rs-unknown-build", "filepath": str(jar), "status": ModStatus.NOT_FOUND},     # Опознан только по jar
+        {"name": "Kotlin for Forge", "filepath": str(tmp_path / "kff.jar"), "source": "curseforge"},  # С CurseForge
+    ]
+    drop_satisfied_dependencies(data)
+    assert [d["name"] for d in data[0]["dependencies"]] == ["Cooking for Blockheads"]  # Этого правда нет

@@ -61,7 +61,7 @@ class ProfilesMixin:
                 profile = self.profiles[by_dir[key]]
                 if profile.get("source", "manual") not in ("manual",) and inst.game_version:
                     profile.update({k: v for k, v in inst.to_profile(profile.get("channel")).items()
-                                    if k in ("game_version", "loader", "loader_version") and v})
+                                    if k in ("game_version", "loader", "loader_version", "launcher_id") and v})
                 continue
             name = inst.name
             suffix = 2
@@ -267,7 +267,7 @@ class ProfilesMixin:
     def _on_loader_chip_clicked(self):
         if self.latest_loader_version and self.current_loader_version and \
                 self._is_newer(self.latest_loader_version, self.current_loader_version):
-            if self._launcher_pack():
+            if self._launcher_target():
                 self._update_loader_in_launcher()
             else:
                 self.toasts.show(tr('Доступен {0} {1} (у вас {2}). Загрузчик обновляется в лаунчере.', LOADER_TITLES.get(self.loader, self.loader), self.latest_loader_version, self.current_loader_version), "info", timeout=8000)
@@ -280,32 +280,51 @@ class ProfilesMixin:
         import launcher_pack
         return launcher_pack.pack_file(self._profile().get("mods_path", ""))
 
+    def _launcher_target(self):
+        """Где программа сама меняет версии игры и загрузчика: сборка Prism/MultiMC или установка Minecraft Launcher
+        с Fabric/Quilt. None — только вручную в лаунчере."""
+        import launcher_pack
+        import official_launcher
+        pack = self._launcher_pack()
+        if pack:
+            return launcher_pack.LauncherTarget("pack", pack, game_version=self.game_version)
+        profile = self._profile()
+        if profile.get("source") == "official" and profile.get("launcher_id") and official_launcher.can_install(self.loader):
+            return launcher_pack.LauncherTarget("official", official_launcher.minecraft_dir(), profile["launcher_id"],
+                                                self.game_version)
+        return None
+
     def _launcher_title(self) -> str:
-        return {"prism": "Prism Launcher", "multimc": "MultiMC"}.get(self._profile().get("source"), "Prism Launcher")
+        return {"prism": "Prism Launcher", "multimc": "MultiMC", "official": "Minecraft Launcher"}.get(
+            self._profile().get("source"), "Prism Launcher")
 
     def _launcher_warning(self) -> str:
         import launcher_pack
+        import official_launcher
+        running = (official_launcher.launcher_running() if self._profile().get("source") == "official"
+                   else launcher_pack.launcher_running())
         return (tr("\n\n⚠ {0} сейчас открыт — закройте его, иначе при сохранении сборки он может вернуть прежние версии.",
-                   self._launcher_title()) if launcher_pack.launcher_running() else "")
+                   self._launcher_title()) if running else "")
 
     def _update_loader_in_launcher(self):
         import launcher_pack
-        loader_title = LOADER_TITLES.get(self.loader, self.loader)
+        loader, loader_title = self.loader, LOADER_TITLES.get(self.loader, self.loader)
         old, new = self.current_loader_version, self.latest_loader_version
         if not confirm(self, tr("Обновить загрузчик"),
                        tr("Обновить {0} {1} → {2} в сборке {3}?\n\nФайл сборки лаунчера сохраняется — изменение можно "
                           "отменить.", loader_title, old, new, self._launcher_title()) + self._launcher_warning(),
                        tr("Обновить"), tr("Отмена")):
             return
-        path = self._launcher_pack()
-        try:
-            backup = launcher_pack.set_loader_version(path, self.loader, new)
-        except (OSError, ValueError) as e:
-            show_message(self, QMessageBox.Icon.Critical, tr("Не удалось обновить загрузчик"), str(e))
-            return
-        self._after_launcher_change(game_version=None, loader_version=new)
-        self.toasts.show(tr("{0} обновлён до {1} в {2}.", loader_title, new, self._launcher_title()), "success",
-                         tr("Отменить"), lambda: self._undo_launcher_change(path, backup, None, old), timeout=12000)
+        target = self._launcher_target()
+
+        def done(backup):
+            self._after_launcher_change(game_version=None, loader_version=new)
+            self.toasts.show(tr("{0} обновлён до {1} в {2}.", loader_title, new, self._launcher_title()), "success",
+                             tr("Отменить"), lambda: self._undo_launcher_change(target, backup, None, old), timeout=12000)
+
+        self._run_task(launcher_pack.change_versions, (target, self.game_version, loader, new), done,
+                       lambda e: show_message(self, QMessageBox.Icon.Critical, tr("Не удалось обновить загрузчик"), e),
+                       tr("Обновляем загрузчик…"))
 
     def _after_launcher_change(self, game_version: Optional[str], loader_version: Optional[str]):
         profile = self._profile()
@@ -321,10 +340,10 @@ class ProfilesMixin:
         self._refresh_sidebar()
         self._start_loader_check()
 
-    def _undo_launcher_change(self, path: str, backup: str, game_version: Optional[str], loader_version: Optional[str]):
+    def _undo_launcher_change(self, target, backup: str, game_version: Optional[str], loader_version: Optional[str]):
         import launcher_pack
         try:
-            launcher_pack.restore(path, backup)
+            launcher_pack.undo(target, backup)
         except OSError as e:
             show_message(self, QMessageBox.Icon.Critical, tr("Не удалось вернуть"), str(e))
             return
@@ -395,6 +414,10 @@ class ProfilesMixin:
         menu.addAction(make_action(menu, t, "folder", tr("Открыть папку"),
                                    lambda: self._open_path(self.profiles[name].get("mods_path", ""))))
         menu.addAction(make_action(menu, t, "layers", tr("Группа…"), lambda: self._set_profile_group(name)))
+        if self.profiles[name].get("ignored_deps"):
+            menu.addAction(make_action(menu, t, "undo", tr("Вернуть скрытые зависимости ({0})",
+                                                          len(self.profiles[name]["ignored_deps"])),
+                                       lambda: self._restore_ignored_dependencies(name)))
         if modpack_install.load_state(self.profiles[name].get("mods_path", "")):
             menu.addAction(make_action(menu, t, "download", tr("Обновить сборку из каталога…"),
                                        lambda: self._update_modpack(name)))

@@ -6,6 +6,9 @@
   * set_game_version — новая версия игры: Minecraft, intermediary (Fabric/Quilt), загрузчик и LWJGL
     по требованиям из справочника Prism (meta.prismlauncher.org) — так же, как это делает сам лаунчер.
 Перед записью делается копия файла (*.modupdater-<время>.bak); restore() возвращает её.
+
+LauncherTarget, change_versions и undo — общий вход для окна: то же самое для Prism/MultiMC и для установки
+официального Minecraft Launcher (official_launcher.py).
 """
 import datetime
 import json
@@ -14,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from i18n import tr
@@ -133,6 +137,36 @@ def set_game_version(path: str, game_version: str, loader: Optional[str], loader
     backup = _write(path, data)
     logging.info(tr("Сборка лаунчера: Minecraft {0}, {1} {2}", game_version, loader or "—", loader_version or ""))
     return backup
+
+
+@dataclass
+class LauncherTarget:
+    kind: str                           # "pack" — Prism/MultiMC, "official" — Minecraft Launcher
+    path: str                           # mmc-pack.json или папка .minecraft
+    key: str = ""                       # Установка официального лаунчера
+    game_version: Optional[str] = None  # Версия игры сейчас
+
+
+def change_versions(target: LauncherTarget, game_version: str, loader: Optional[str], loader_version: Optional[str],
+                    session=None) -> str:
+    """Новая версия игры и/или загрузчика в лаунчере (нужна сеть). Возвращает копию для undo()."""
+    if target.kind == "pack":
+        if game_version != target.game_version:
+            return set_game_version(target.path, game_version, loader, loader_version, session)
+        return set_loader_version(target.path, loader, loader_version)
+    import official_launcher
+    if not loader_version:
+        raise ValueError(tr("Не удалось узнать версию загрузчика {0} для Minecraft {1}", loader, game_version))
+    vid = official_launcher.install_loader(target.path, loader, game_version, loader_version, session)
+    return official_launcher.set_installation_version(target.path, target.key, vid)
+
+
+def undo(target: LauncherTarget, backup: str):
+    if target.kind == "pack":
+        restore(target.path, backup)
+    else:
+        import official_launcher
+        official_launcher.restore(target.path, backup)
 
 
 def launcher_running() -> bool:

@@ -20,7 +20,7 @@ class FakeSession:
     def __init__(self, contents):
         self.contents = contents
 
-    def get(self, url, timeout=None):
+    def get(self, url, timeout=None, stream=False):
         session = self
 
         class Response:
@@ -148,3 +148,17 @@ def test_update_failure_leaves_pack_untouched(tmp_path, monkeypatch):
         pass
     assert os.listdir(os.path.join(game, "mods")) == ["a-1.jar"]
     assert modpack_install.load_state(game)["version"] == "1.0"
+
+
+def test_download_progress_shows_bytes(tmp_path):
+    data = b"x" * 3000
+    session = FakeSession({"https://cdn.modrinth.com/big.jar": data})
+    item = modpack_install.PackFile("mods/big.jar", "https://cdn.modrinth.com/big.jar",
+                                    {"sha1": hashlib.sha1(data).hexdigest()}, len(data), name="Big")
+    reports = []
+    errors = modpack_install.download_files([(item, str(tmp_path / "big.part"))],
+                                            lambda d, t, s: reports.append((d, t, s)), lambda: False, session)
+    assert errors == {} and (tmp_path / "big.part").read_bytes() == data
+    done, total, text = reports[-1]
+    from view_model import format_size
+    assert (done, total) == (1, 1) and text.startswith("Big · ") and text.count(format_size(len(data))) == 2
