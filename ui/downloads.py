@@ -29,6 +29,9 @@ def job_status_line(job: downloads.DownloadJob) -> str:
         return job.summary or {downloads.DONE: tr("Готово"), downloads.FAILED: tr("С ошибками"),
                                downloads.CANCELLED: tr("Отменено")}.get(job.state, "")
     size = format_size(totals["size"]) if totals["size"] else "?"
+    special = downloads.status_text(job)
+    if special:
+        return tr("{0} из {1} · {2}", format_size(totals["bytes"]), size, special)
     return tr("{0} из {1} · {2}/с · осталось {3}", format_size(totals["bytes"]), size, format_size(job.speed()),
               downloads.format_eta(job.eta()))
 
@@ -80,7 +83,7 @@ class DownloadIndicator(QWidget):
         p.drawRoundedRect(rect, 10, 10)
         done = job.finished is not None
         failed = job.state in (downloads.FAILED, downloads.CANCELLED)
-        color = t["danger"] if failed else t["success"] if done else t["accent"]
+        color = t["danger"] if failed else t["success"] if done else t["warning"] if job.paused else t["accent"]
         fraction = 1.0 if done else job.fraction()
         icon_name = "alert" if failed else "check_circle" if done else "download"
         if self.collapsed:
@@ -97,7 +100,8 @@ class DownloadIndicator(QWidget):
             if done:
                 second = job.summary or tr("Готово")
             else:
-                second = tr("{0}/с · {1}", format_size(job.speed()), downloads.format_eta(job.eta()))
+                second = downloads.status_text(job) or tr("{0}/с · {1}", format_size(job.speed()),
+                                                           downloads.format_eta(job.eta()))
             p.setPen(qcolor(t["text_muted"]))
             p.drawText(QRectF(38, 25, rect.width() - 46, 18), Qt.AlignmentFlag.AlignVCenter,
                        fm.elidedText(second, Qt.TextElideMode.ElideRight, int(rect.width()) - 46))
@@ -328,11 +332,21 @@ class DownloadsPage(QWidget):
         card_layout.setContentsMargins(18, 14, 18, 16)
         card_layout.setSpacing(8)
         top = QHBoxLayout()
+        top.setSpacing(8)
         self.job_title = label("", "SectionTitle")
         top.addWidget(self.job_title, 1)
+        self.up_btn = button(tr("Раньше"), None, "arrow_up_circle", tokens, "text_muted", tr("Начать эту загрузку раньше"))
+        self.up_btn.clicked.connect(lambda: self._move(-1))
+        self.down_btn = button(tr("Позже"), None, "chevron_down", tokens, "text_muted", tr("Пропустить вперёд другие"))
+        self.down_btn.clicked.connect(lambda: self._move(1))
+        self.pause_btn = button(tr("Пауза"), None, "pause", tokens, "text")
+        self.pause_btn.clicked.connect(self._toggle_pause)
+        self.retry_btn = button(tr("Повторить неудавшиеся"), "PrimaryButton", "refresh", tokens, "accent_text")
+        self.retry_btn.clicked.connect(self._retry)
         self.cancel_btn = button(tr("Отменить"), "DangerButton", "x", tokens, "danger")
         self.cancel_btn.clicked.connect(self._cancel)
-        top.addWidget(self.cancel_btn)
+        for widget in (self.up_btn, self.down_btn, self.pause_btn, self.retry_btn, self.cancel_btn):
+            top.addWidget(widget)
         card_layout.addLayout(top)
         self.job_status = label("", "Muted", wrap=True)
         card_layout.addWidget(self.job_status)
@@ -393,7 +407,7 @@ class DownloadsPage(QWidget):
             for _ in jobs:
                 self.jobs.addItem(QListWidgetItem())
         for row, job in enumerate(jobs):
-            mark = "" if job.finished is None else "✓ " if job.state == downloads.DONE else "✕ "
+            mark = ("⏸ " if job.paused else "") if job.finished is None else "✓ " if job.state == downloads.DONE else "✕ "
             percent = f"{int(job.fraction() * 100)}% · " if job.finished is None else ""
             item = self.jobs.item(row)
             item.setText(f"{mark}{job.title}\n{percent}{job_status_line(job)}")
@@ -408,11 +422,22 @@ class DownloadsPage(QWidget):
         self.job_title.setText(job.title)
         self.job_status.setText(job_status_line(job))
         self.cancel_btn.setVisible(running and job.cancel_callback is not None)
+        waiting = job.state == downloads.WAITING
+        self.up_btn.setVisible(waiting)
+        self.down_btn.setVisible(waiting)
+        self.pause_btn.setVisible(running and not waiting)
+        self.pause_btn.setText(tr("Продолжить") if job.paused else tr("Пауза"))
+        icon_name = "play" if job.paused else "pause"
+        if self.pause_btn.property("icon_name") != icon_name:
+            self.pause_btn.setProperty("icon_name", icon_name)
+            self.pause_btn.setIcon(icons.icon(icon_name, self.tokens["text"], 16))
+        self.retry_btn.setVisible(job.can_retry)
         self.bar.setValue(int((1.0 if job.state == downloads.DONE else job.fraction()) * 1000))
         size = format_size(totals["size"]) if totals["size"] else "?"
         self.tiles["bytes"].value.setText(f"{format_size(totals['bytes'])} / {size}")
-        self.tiles["speed"].value.setText(f"{format_size(job.speed())}/с" if running else "—")
-        self.tiles["eta"].value.setText(downloads.format_eta(job.eta()) if running else "—")
+        special = downloads.status_text(job)
+        self.tiles["speed"].value.setText("—" if not running or special else f"{format_size(job.speed())}/с")
+        self.tiles["eta"].value.setText(special or (downloads.format_eta(job.eta()) if running else "—"))
         files = f"{totals['files_done']} / {totals['files']}"
         if totals["failed"]:
             files += "  " + tr("ошибок: {0}", totals["failed"])
@@ -424,8 +449,27 @@ class DownloadsPage(QWidget):
         jobs = downloads.MANAGER.all()
         if 0 <= row < len(jobs):
             self.selected = jobs[row]
-            self._picked = jobs[row].finished is not None
+            self._picked = jobs[row].finished is not None or jobs[row].state == downloads.WAITING
             self._show_job(self.selected)
+
+    def _toggle_pause(self):
+        if self.selected:
+            if self.selected.paused:
+                self.selected.resume()
+            else:
+                self.selected.pause()
+            self.refresh()
+
+    def _retry(self):
+        if self.selected:
+            self.selected.retry()
+            self.refresh()
+
+    def _move(self, delta: int):
+        if self.selected:
+            downloads.MANAGER.move(self.selected, delta)
+            self._picked = True
+            self.refresh()
 
     def _cancel(self):
         if self.selected:

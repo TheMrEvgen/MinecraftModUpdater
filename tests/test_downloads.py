@@ -41,3 +41,29 @@ def test_unknown_size_and_eta_text():
     job.file_progress("m", 500)
     assert job.totals()["size"] == 500 and job.eta() is None
     assert downloads.format_eta(None) and downloads.format_eta(30) != downloads.format_eta(600)
+
+
+def test_pause_queue_and_retry():
+    manager = downloads.DownloadManager()
+    first, second, third = manager.start("1"), manager.start("2"), manager.start("3")
+    second.wait_in_queue()
+    third.wait_in_queue()
+    manager.move(third, -1)  # Третью — раньше второй
+    assert [j.title for j in manager.all()] == ["1", "3", "2"]
+    assert downloads.status_text(second) and second.speed() == 0
+
+    first.add_file("a", "A", 10)
+    first.pause()
+    assert first.paused and downloads.status_text(first)
+    first.resume()
+    assert not first.paused and first.wait_if_paused() is False
+
+    retried = []
+    first.file_done("a", "обрыв")
+    first.finish(downloads.FAILED)
+    first.retry_callback = lambda: retried.append(first.failed_keys())
+    assert first.can_retry
+    first.retry()
+    assert retried == [["a"]]
+    first.restart(["a"])
+    assert first.finished is None and first.files["a"].state == downloads.QUEUED and not first.can_retry

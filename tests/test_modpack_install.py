@@ -20,7 +20,7 @@ class FakeSession:
     def __init__(self, contents):
         self.contents = contents
 
-    def get(self, url, timeout=None, stream=False):
+    def get(self, url, timeout=None, stream=False, headers=None):
         session = self
 
         class Response:
@@ -162,3 +162,47 @@ def test_download_progress_shows_bytes(tmp_path):
     done, total, text = reports[-1]
     from view_model import format_size
     assert (done, total) == (1, 1) and text.startswith("Big · ") and text.count(format_size(len(data))) == 2
+
+
+class FlakySession:
+    """Первый раз рвёт связь на середине файла; потом отдаёт остаток по заголовку Range (206)."""
+
+    def __init__(self, data):
+        self.data, self.ranges = data, []
+
+    def get(self, url, timeout=None, stream=False, headers=None):
+        import requests
+        start = int((headers or {}).get("Range", "bytes=0-")[6:-1] or 0)
+        self.ranges.append(start)
+        session = self
+
+        class Response:
+            status_code = 206 if start else 200
+            headers = {"Content-Length": str(len(session.data) - start)}
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, size):
+                body = session.data[start:]
+                if len(session.ranges) == 1:  # Первая попытка: половина и обрыв
+                    yield body[:len(body) // 2]
+                    raise requests.ConnectionError("обрыв")
+                yield body
+
+        return Response()
+
+
+def test_download_resumes_after_connection_drop(tmp_path, monkeypatch):
+    import downloads
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    data = bytes(range(256)) * 40
+    session = FlakySession(data)
+    item = modpack_install.PackFile("mods/a.jar", "https://cdn.modrinth.com/a.jar", {"sha1": hashlib.sha1(data).hexdigest()},
+                                    len(data), name="A")
+    job = downloads.DownloadJob("t")
+    errors = modpack_install.download_files([(item, str(tmp_path / "a.part"))], lambda *a: None, lambda: False, session,
+                                            job=job)
+    assert errors == {} and (tmp_path / "a.part").read_bytes() == data
+    assert session.ranges == [0, len(data) // 2]  # Второй запрос — с места обрыва
+    assert job.files["mods/a.jar"].state == downloads.DONE

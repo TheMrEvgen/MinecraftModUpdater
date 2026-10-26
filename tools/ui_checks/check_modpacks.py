@@ -182,6 +182,7 @@ def drive_update():
     if "info" not in update_state:
         update_state["info"] = dialog.info.text()
         update_state["plan"] = dialog.update
+        update_state["changes"] = dialog.changes.isVisible() and dialog.changes.toPlainText()[:80]
         dialog.grab().save(f"{SHOTS}/04_update_dialog.png")
         dialog.update_btn.click()
     if dialog.isVisible():
@@ -195,6 +196,7 @@ w._update_modpack()
 wait_downloads("update")
 plan = update_state.get("plan")
 check(f"окно обновления: {update_state.get('info')!r}", "0.0-old" in update_state.get("info", ""))
+check(f"«Что нового» в окне обновления: {update_state.get('changes')!r}", bool(update_state.get("changes")))
 check(f"план: скачать {plan and [f.path for f in plan.download]}, убрать {plan and plan.remove}, "
       f"свои моды {plan and plan.user_mods}, свои настройки {plan and plan.kept}",
       plan and [f.path for f in plan.download] == [pack_mod] and plan.remove == ["mods/old-pack-mod.jar"]
@@ -257,4 +259,69 @@ target = w._launcher_target()
 check(f"версии меняет программа: {target}", target is not None and target.kind == "official")
 found = [i.name for i in launchers.find_official_instances(FAKE_MC)]
 check(f"поиск сборок находит установку: {found}", found == ["FO Official"])
+
+# --- Очередь сборок, пауза и кнопки страницы «Загрузки» (подставные потоки — без настоящих загрузок) ---
+import downloads  # noqa: E402
+from PyQt6.QtCore import pyqtSignal  # noqa: E402
+from workers import SafeThread  # noqa: E402
+
+
+class FakeWorker(SafeThread):
+    installed = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, seconds):
+        super().__init__()
+        self.seconds, self.stopped = seconds, False
+
+    def stop(self):
+        self.stopped = True
+
+    def run(self):
+        end = time.time() + self.seconds
+        while time.time() < end and not self.stopped:
+            time.sleep(0.05)
+
+
+downloads.MANAGER.clear_finished()
+fakes = {}
+for name, seconds in (("A", 2.0), ("B", 0.5), ("C", 0.5)):
+    job = w._start_download(name, "modpack")
+    job.add_file("f", "file", 100)
+    worker = FakeWorker(seconds)
+    worker.finished.connect(lambda j=job: j.finish(downloads.DONE))
+    fakes[name] = (job, worker)
+    w._queue_modpack(job, worker)
+a, b, c = (fakes[n][0] for n in "ABC")
+check(f"очередь: A качается, B и C ждут ({a.state}, {b.state}, {c.state})",
+      a.state == downloads.ACTIVE and b.state == c.state == downloads.WAITING)
+w._switch_page(mw.PAGE_DOWNLOADS)
+page = w.downloads_page
+page.select(c)
+page._picked = True
+pump(0.5)
+check("у ждущей загрузки кнопки «Раньше»/«Позже», без паузы",
+      page.up_btn.isVisible() and page.down_btn.isVisible() and not page.pause_btn.isVisible())
+page.up_btn.click()  # C — раньше B
+pump(0.3)
+page.select(a)
+pump(0.3)
+page.pause_btn.click()
+pump(0.3)
+check(f"пауза: {a.paused}, кнопка «{page.pause_btn.text()}»", a.paused and page.pause_btn.text() == "Продолжить")
+page.pause_btn.click()
+w.grab().save(f"{SHOTS}/07_queue.png")
+end = time.time() + 10
+while time.time() < end and c.state != downloads.ACTIVE and c.finished is None:
+    pump(0.1)
+check(f"после A началась C (её подняли), B ждёт: C {c.state}, B {b.state}",
+      (c.state == downloads.ACTIVE or c.finished) and b.state == downloads.WAITING)
+b.cancel()
+pump(0.3)
+check(f"отмена ждущей загрузки: {b.state}", b.state == downloads.CANCELLED and fakes["B"][1] not in
+      [item[1] for item in w._modpack_queue])
+end = time.time() + 10
+while time.time() < end and downloads.MANAGER.active():
+    pump(0.1)
+check("очередь опустела", not downloads.MANAGER.active() and not w._modpack_queue)
 print("done")

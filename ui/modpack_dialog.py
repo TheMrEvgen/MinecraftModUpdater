@@ -3,7 +3,9 @@ import logging
 from typing import Dict, Optional
 
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QButtonGroup, QFileDialog, QHBoxLayout, QLineEdit, QProgressBar, QRadioButton
+from PyQt6.QtWidgets import (
+    QButtonGroup, QFileDialog, QHBoxLayout, QLineEdit, QProgressBar, QRadioButton, QTextBrowser,
+)
 
 import modpack_install
 from i18n import tr
@@ -49,11 +51,17 @@ class _Worker(SafeThread):
                 except OSError as e:  # Без записи сборка работает, только не обновится из каталога
                     logging.warning(tr("Сборка: не удалось запомнить состав: {0}", e))
                 self.installed.emit(errors)
+            elif self.job == "retry":  # Докачать файлы, которые не скачались при установке (update — их пути)
+                self.installed.emit(modpack_install.download_missing(self.plan, self.game_dir, self.update,
+                                                                     self.progress.emit, lambda: self._cancelled,
+                                                                     job=self.download))
             elif self.job == "prepare_update":
                 info = modpack_install.latest_pack_file(self.project_id)
                 plan = modpack_install.load_plan(modpack_install.download_pack(info, self.folder))
                 state = modpack_install.load_state(self.game_dir) or {}
-                self.prepared.emit((plan, modpack_install.plan_update(state, plan, self.game_dir)))
+                changelog = modpack_install.pack_changelog(self.project_id, state.get("version") or "", plan.version,
+                                                           plan.game_version or "")
+                self.prepared.emit((plan, modpack_install.plan_update(state, plan, self.game_dir), changelog))
             else:
                 self.installed.emit(modpack_install.apply_update(self.update, self.plan, self.game_dir,
                                                                  self.progress.emit, lambda: self._cancelled,
@@ -209,7 +217,7 @@ class ModpackUpdateDialog(FramelessDialog):
     обновление идёт в фоне (окно его запускает)."""
 
     def __init__(self, parent, state: Dict, game_dir: str, downloads: str):
-        super().__init__(parent, tr("Обновление сборки"), 560)
+        super().__init__(parent, tr("Обновление сборки"), 640)
         self.state = state
         self.game_dir = game_dir
         self.plan = None
@@ -225,6 +233,13 @@ class ModpackUpdateDialog(FramelessDialog):
         self.body.addWidget(self.progress)
         self.progress_text = label("", "Faint", wrap=True)
         self.body.addWidget(self.progress_text)
+        self.changes_title = label(tr("Что нового"), "SectionTitle")
+        self.changes = QTextBrowser()
+        self.changes.setOpenExternalLinks(True)
+        self.changes.setMinimumHeight(220)
+        for widget in (self.changes_title, self.changes):
+            widget.hide()
+            self.body.addWidget(widget)
         self.body.addStretch()
         self.cancel_btn = self.add_button(tr("Отмена"), False, self._cancel)
         self.update_btn = self.add_button(tr("Обновить"), True, self._apply)
@@ -241,7 +256,14 @@ class ModpackUpdateDialog(FramelessDialog):
         worker.start()
 
     def _on_prepared(self, result):
-        self.plan, self.update = result
+        from ui.dialogs import demote_headings, prepare_markdown
+        self.plan, self.update, changelog = result
+        if changelog:  # Изменения всех выпусков между вашей версией и новой — от новой к старой
+            parts = [f"**{version}**\n\n{prepare_markdown(text).strip() or tr('_Автор не описал изменения._')}"
+                     for version, text in changelog]
+            self.changes.setMarkdown(demote_headings("\n\n---\n\n".join(parts))[:60000])
+            self.changes_title.show()
+            self.changes.show()
         self.progress.hide()
         plan, update = self.plan, self.update
         lines = [tr("Версия {0} → {1}", self.state.get("version") or "?", plan.version or "?")]

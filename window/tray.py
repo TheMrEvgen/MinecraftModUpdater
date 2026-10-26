@@ -154,6 +154,7 @@ class TrayMixin:
         if self.isVisible() and not self.isMinimized() and self.isActiveWindow():
             self.toasts.show(f"{title} ({text})", "info", tr("Показать"), self._on_tray_message_clicked, timeout=12000)
         elif self.tray and self.tray.isVisible():
+            self._tray_click_action = None
             self.tray.showMessage(title, text + "\n" + tr("Нажмите, чтобы открыть."),
                                   QSystemTrayIcon.MessageIcon.Information, 10000)
         else:
@@ -161,6 +162,10 @@ class TrayMixin:
 
     def _on_tray_message_clicked(self):
         self._show_from_tray()
+        action, self._tray_click_action = getattr(self, "_tray_click_action", None), None
+        if action:  # Уведомление о загрузке: своё действие (открыть сборку и т.п.)
+            action()
+            return
         name = getattr(self, "_announced_profile", None)
         if name and name in self.profiles and name != self.current_profile_name:
             self._on_profile_selected(name)

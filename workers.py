@@ -116,6 +116,7 @@ class UpdateWorker(SafeThread):
         self.transaction = transaction or UpdateTransaction(mods_path, "update")
         self.results: Dict[int, ModStatus] = {}
         self.is_running = True
+        self.download_job = None  # downloads.DownloadJob: пауза со страницы «Загрузки»
         self._results_lock = threading.Lock()
 
     def stop(self):
@@ -130,6 +131,8 @@ class UpdateWorker(SafeThread):
             last_emit = [0.0]
 
             def callback(downloaded, total):
+                if self.download_job:  # Пауза: ждём здесь, соединение держим (обрыв — потом «Повторить»)
+                    self.download_job.wait_if_paused(lambda: not self.is_running)
                 now = time.monotonic()
                 if now - last_emit[0] >= self.PROGRESS_INTERVAL or downloaded >= total:
                     last_emit[0] = now

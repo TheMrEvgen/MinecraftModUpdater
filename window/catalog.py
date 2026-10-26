@@ -200,12 +200,70 @@ class CatalogMixin:
             job.finish(downloads.FAILED if error else downloads.CANCELLED, error or tr("Отменено"))
             if error:
                 self.toasts.show(tr("Сборка «{0}» не установлена: {1}", title, error), "error", timeout=15000)
+                self._notify_download(tr("Сборка не установлена"), f"{title}: {error}")
 
         worker.installed.connect(lambda errors: self._on_modpack_installed(plan, target, errors, job))
         worker.failed.connect(failed)
-        worker.start()
-        self.toasts.show(tr("«{0}» качается в фоне.", title), "info", tr("Загрузки"),
+        queued = self._queue_modpack(job, worker)
+        self.toasts.show(tr("«{0}» ждёт очереди — сначала докачается предыдущая сборка.", title) if queued
+                         else tr("«{0}» качается в фоне.", title), "info", tr("Загрузки"),
                          lambda: self._switch_page(PAGE_DOWNLOADS), timeout=8000)
+
+    # --- Очередь: готовые сборки качаются по одной, чтобы не делить скорость ---
+
+    def _queue_modpack(self, job, worker) -> bool:
+        """Ставит загрузку сборки в очередь. True — она ждёт, пока докачается предыдущая."""
+        self._modpack_queue.append((job, worker))
+        worker.finished.connect(self._run_modpack_queue)  # QThread.finished — поток полностью завершился
+        busy = self._modpack_running is not None
+        if busy:
+            job.wait_in_queue()
+            job.cancel_callback = lambda: self._drop_from_queue(job)
+        self._run_modpack_queue()
+        return busy
+
+    def _run_modpack_queue(self):
+        import downloads
+        running = self._modpack_running
+        if running is not None and not running.isFinished():
+            return
+        self._modpack_running = None
+        queue = self._modpack_queue
+        if not queue:
+            return
+        order = downloads.MANAGER.all()  # Очередь, как её видно (и переставили) на странице «Загрузки»
+        queue.sort(key=lambda item: order.index(item[0]) if item[0] in order else len(order))
+        job, worker = queue.pop(0)
+        job.start_now()
+        job.cancel_callback = worker.stop
+        self._modpack_running = worker
+        worker.start()
+        self._start_download_timer()
+
+    def _drop_from_queue(self, job):
+        import downloads
+        self._modpack_queue[:] = [item for item in self._modpack_queue if item[0] is not job]
+        job.finish(downloads.CANCELLED, tr("Отменено"))
+
+    def _retry_modpack_files(self, plan, game_dir: str, title: str, job):
+        """«Повторить» на странице «Загрузки»: докачать файлы сборки, которые не скачались."""
+        import downloads
+        from ui.modpack_dialog import _Worker
+        paths = job.failed_keys()
+        worker = _Worker("retry", plan=plan, game_dir=game_dir, update=paths, download=job)
+        job.restart(paths)
+
+        def done(errors: list):
+            job.finish(downloads.FAILED if errors else downloads.DONE,
+                       tr("Не скачалось файлов: {0}", len(errors)) if errors else tr("Установлена"))
+            if errors:
+                job.retry_callback = lambda: self._retry_modpack_files(plan, game_dir, title, job)
+            self._notify_download(tr("Сборка установлена") if not errors else tr("Не всё скачалось"), title)
+
+        worker.installed.connect(done)
+        worker.failed.connect(lambda error: job.finish(downloads.FAILED if error else downloads.CANCELLED,
+                                                       error or tr("Отменено")))
+        self._queue_modpack(job, worker)
 
     def _on_modpack_installed(self, plan, target, errors: list, job):
         import webbrowser
@@ -227,6 +285,8 @@ class CatalogMixin:
         if not self._busy:  # Пользователь ничем не занят — сразу показываем новую сборку
             self._load_profile(name)
             self._refresh_sidebar()
+        self._notify_download(tr("Сборка установлена"), tr("«{0}» готова к игре.", name),
+                              lambda: (self._load_profile(name), self._refresh_sidebar()))
         if target.instance_dir or target.launcher_id:
             self.toasts.show(tr("Сборка «{0}» установлена в {1}.", name,
                                 "Prism Launcher" if target.instance_dir else "Minecraft Launcher"),
@@ -239,8 +299,10 @@ class CatalogMixin:
             self.toasts.show(tr("Скачайте с сайта CurseForge (автор запретил программам): {0}",
                                 ", ".join(f.name for f in plan.manual[:5])), "warning", tr("Открыть страницы"),
                              lambda: [webbrowser.open(f.manual_url) for f in plan.manual if f.manual_url], timeout=30000)
-        if errors:
-            show_message(self, QMessageBox.Icon.Warning, tr("Не всё скачалось"), "\n".join(errors[:12]))
+        if errors:  # Без окна поверх: загрузка шла в фоне — предлагаем докачать
+            job.retry_callback = lambda: self._retry_modpack_files(plan, target.game_dir, name, job)
+            self.toasts.show(tr("«{0}»: не скачалось файлов — {1}.", name, len(errors)), "warning", tr("Повторить"),
+                             job.retry, timeout=20000)
 
     # --- Обновление готовой сборки до новой версии ---
 
@@ -277,25 +339,41 @@ class CatalogMixin:
         dialog = ModpackUpdateDialog(self, state, game_dir, os.path.join(app_config.CONFIG_DIR, "modpacks"))
         if not dialog.exec() or not dialog.update:
             return
-        import downloads
-        from ui.modpack_dialog import _Worker
         plan = dialog.plan
         old = (profile.get("game_version") or self.game_version, profile.get("loader_version") or self.current_loader_version)
         title = state.get("title") or self.current_profile_name
-        worker = _Worker("update", plan=plan, game_dir=game_dir, update=dialog.update)
-        job = worker.download = self._start_download(tr("Обновление сборки «{0}»", title), "modpack", worker.stop)
+        self._run_modpack_update(game_dir, title, plan, dialog.update, old)
+
+    def _run_modpack_update(self, game_dir: str, title: str, plan, update, old: tuple, job=None):
+        """Обновление сборки в фоне. job — «Повторить» после сбоя (сборка тогда осталась прежней)."""
+        import downloads
+        from ui.modpack_dialog import _Worker
+        if self._busy:
+            self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
+            return
+        worker = _Worker("update", plan=plan, game_dir=game_dir, update=update)
+        if job:
+            job.restart(list(job.files))
+            job.cancel_callback = worker.stop
+            self._start_download_timer()
+        else:
+            job = self._start_download(tr("Обновление сборки «{0}»", title), "modpack", worker.stop)
+        worker.download = job
         self._set_busy("task", tr("Обновляем сборку «{0}»…", title))  # Файлы сборки меняются — другие операции ждут
 
         def failed(error: str):
             self._set_busy(None)
             job.finish(downloads.FAILED if error else downloads.CANCELLED, tr("Сборка осталась как была"))
+            job.retry_callback = lambda: self._run_modpack_update(game_dir, title, plan, update, old, job)
             if error:
                 self.toasts.show(tr("Сборка «{0}» не обновлена: {1}", title, error) + " " + tr("Сборка осталась как была."),
-                                 "error", timeout=15000)
+                                 "error", tr("Повторить"), job.retry, timeout=15000)
+                self._notify_download(tr("Сборка не обновлена"), title)
 
         def updated(backup: str):
             self._set_busy(None)
             job.finish(downloads.DONE, tr("Обновлена до {0}", plan.version))
+            self._notify_download(tr("Сборка обновлена"), tr("«{0}» обновлена до {1}.", title, plan.version))
             self._after_modpack_update(game_dir, title, plan, backup, old)
 
         worker.installed.connect(updated)

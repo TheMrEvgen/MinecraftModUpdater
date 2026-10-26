@@ -184,8 +184,8 @@ class OperationsMixin:
                 return False
 
     def start_update(self, entries: List[dict], transaction: Optional[UpdateTransaction] = None,
-                     folder: Optional[str] = None):
-        """Скачивает и ставит entries в folder (по умолчанию — папка текущей вкладки)."""
+                     folder: Optional[str] = None, job: Optional[downloads.DownloadJob] = None):
+        """Скачивает и ставит entries в folder (по умолчанию — папка текущей вкладки). job — повтор прежней загрузки."""
         if self._busy:
             self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
             return
@@ -218,12 +218,18 @@ class OperationsMixin:
         self.update_worker = UpdateWorker(entries, folder, transaction,
                                           max_workers=self.settings.get("parallel_downloads", 3))
         worker = self.update_worker
-        self._update_job = self._start_download(
-            tr("Моды: {0}", self.current_profile_name) if len(entries) > 1 else entries[0].get("name") or "?",
-            "mods", worker.stop)
-        for i, entry in enumerate(entries):
-            self._update_job.add_file(str(i), entry.get("name") or entry.get("new_filename") or "?",
-                                      entry.get("new_size") or 0)
+        self._update_keys = [str(entry_key(e)) for e in entries]
+        if job:  # «Повторить»: та же строка в «Загрузках», снова качаются только неудавшиеся
+            job.cancel_callback = worker.stop
+            job.restart(self._update_keys)
+            self._start_download_timer()
+        else:
+            job = self._start_download(
+                tr("Моды: {0}", self.current_profile_name) if len(entries) > 1 else entries[0].get("name") or "?",
+                "mods", worker.stop)
+            for key, entry in zip(self._update_keys, entries):
+                job.add_file(key, entry.get("name") or entry.get("new_filename") or "?", entry.get("new_size") or 0)
+        self._update_job = worker.download_job = job
         self.update_worker.progress.connect(self._on_update_progress)
         self.update_worker.download_progress.connect(self._on_download_progress)
         self.update_worker.finished.connect(self._on_update_finished)
@@ -241,11 +247,11 @@ class OperationsMixin:
         success = status in (ModStatus.UPDATED, ModStatus.INSTALLED)
         job = getattr(self, "_update_job", None)
         if job:
+            key = self._update_keys[index]
             if status == ModStatus.DOWNLOADING:
-                job.file_started(str(index))
+                job.file_started(key)
             elif status != ModStatus.FINISHING:
-                job.file_done(str(index), status.value if status.is_error else "",
-                              cancelled=status == ModStatus.CANCELLED)
+                job.file_done(key, status.value if status.is_error else "", cancelled=status == ModStatus.CANCELLED)
         for entry in self._entries_like(source):
             entry["status"] = status
             entry.pop("_progress", None)
@@ -277,7 +283,7 @@ class OperationsMixin:
             return
         job = getattr(self, "_update_job", None)
         if job:
-            job.file_progress(str(index), downloaded, total)
+            job.file_progress(self._update_keys[index], downloaded, total)
         source = self.update_worker.mods_to_update[index]
         for entry in self._entries_like(source):
             entry["_progress"] = downloaded / total
@@ -297,6 +303,13 @@ class OperationsMixin:
             cancelled = not worker.is_running
             job.finish(downloads.CANCELLED if cancelled else downloads.FAILED if failed else downloads.DONE,
                        tr("Установлено: {0}", succeeded) + (tr(", ошибок: {0}", len(failed)) if failed else ""))
+            retry = [worker.mods_to_update[i] for i, s in results.items() if s.is_error or s == ModStatus.CANCELLED]
+            folder = worker.mods_path
+            job.retry_callback = (lambda: self.start_update(retry, folder=folder, job=job)) if retry else None
+            if failed:
+                self._notify_download(tr("Не всё скачалось"), tr("Не удалось обновить: {0}", len(failed)))
+            elif succeeded and not cancelled:
+                self._notify_download(tr("Моды обновлены"), job.summary)
         transaction = worker.transaction
         if self._catalog_installing:
             self._finish_catalog_install(worker)

@@ -29,6 +29,13 @@ class InstallCancelled(Exception):
     pass
 
 
+class _Paused(Exception):
+    """Загрузку поставили на паузу: соединение закрываем, файл потом докачиваем с того же места."""
+
+
+NETWORK_RETRIES = 3  # Обрыв связи посреди файла: столько раз докачиваем с места обрыва, потом — ошибка
+
+
 @dataclass
 class PackFile:
     path: str                 # Относительно папки игры: mods/x.jar, resourcepacks/y.zip
@@ -237,39 +244,65 @@ def download_files(jobs: List[tuple], progress: ProgressCallback, cancelled: Cal
     stop = []
     if job:
         for item, _ in jobs:
-            job.add_file(item.path, item.name or os.path.basename(item.path), item.size)
+            if item.path not in job.files:  # При повторе файлы уже в списке загрузки
+                job.add_file(item.path, item.name or os.path.basename(item.path), item.size)
 
     def fetch(item: PackFile, destination: str):
+        import time
+
+        import requests
         name = item.name or os.path.basename(item.path)
         os.makedirs(os.path.dirname(destination), exist_ok=True)
-        if stop or cancelled():
-            raise InstallCancelled()
-        if job:
-            job.file_started(item.path)
-        response = session.get(item.url, timeout=60, stream=True)
-        written = 0
+        if os.path.exists(destination):
+            os.remove(destination)  # Остаток прошлой попытки
+        written, attempts = 0, 0
         try:
-            response.raise_for_status()
-            headers = getattr(response, "headers", None) or {}
-            size = int(headers.get("Content-Length") or 0) or item.size
-            with open(destination, "wb") as f:
-                chunks = response.iter_content(256 * 1024) if hasattr(response, "iter_content") else [response.content]
-                for chunk in chunks:
-                    if stop or cancelled():
-                        raise InstallCancelled()
-                    f.write(chunk)
-                    written += len(chunk)
-                    meter.add(len(chunk), name)
-                    if job:
-                        job.file_progress(item.path, written, size)
+            while True:
+                if stop or cancelled():
+                    raise InstallCancelled()
+                if job:
+                    job.wait_if_paused(lambda: bool(stop) or cancelled())
+                    job.file_started(item.path)
+                response = None
+                try:
+                    # Докачка: просим у сервера только недостающее (если он не умеет — вернёт файл целиком)
+                    response = session.get(item.url, timeout=60, stream=True,
+                                           headers={"Range": f"bytes={written}-"} if written else None)
+                    response.raise_for_status()
+                    if written and getattr(response, "status_code", 200) != 206:
+                        written = 0
+                    headers = getattr(response, "headers", None) or {}
+                    size = item.size or (int(headers.get("Content-Length") or 0) + written)
+                    with open(destination, "ab" if written else "wb") as f:
+                        chunks = (response.iter_content(256 * 1024) if hasattr(response, "iter_content")
+                                  else [response.content])
+                        for chunk in chunks:
+                            if stop or cancelled():
+                                raise InstallCancelled()
+                            if job and job.paused:
+                                raise _Paused()
+                            f.write(chunk)
+                            written += len(chunk)
+                            meter.add(len(chunk), name)
+                            if job:
+                                job.file_progress(item.path, written, size)
+                    break
+                except _Paused:
+                    continue
+                except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as e:
+                    attempts += 1
+                    if attempts > NETWORK_RETRIES:
+                        raise
+                    logging.info(tr("Сборка: обрыв связи на {0} ({1}), докачиваем…", name, e))
+                    time.sleep(min(8, 2 ** attempts))
+                finally:
+                    close = getattr(response, "close", None)
+                    if close:
+                        close()
         except BaseException:
             if os.path.exists(destination):
                 os.remove(destination)
             raise
-        finally:
-            close = getattr(response, "close", None)
-            if close:
-                close()
         if not _check_hash(destination, item.hashes):
             os.remove(destination)
             raise ValueError(tr("контрольная сумма не совпала"))
@@ -316,12 +349,7 @@ def install(plan: PackPlan, target: Target, progress: ProgressCallback = lambda 
     if target.instance_dir:
         write_prism_instance(target, plan)
     files = [f for f in plan.files if f.url]
-    jobs = [(f, os.path.join(target.game_dir, *f.path.split("/")) + ".part") for f in files]
-    failed = download_files(jobs, progress, cancelled, session, job=job)
-    for item, part in jobs:
-        if item.path not in failed:
-            os.replace(part, part[:-len(".part")])
-    errors = [f"{path}: {error}" for path, error in failed.items()]
+    errors = download_missing(plan, target.game_dir, [f.path for f in files], progress, cancelled, session, job)
     progress(len(files), len(files), tr("Распаковываем настройки сборки…"))
     _extract_overrides(plan, target.game_dir)
     if version_id:
@@ -329,6 +357,19 @@ def install(plan: PackPlan, target: Target, progress: ProgressCallback = lambda 
         target.launcher_id, _ = official_launcher.add_installation(target.minecraft_dir, target.name, version_id,
                                                                    target.game_dir)
     return errors
+
+
+def download_missing(plan: PackPlan, game_dir: str, paths: List[str], progress: ProgressCallback = lambda d, t, s: None,
+                     cancelled: Callable[[], bool] = lambda: False, session=None, job=None) -> List[str]:
+    """Качает файлы сборки paths в папку игры (при установке — все, при «Повторить» — неудавшиеся). Возвращает ошибки."""
+    from mod_updater_logic import SESSION
+    wanted = set(paths)
+    jobs = [(f, _abs(game_dir, f.path) + ".part") for f in plan.files if f.url and f.path in wanted]
+    failed = download_files(jobs, progress, cancelled, session or SESSION, job=job)
+    for item, part in jobs:
+        if item.path not in failed:
+            os.replace(part, part[:-len(".part")])
+    return [f"{path}: {error}" for path, error in failed.items()]
 
 
 def _extract_overrides(plan: PackPlan, game_dir: str):
@@ -370,6 +411,49 @@ def latest_pack_file(project_id: str) -> Dict:
     version = next((v for v in versions if v.get("version_type") == "release"), versions[0])
     primary = next((f for f in version["files"] if f.get("primary")), version["files"][0])
     return {"url": primary["url"], "filename": primary["filename"], "version": version.get("version_number") or ""}
+
+
+def pack_changelog(project_id: str, current_version: str, target_version: str = "", game_version: str = "",
+                   limit: int = 8) -> List[tuple]:
+    """
+    «Что нового»: [(версия, список изменений в Markdown)] от новой к старой — выпуски от target_version до
+    current_version (не включая её), для той же версии Minecraft; если новая — релиз, беты пропускаем.
+    Ошибки сети — пустой список: окно обновления работает и без него.
+    """
+    import curseforge
+    from mod_updater_logic import MODRINTH_API_BASE, _get_json
+    result = []
+    try:
+        if curseforge.is_curseforge(project_id):
+            files = curseforge._get(f"/mods/{curseforge.mod_id(project_id)}/files", {"pageSize": 30}).get("data") or []
+            files = sorted((f for f in files if not f.get("isServerPack")), key=lambda f: -_stamp(f.get("fileDate")))
+            started = not target_version
+            for file in files:
+                names = (file.get("displayName") or "", file.get("fileName") or "")
+                started = started or target_version in names
+                if not started:
+                    continue
+                if current_version and current_version in names or len(result) >= limit:
+                    break
+                result.append((names[0] or names[1], curseforge.file_changelog(project_id, file["id"])))
+        else:
+            started, release_only = not target_version, False
+            for version in _get_json(f"{MODRINTH_API_BASE}/project/{project_id}/version"):
+                number = version.get("version_number") or ""
+                if not started:
+                    if number != target_version:
+                        continue
+                    started, release_only = True, version.get("version_type") == "release"
+                if number == current_version or len(result) >= limit:
+                    break
+                if game_version and game_version not in (version.get("game_versions") or []):
+                    continue  # Ветка сборки для другой версии Minecraft
+                if release_only and version.get("version_type") != "release":
+                    continue
+                result.append((number, version.get("changelog") or ""))
+    except Exception as e:
+        logging.debug(f"Список изменений сборки {project_id} не загружен: {e}")
+    return result
 
 
 def _stamp(date: Optional[str]) -> float:
