@@ -278,9 +278,16 @@ class GameMixin:
                   need.version, self.current_loader_version, names)
 
     def _check_loader_requirements(self):
-        """После обновления модов и чтения папки: если моды требуют загрузчик новее — сразу предложить обновить."""
-        need = self._loader_requirement()
-        if not need:
+        """После обновления модов и чтения папки: если моды требуют загрузчик новее — сразу предложить обновить.
+        Моды читаются в фоне (у больших сборок это заметно), результат — на текущую сборку."""
+        import loader_check
+        profile, current = self.current_profile_name, self.current_loader_version
+        self._run_task(loader_check.check, (self._installed_mods(), self.loader, current),
+                       lambda need: self._warn_loader_requirement(need, profile, current),
+                       lambda e: logging.debug(f"Проверка версии загрузчика: {e}"), None)
+
+    def _warn_loader_requirement(self, need, profile: str, current: Optional[str]):
+        if not need or profile != self.current_profile_name or current != self.current_loader_version:
             return
         key = (self.current_profile_name, self.current_loader_version, need.version)
         if key in self._loader_warned:

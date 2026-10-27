@@ -190,6 +190,10 @@ class DetailsPanel(QFrame):
 
         self.description = label("", "Muted", wrap=True)
         self.layout_.addWidget(self.description)
+        from ui.translate_button import TranslateButton
+        self.translate_btn = TranslateButton(tokens)
+        self.layout_.addWidget(self.translate_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self._translate_texts = None
 
         self.issues_label = label("", None, wrap=True)
         self.layout_.addWidget(self.issues_label)
@@ -459,6 +463,12 @@ class DetailsPanel(QFrame):
         self.changelog.setVisible(bool(changelog))
         if changelog:
             self.changelog.setMarkdown(demote_headings(changelog[:20000]))
+        texts = (entry.get("description") or "", changelog or "")
+        if texts != self._translate_texts:  # Описание и «Что нового» — на язык интерфейса
+            self._translate_texts = texts
+            self.translate_btn.set_sources([
+                (texts[0], self.description.setText),
+                (texts[1], lambda text: self.changelog.setMarkdown(demote_headings(text[:20000])))])
 
         self.versions_header_widget.setVisible(bool(entry.get("project_id")))
         if not same_entry:

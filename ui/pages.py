@@ -322,6 +322,11 @@ class SettingsPage(QWidget):
         row.addWidget(label(tr("применится после перезапуска"), "Faint"))
         row.addStretch()
         body.addLayout(row)
+        self.auto_translate = QCheckBox(tr("Переводить описания модов на язык интерфейса автоматически"))
+        self.auto_translate.toggled.connect(self._emit)
+        self._add_with_hint(body, self.auto_translate, tr(
+            "Описания и списки изменений на Modrinth и CurseForge обычно по-английски. Без этой настройки перевод — "
+            "по кнопке «Перевести». Текст отправляется в Google Переводчик."))
         row = QHBoxLayout()
         row.addWidget(label(tr("Картинка в боковой панели:")))
         self.sidebar_image_btn = button(tr("Выбрать…"), None, "image", tokens, "text")
@@ -789,6 +794,7 @@ class SettingsPage(QWidget):
         self.background_interval.setCurrentIndex(
             max(0, self.background_interval.findData(int(settings.get("background_interval_hours", 6)))))
         self.auto_crash.setChecked(bool(settings.get("auto_crash_analysis", True)))
+        self.auto_translate.setChecked(bool(settings.get("auto_translate", False)))
         self.bisect_timeout.setCurrentIndex(max(0, self.bisect_timeout.findData(int(settings.get("auto_bisect_timeout", 5)))))
         self._sidebar_image = settings.get("sidebar_image") or ""
         self.sidebar_image_clear.setVisible(bool(self._sidebar_image))
@@ -923,6 +929,7 @@ class SettingsPage(QWidget):
                 "background_check": self.background_check.isChecked(),
                 "background_interval_hours": self.background_interval.currentData(),
                 "auto_crash_analysis": self.auto_crash.isChecked(),
+                "auto_translate": self.auto_translate.isChecked(),
                 "auto_bisect_timeout": self.bisect_timeout.currentData(),
                 "sidebar_image": self._sidebar_image,
                 "per_profile_view": self.per_profile.isChecked(),

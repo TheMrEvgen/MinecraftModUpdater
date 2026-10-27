@@ -24,7 +24,6 @@ app_config.save_config = lambda *a, **k: None
 os.makedirs(SHOTS, exist_ok=True)
 
 from PyQt6.QtCore import QEventLoop, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
 from main import create_app  # noqa: E402
 
 app = create_app()

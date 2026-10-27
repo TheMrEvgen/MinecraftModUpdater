@@ -28,6 +28,7 @@ from main import create_app  # noqa: E402
 
 app = create_app()
 import main_window as mw  # noqa: E402
+from window.common import PAGE_LOG  # noqa: E402
 from ui.gallery import ImageViewer  # noqa: E402
 
 w = mw.ModUpdaterApp()
@@ -115,7 +116,7 @@ shot("08_history_small")
 w._switch_page(mw.PAGE_SETTINGS)
 pump(0.5)
 shot("09_settings_small")
-w._switch_page(mw.PAGE_LOG)
+w._switch_page(PAGE_LOG)
 pump(0.3)
 shot("10_log_small")
 w._switch_page(mw.PAGE_MODS)

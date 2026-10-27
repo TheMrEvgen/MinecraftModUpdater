@@ -22,3 +22,9 @@ jobs:
         run: python -m pytest -q
       - name: Перевод
         run: python tools/i18n_check.py
+      - name: Проверка кода (pyflakes)
+        run: python -m pyflakes .
+      - name: Ключи не в git
+        shell: pwsh
+        run: |
+          if (git ls-files _build_secrets.py) { Write-Error "_build_secrets.py попал в git — удалите его из репозитория и перевыпустите ключ"; exit 1 }

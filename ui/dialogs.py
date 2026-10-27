@@ -157,6 +157,9 @@ class UpdateReviewDialog(FramelessDialog):
         self.changelog.setOpenExternalLinks(True)
         right_layout.addWidget(self.title)
         right_layout.addWidget(self.subtitle)
+        from ui.translate_button import TranslateButton
+        self.translate_btn = TranslateButton(tokens)
+        right_layout.addWidget(self.translate_btn, 0, Qt.AlignmentFlag.AlignLeft)
         right_layout.addWidget(self.changelog, 1)
         splitter.addWidget(right)
         splitter.setSizes([340, 600])
@@ -193,6 +196,8 @@ class UpdateReviewDialog(FramelessDialog):
         else:
             text = changelog_markdown(self.changelogs.get(entry.get("project_id"), []), latest)
         self.changelog.setMarkdown(text[:60000])
+        if self.changelogs is not None:  # Полный список изменений загружен — его и переводим
+            self.translate_btn.set_sources([(text[:60000], self.changelog.setMarkdown)])
 
     def selected_entries(self) -> List[Dict]:
         return [self.entries[self.list.item(i).data(ENTRY_ROLE)] for i in range(self.list.count())

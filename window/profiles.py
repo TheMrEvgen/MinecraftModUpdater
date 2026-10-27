@@ -464,6 +464,8 @@ class ProfilesMixin:
                          "success" if added else "info")
 
     def _on_settings_changed(self, settings: dict):
+        from ui.translate_button import TranslateButton
+        TranslateButton.auto = bool(settings.get("auto_translate", TranslateButton.auto))
         view_keys = ("view_mode", "compact_rows", "expand_dependencies", "group_by_status", "columns", "abandoned_warning",
                      "update_min_age_days")
         view_changed = any(self.settings.get(k) != settings.get(k) for k in view_keys if k in settings)

@@ -171,7 +171,7 @@ def test_legacy_launcher_config(tmp_path):
     (game / "mods").mkdir()
     (game / "versions" / version / f"{version}.json").write_text(json.dumps(
         {"id": version, "inheritsFrom": "1.21.11", "libraries": []}), encoding="utf-8")
-    escaped = str(game).replace("\\", "\\\\").replace(":", "\:")
+    escaped = str(game).replace("\\", "\\\\").replace(":", r"\:")
     (install / "tl.properties").write_text(f"#comment\nminecraft.gamedir={escaped}\nlogin.version={version}\n"
                                            "minecraft.gamedir.separate=none\n", encoding="utf-8")
     assert read_properties(str(install / "tl.properties"))["minecraft.gamedir"] == str(game)

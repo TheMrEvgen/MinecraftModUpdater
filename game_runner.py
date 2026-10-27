@@ -219,6 +219,18 @@ def ended_normally(game_dir: str, since: float) -> bool:
 
 # --- Процессы игры ---
 
+def processes_running(names) -> bool:
+    """Запущена ли хоть одна программа из names (имена .exe в нижнем регистре). Не Windows — False."""
+    if sys.platform != "win32":
+        return False
+    try:
+        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=10,
+                             creationflags=CREATE_NO_WINDOW).stdout.lower()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any(f'"{name}"' in out for name in names)
+
+
 def find_game_processes(game_dir: str) -> List[int]:
     """PID процессов Java, запущенных для этой папки игры (по командной строке)."""
     if sys.platform != "win32" or not game_dir:

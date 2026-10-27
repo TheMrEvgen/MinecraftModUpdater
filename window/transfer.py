@@ -5,8 +5,7 @@ import os
 import sys
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
 from content import MODS
 from exporters import (
@@ -250,15 +249,14 @@ class TransferMixin:
         else:
             self._open_path(os.path.dirname(path))
 
-    def export_mrpack(self):
-        loader_version = self.current_loader_version or self.latest_loader_version
-        if not loader_version:
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            try:
-                loader_version = get_latest_loader_version(self.loader, self.game_version)
-            finally:
-                QApplication.restoreOverrideCursor()
-        if not loader_version:
+    def export_mrpack(self, loader_version: Optional[str] = None):
+        loader_version = loader_version or self.current_loader_version or self.latest_loader_version
+        if not loader_version:  # Версию загрузчика узнаём в фоне, окно не замирает
+            self._run_task(get_latest_loader_version, (self.loader, self.game_version),
+                           lambda version: self.export_mrpack(version or "-"),
+                           lambda e: self.export_mrpack("-"), tr("Узнаём версию загрузчика…"))
+            return
+        if loader_version == "-":
             show_message(self, QMessageBox.Icon.Warning, tr("Ошибка"),
                          tr('Не удалось определить версию загрузчика {0} для {1}.', self.loader, self.game_version))
             return

@@ -60,11 +60,25 @@ def min_from_range(version_range: str) -> Optional[str]:
     return value if value and _VERSION.fullmatch(value) else None
 
 
+_CACHE: Dict[tuple, Optional[str]] = {}  # (путь, размер, время, загрузчик) -> требование: моды читаются один раз
+
+
 def required_version(path: str, loader: str) -> Optional[str]:
     """Версия загрузчика, которую требует мод (None — не требует или не прочитать)."""
-    loader_id = LOADER_IDS.get(loader)
-    if not loader_id:
+    if not LOADER_IDS.get(loader):
         return None
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    key = (os.path.normcase(path), stat.st_size, stat.st_mtime_ns, loader)
+    if key not in _CACHE:
+        _CACHE[key] = _read_requirement(path, loader)
+    return _CACHE[key]
+
+
+def _read_requirement(path: str, loader: str) -> Optional[str]:
+    loader_id = LOADER_IDS[loader]
     try:
         with zipfile.ZipFile(path) as z:
             names = set(z.namelist())

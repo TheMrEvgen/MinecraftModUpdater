@@ -1,8 +1,11 @@
 """
 Проверка перевода: какие строки из tr(...) и plural(...) ещё не переведены в locales/<язык>.json.
 
-    python tools/i18n_check.py            — отчёт по английскому
-    python tools/i18n_check.py --dump     — все строки (JSON) для перевода
+    python tools/i18n_check.py                — отчёт по английскому
+    python tools/i18n_check.py --lang uk      — отчёт по другому языку
+    python tools/i18n_check.py --template uk  — заготовка locales/uk.json: все строки с пустым переводом
+                                                (у существующего файла — добавляет недостающие, перевод не трогает)
+    python tools/i18n_check.py --dump         — все строки (JSON) для перевода
 """
 import ast
 import glob
@@ -51,19 +54,38 @@ def placeholders(text: str) -> Set[str]:
 
 
 def problems(language: str = "en") -> Dict[str, List[str]]:
-    keys, catalog = collect_keys(), load_catalog(language)
+    keys = collect_keys()
+    catalog = {k: v for k, v in load_catalog(language).items() if not k.startswith("@")}  # «@name» — служебное
     return {
-        "missing": sorted(k for k in keys if k not in catalog),
+        "missing": sorted(k for k in keys if not catalog.get(k)),
         "unused": sorted(k for k in catalog if k not in keys),
-        "placeholders": sorted(k for k in keys & catalog.keys() if placeholders(k) != placeholders(catalog[k])),
+        "placeholders": sorted(k for k in keys & catalog.keys()
+                               if catalog[k] and placeholders(k) != placeholders(catalog[k])),
     }
+
+
+def write_template(language: str) -> str:
+    """locales/<код>.json со всеми строками: новые — с пустым переводом, уже переведённые остаются."""
+    path = os.path.join(ROOT, "locales", f"{language}.json")
+    catalog = load_catalog(language)
+    catalog.setdefault("@name", language)
+    for key in collect_keys():
+        catalog.setdefault(key, "")
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(json.dumps(catalog, ensure_ascii=False, indent=1, sort_keys=True) + "\n")
+    return path
 
 
 def main(argv: List[str]) -> int:
     if "--dump" in argv:
         print(json.dumps(sorted(collect_keys()), ensure_ascii=False, indent=1))
         return 0
-    report = problems()
+    if "--template" in argv:
+        language = argv[argv.index("--template") + 1]
+        print(f"Заготовка: {write_template(language)} — впишите переводы и укажите название языка в «@name».")
+        return 0
+    language = argv[argv.index("--lang") + 1] if "--lang" in argv else "en"
+    report = problems(language)
     for name, items in report.items():
         print(f"{name}: {len(items)}")
         for item in items[:40]:

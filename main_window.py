@@ -36,7 +36,7 @@ from view_model import CAT_ALL, CAT_DISABLED, CAT_INSTALL, CAT_NOT_FOUND, CAT_PR
 from window.app import AppMixin
 from window.catalog import CatalogMixin
 from window.common import (
-    CONTENT_ICONS, PAGE_CATALOG, PAGE_DOWNLOADS, PAGE_HISTORY, PAGE_LOG, PAGE_MODS, PAGE_SETTINGS, PAGE_STATS,
+    CONTENT_ICONS, PAGE_CATALOG, PAGE_DOWNLOADS, PAGE_HISTORY, PAGE_MODS, PAGE_SETTINGS, PAGE_STATS,
 )
 from window.downloads import DownloadsMixin
 from window.game import GameMixin
@@ -91,6 +91,8 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self.profiles: Dict[str, dict] = cfg["profiles"]
         self.current_profile_name: str = cfg["current_profile"]
         self.settings: dict = cfg["settings"]
+        from ui.translate_button import TranslateButton
+        TranslateButton.auto = bool(self.settings.get("auto_translate", False))
         self.hidden_instances: List[str] = cfg["hidden_instances"]
         self.window_cfg: dict = cfg["window"]
         self.mod_tags: Dict[str, List[str]] = cfg["mod_tags"]

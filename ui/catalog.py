@@ -290,6 +290,9 @@ class CatalogDetails(QFrame):
         self.layout_.addLayout(header)
         self.summary = label("", "Muted", wrap=True)
         self.layout_.addWidget(self.summary)
+        from ui.translate_button import TranslateButton
+        self.translate_btn = TranslateButton(t)
+        self.layout_.addWidget(self.translate_btn, 0, Qt.AlignmentFlag.AlignLeft)
 
         from ui.widgets import ElideButton
         self.install_btn = ElideButton(tr("Установить"))
@@ -399,6 +402,7 @@ class CatalogDetails(QFrame):
         from ui.details_panel import demote_headings
         if same:
             return
+        self.translate_btn.set_sources([(hit.get("description") or "", self.summary.setText)])
         self.body.setMarkdown(tr("_Загружаем описание…_"))
         self.deps.setText(tr("Загружаем…"))
         for w in (self.gallery_title, self.links_title, self.links):
@@ -424,7 +428,10 @@ class CatalogDetails(QFrame):
         if not self.hit or self.hit.get("project_id") != pid:
             return
         from scanner import project_links
-        self.body.setMarkdown(demote((project.get("body") or project.get("description") or "")[:60000]))
+        body = (project.get("body") or project.get("description") or "")[:60000]
+        self.body.setMarkdown(demote(body))
+        self.translate_btn.set_sources([(self.hit.get("description") or "", self.summary.setText),
+                                        (body, lambda text: self.body.setMarkdown(demote(text)))])
         links = project_links(project)
         self.links.set_links(links)
         self.links_title.setVisible(bool(links))

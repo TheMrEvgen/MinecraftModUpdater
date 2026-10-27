@@ -30,7 +30,6 @@ from main import create_app  # noqa: E402
 app = create_app()
 import main_window as mw  # noqa: E402
 from window_patch import patch_window  # noqa: E402
-from content import MODS  # noqa: E402
 
 log = []
 answers = {"confirm": True}
@@ -95,6 +94,22 @@ w._select_entry(sodium)
 w._open_current_details()
 pump(0.8)
 shot("01_accent_columns_fav")
+
+# --- «Перевести» в карточке мода (переводчик подставной: верхний регистр, без сети)
+import translate  # noqa: E402
+translate.CACHE_FILE = f"{SP}/translations.json"
+translate._request = lambda text, target, session=None: (text.upper(), "en")
+original = w.details.description.text()
+w.details.translate_btn.click()
+end = time.time() + 10
+while time.time() < end and w.details.description.text() == original:
+    pump(0.1)
+translated_text = w.details.description.text()
+w.details.translate_btn.click()
+pump(0.3)
+check(f"перевод описания: «{translated_text[:40]}», кнопка «{w.details.translate_btn.text()}»",
+      translated_text == original.upper() != original and w.details.description.text() == original
+      and w.details.translate_btn.text() == "Перевести")
 
 # --- Поиск с условиями
 for q, expect_some in (("is:fav", True), ("side:client", True), ("size>5mb", True), ("tag:библиотека", True),
@@ -206,6 +221,9 @@ toasts.clear()
 real_loader_version = w.current_loader_version
 w.current_loader_version = "0.1.0"  # Моды песочницы требуют загрузчик новее
 w._check_loader_requirements()
+end = time.time() + 10
+while time.time() < end and not any("Модам нужен" in text for kind, text in toasts):
+    pump(0.1)
 check(f"после обновления: предупреждение о загрузчике ({toasts[-1:]})",
       any("Модам нужен Fabric" in text for kind, text in toasts))
 w.current_loader_version = real_loader_version

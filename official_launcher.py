@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import sys
 import uuid
 from typing import Dict, List, Optional
@@ -173,11 +172,5 @@ def restore(mc_dir: str, backup: str):
 
 def launcher_running() -> bool:
     """Открыт ли Minecraft Launcher: при закрытии он сохраняет свои установки и может затереть наши изменения."""
-    if sys.platform != "win32":
-        return False
-    try:
-        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=10,
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.lower()
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return any(f'"{name}"' in out for name in LAUNCHER_PROCESSES)
+    from game_runner import processes_running
+    return processes_running(LAUNCHER_PROCESSES)

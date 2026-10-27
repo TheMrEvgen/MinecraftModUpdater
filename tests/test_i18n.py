@@ -40,3 +40,27 @@ def test_dates_follow_language():
         assert i18n.tr("Сканирование прервано пользователем.") == "Scan cancelled by the user."
     finally:
         i18n.set_language("ru")
+
+
+def test_new_language_from_template(tmp_path, monkeypatch):
+    """Новый язык — один файл: заготовка со всеми строками, пустой перевод показывается по-русски."""
+    (tmp_path / "locales").mkdir()
+    monkeypatch.setattr(i18n_check, "ROOT", str(tmp_path))
+    monkeypatch.setattr(i18n_check, "collect_keys", lambda: {"Обновить все", "Отмена"})
+    path = i18n_check.write_template("uk")
+    data = __import__("json").load(open(path, encoding="utf-8"))
+    assert data == {"@name": "uk", "Обновить все": "", "Отмена": ""}
+    assert i18n_check.problems("uk")["missing"] == ["Обновить все", "Отмена"]
+    data.update({"@name": "Українська", "Отмена": "Скасувати"})
+    open(path, "w", encoding="utf-8").write(__import__("json").dumps(data, ensure_ascii=False))
+    i18n_check.write_template("uk")  # Повторно — переведённое не теряется
+    assert __import__("json").load(open(path, encoding="utf-8"))["Отмена"] == "Скасувати"
+
+    monkeypatch.setattr(i18n, "_locales_dir", lambda: str(tmp_path / "locales"))
+    monkeypatch.setattr(i18n, "LANGUAGES", i18n._discover_languages())
+    assert i18n.LANGUAGES == {"ru": "Русский", "uk": "Українська"}
+    try:
+        i18n.set_language("uk")
+        assert i18n.tr("Отмена") == "Скасувати" and i18n.tr("Обновить все") == "Обновить все"
+    finally:
+        i18n.set_language("ru")

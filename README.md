@@ -20,6 +20,8 @@ roll back any change. English and Russian interface.
   installed with dependencies in one click. Installed modpacks update to new versions and keep the mods you added.
 - **When the game crashes** — crash report analysis (including wrong Java and out of memory, fixed in one click),
   a hint which mod update started the crashes, and an automatic search for the problematic mod by elimination.
+- **Your language** — mod descriptions and changelogs can be translated into the interface language; adding a new
+  interface language is one file in `locales/`.
 - **Safety** — mods are scanned for known malware (fractureiser), mods from GitHub Releases update like the rest,
   and a server pack (.zip) leaves out client-only mods.
 - **Background** — tray icon, background update checks for all modpacks with Windows notifications, app self-update.
@@ -75,6 +77,7 @@ roll back any change. English and Russian interface.
 - Моды, которых нет на Modrinth, опознаются на CurseForge по отпечатку файла и обновляются так же.
   Если автор запретил скачивание сторонними программами, программа откроет страницу файла на сайте.
 - Моды, которые выходят только на GitHub, обновляются из выпусков (Releases) репозитория.
+- Описания модов и списки изменений переводятся на язык интерфейса — кнопкой «Перевести» или автоматически.
 
 **Удобство**
 - Список модов: плоский, «только мои», дерево зависимостей; выбор колонок, компактные строки.
@@ -133,6 +136,7 @@ pip install -r requirements-dev.txt
 python -m pytest -q                       :: юнит-тесты
 python tools/ui_checks/run.py             :: проверка интерфейса на песочницах (нужен интернет, ~3 минуты)
 python tools/i18n_check.py                :: все ли строки переведены на английский
+python -m pyflakes .                      :: проверка кода (то же делает GitHub при каждом коммите)
 build.bat                                 :: тесты и сборка .exe в dist/
 ```
 
@@ -140,9 +144,19 @@ build.bat                                 :: тесты и сборка .exe в 
 `CURSEFORGE_API_KEY`, локально — переменная окружения `CURSEFORGE_API_KEY` или файл `_build_secrets.py`
 (в git не хранится). Без ключа программа работает только с Modrinth.
 
-**Перевод.** Строки интерфейса пишутся по-русски и оборачиваются в `tr("…")`, английский перевод лежит в
-`locales/en.json` (ключ — русская строка). `tools/i18n_wrap.py` размечает новые строки автоматически,
-`tools/i18n_check.py` показывает непереведённые.
+**Перевод.** Строки интерфейса пишутся по-русски и оборачиваются в `tr("…")` — русский язык живёт в самом коде,
+поэтому `ru.json` нет. Переводы лежат в `locales/<код>.json` (ключ — русская строка, `@name` — название языка).
+`tools/i18n_wrap.py` размечает новые строки автоматически, `tools/i18n_check.py` показывает непереведённые.
+
+*Свой язык* — один файл, код менять не нужно:
+
+```bat
+python tools/i18n_check.py --template uk  :: locales/uk.json со всеми строками и пустыми переводами
+python tools/i18n_check.py --lang uk      :: что ещё не переведено
+```
+
+Впишите переводы и название языка в `@name` — язык появится в «Настройки → Оформление → Язык». Непереведённые
+строки показываются по-русски, а повторный `--template` добавляет новые строки, не трогая готовые.
 
 **Проверка интерфейса.** `tools/ui_checks` запускает настоящее окно программы (без показа на экране) на
 песочницах с модами с Modrinth и проходит по основным сценариям: обновление и откат, импорт, каталог, инструменты,

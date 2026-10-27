@@ -1,6 +1,8 @@
 """
-Перевод интерфейса. Исходный язык — русский: строки в коде пишутся по-русски и оборачиваются в tr(),
-английский перевод лежит в locales/en.json (ключ — русская строка).
+Перевод интерфейса. Исходный язык — русский: строки в коде пишутся по-русски и оборачиваются в tr(), поэтому
+отдельного ru.json нет. Переводы лежат в locales/<код>.json (ключ — русская строка, «@name» — название языка):
+новый язык — это новый файл, программа сама добавит его в настройки. Заготовку делает
+tools/i18n_check.py --template <код>; непереведённые строки (пустые) показываются по-русски.
 
     tr("Удалено: {0}", count)        — перевод + подстановка (позиционно, как str.format)
     plural(n, "мод", "мода", "модов") — склонение по числу для текущего языка
@@ -15,11 +17,38 @@ from typing import Dict, Optional
 
 import platformdirs
 
-LANGUAGES = {"ru": "Русский", "en": "English"}
 DEFAULT_LANGUAGE = "ru"
+NAME_KEY = "@name"  # Название языка в его файле перевода
 
 _language: Optional[str] = None
 _catalog: Dict[str, str] = {}
+
+
+def _locales_dir() -> str:
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # Как config.resource_path
+    return os.path.join(base, "locales")
+
+
+def _discover_languages() -> Dict[str, str]:
+    """Русский (исходный) и все языки из папки locales: код -> название."""
+    languages = {DEFAULT_LANGUAGE: "Русский"}
+    try:
+        names = sorted(os.listdir(_locales_dir()))
+    except OSError:
+        names = []
+    for name in names:
+        code, ext = os.path.splitext(name)
+        if ext != ".json" or code == DEFAULT_LANGUAGE:
+            continue
+        try:
+            with open(os.path.join(_locales_dir(), name), "r", encoding="utf-8") as f:
+                languages[code] = str(json.load(f).get(NAME_KEY) or code)
+        except (OSError, ValueError, AttributeError):
+            continue
+    return languages
+
+
+LANGUAGES = _discover_languages()
 
 
 def _configured_language() -> str:
@@ -37,8 +66,7 @@ def _configured_language() -> str:
 
 
 def catalog_path(language: str) -> str:
-    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))  # Как config.resource_path
-    return os.path.join(base, "locales", f"{language}.json")
+    return os.path.join(_locales_dir(), f"{language}.json")
 
 
 def set_language(language: str):
@@ -61,7 +89,7 @@ def language() -> str:
 
 
 def tr(text: str, *args) -> str:
-    template = _catalog.get(text, text) if language() != DEFAULT_LANGUAGE else text
+    template = (_catalog.get(text) or text) if language() != DEFAULT_LANGUAGE else text  # Пусто — не переведено
     return template.format(*args) if args else template
 
 

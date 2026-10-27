@@ -15,8 +15,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
-import sys
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -171,11 +169,5 @@ def undo(target: LauncherTarget, backup: str):
 
 def launcher_running() -> bool:
     """Открыт ли Prism Launcher / MultiMC: открытый лаунчер может вернуть старые версии, сохраняя сборку."""
-    if sys.platform != "win32":
-        return False
-    try:
-        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=10,
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.lower()
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return any(f'"{name}"' in out for name in LAUNCHER_PROCESSES)
+    from game_runner import processes_running
+    return processes_running(LAUNCHER_PROCESSES)
