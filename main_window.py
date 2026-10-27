@@ -136,7 +136,8 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self.loader_version_worker: Optional[LoaderVersionWorker] = None
         self._task_workers: List[TaskWorker] = []
         self._modpack_checked: set = set()
-        self._malware_checked: set = set()  # Папки игр, моды которых уже проверены на вирусы в этом сеансе  # Сборки из каталога, для которых уже проверили новую версию
+        self._malware_checked: set = set()
+        self._loader_warned: set = set()  # (сборка, загрузчик, нужная версия): уже предупредили  # Папки игр, моды которых уже проверены на вирусы в этом сеансе  # Сборки из каталога, для которых уже проверили новую версию
 
         self.icon_loader = IconLoader(app_config.ICON_CACHE_DIR, self)
         self.icon_loader.icon_ready.connect(self._on_icon_ready)

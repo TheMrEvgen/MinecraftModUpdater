@@ -64,6 +64,7 @@ class OperationsMixin:
         self.sessions[self._skey()] = mods_data
         if self.content is MODS:
             self._scan_malware()
+            self._check_loader_requirements()
         if mods_data and self.settings.get("auto_check", True):
             self.start_scan(silent=True)
 
@@ -326,6 +327,8 @@ class OperationsMixin:
             self._set_data(self.mods_data)  # Пересчёт проблем и счётчиков
             self.sessions[self._skey()] = self.mods_data
 
+        if succeeded and self.content is MODS:
+            self._check_loader_requirements()  # Новым версиям модов может понадобиться загрузчик новее
         if succeeded:
             self._push_undo(tr("обновление"), lambda: self._rollback_dir(transaction.dir))
             self._prune_backups()

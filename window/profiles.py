@@ -306,10 +306,18 @@ class ProfilesMixin:
         return (tr("\n\n⚠ {0} сейчас открыт — закройте его, иначе при сохранении сборки он может вернуть прежние версии.",
                    self._launcher_title()) if running else "")
 
-    def _update_loader_in_launcher(self):
+    def _update_loader_in_launcher(self, version: Optional[str] = None):
+        """Новая версия загрузчика в сборке лаунчера. version — не ниже этой (её требуют моды); иначе последняя."""
         import launcher_pack
         loader, loader_title = self.loader, LOADER_TITLES.get(self.loader, self.loader)
         old, new = self.current_loader_version, self.latest_loader_version
+        if version and (not new or self._is_newer(version, new)):
+            new = version
+        if not new:
+            return
+        if not self._launcher_target():
+            self.toasts.show(tr("Обновите {0} до {1} в лаунчере сборки.", loader_title, new), "info", timeout=10000)
+            return
         if not confirm(self, tr("Обновить загрузчик"),
                        tr("Обновить {0} {1} → {2} в сборке {3}?\n\nФайл сборки лаунчера сохраняется — изменение можно "
                           "отменить.", loader_title, old, new, self._launcher_title()) + self._launcher_warning(),

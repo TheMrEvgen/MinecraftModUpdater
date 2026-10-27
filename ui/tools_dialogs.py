@@ -31,7 +31,7 @@ class CrashDialog(FramelessDialog):
     disable_requested = pyqtSignal(object)
     show_requested = pyqtSignal(object)
     bisect_requested = pyqtSignal()
-    fix_requested = pyqtSignal(str)  # "java" | "memory" — исправить в настройках лаунчера
+    fix_requested = pyqtSignal(str)  # "java" | "memory" | "loader:<версия>" — исправить в лаунчере
 
     def __init__(self, parent, tokens: dict, files: List[str], entries: List[Dict], run_task: Callable,
                  preferred: str = None, fixable: tuple = ()):
@@ -121,15 +121,24 @@ class CrashDialog(FramelessDialog):
             card.setObjectName("Banner")
             row = QHBoxLayout(card)
             row.setContentsMargins(12, 8, 8, 8)
-            text = label(f"<b>{item.text}</b><br>" + tr("Моды тут, скорее всего, ни при чём."), None, wrap=True)
+            hint = (tr("Выключать моды не нужно — обновите загрузчик.") if item.kind == "loader"
+                    else tr("Моды тут, скорее всего, ни при чём."))
+            text = label(f"<b>{item.text}</b><br>{hint}", None, wrap=True)
             text.setTextFormat(Qt.TextFormat.RichText)
             row.addWidget(text, 1)
             if item.kind in self.fixable:
-                fix = button(tr("Выделить больше памяти") if item.kind == "memory" else tr("Выбирать Java автоматически"),
-                             "Primary")
-                fix.clicked.connect(lambda _=False, kind=item.kind: (self.fix_requested.emit(kind), self.accept()))
+                caption = {"memory": tr("Выделить больше памяти"), "java": tr("Выбирать Java автоматически"),
+                           "loader": tr("Обновить загрузчик до {0}", item.version)}[item.kind]
+                fix = button(caption, "Primary")
+                request = f"loader:{item.version}" if item.kind == "loader" else item.kind
+                fix.clicked.connect(lambda _=False, r=request: (self.fix_requested.emit(r), self.accept()))
                 row.addWidget(fix)
             self.diagnosis.addWidget(card)
+        if any(item.kind == "loader" for item in report.diagnosis):  # Моды исправны — им нужен загрузчик новее
+            self.suspects.addWidget(label(tr("Моды, которые названы в ошибке, исправны — им нужен загрузчик новее. "
+                                             "Выключать их не нужно."), "Muted", wrap=True))
+            self.suspects.addStretch()
+            return
         if not report.suspects:
             self.suspects.addWidget(label(tr("Ни один мод не упоминается явно. Попробуйте поиск перебором."), "Muted", wrap=True))
         top = report.suspects[0].score if report.suspects else 1

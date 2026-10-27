@@ -204,7 +204,8 @@ class GameMixin:
         """Что программа умеет исправить в лаунчере этой сборки: память, Java."""
         import java_check
         source = self._profile().get("source")
-        return (("memory",) if source in java_check.FIXABLE else ()) + (("java",) if source in ("prism", "official") else ())
+        return ((("memory",) if source in java_check.FIXABLE else ()) + (("java",) if source in ("prism", "official") else ())
+                + (("loader",) if self._launcher_target() else ()))
 
     def _apply_launch_fixes(self, fixes: List[tuple]) -> bool:
         """fixes — [(вид, значение)]: правит настройки лаунчера, предлагает отменить. False — не получилось."""
@@ -242,6 +243,9 @@ class GameMixin:
     def _fix_launch_setting(self, kind: str):
         """Кнопка в разборе вылета: не та Java или не хватило памяти."""
         import java_check
+        if kind.startswith("loader:"):
+            self._update_loader_in_launcher(kind.split(":", 1)[1])
+            return
         if kind == "java":
             self._apply_launch_fixes([("java", 0)])
             return
@@ -257,10 +261,52 @@ class GameMixin:
                 return
         self._apply_launch_fixes([("memory", want)])
 
+    def _loader_requirement(self):
+        """Нужен ли установленным модам загрузчик новее текущего (читается из самих модов)."""
+        import loader_check
+        try:
+            return loader_check.check(self._installed_mods(), self.loader, self.current_loader_version)
+        except Exception as e:
+            logging.debug(f"Проверка версии загрузчика: {e}")
+            return None
+
+    def _loader_need_text(self, need) -> str:
+        from window.common import LOADER_TITLES
+        names = ", ".join(need.mods[:4]) + (tr(" и ещё {0}", len(need.mods) - 4) if len(need.mods) > 4 else "")
+        return tr("Модам нужен {0} {1} или новее, а у вас {2} ({3}). С ним игра не запустится.",
+                  {"fabric": "Fabric Loader", "quilt": "Quilt Loader"}.get(self.loader) or LOADER_TITLES.get(self.loader, self.loader),
+                  need.version, self.current_loader_version, names)
+
+    def _check_loader_requirements(self):
+        """После обновления модов и чтения папки: если моды требуют загрузчик новее — сразу предложить обновить."""
+        need = self._loader_requirement()
+        if not need:
+            return
+        key = (self.current_profile_name, self.current_loader_version, need.version)
+        if key in self._loader_warned:
+            return
+        self._loader_warned.add(key)
+        text = self._loader_need_text(need)
+        if self._launcher_target():
+            self.toasts.show(text, "warning", tr("Обновить загрузчик"),
+                             lambda: self._update_loader_in_launcher(need.version), timeout=30000)
+        else:
+            self.toasts.show(text + " " + tr("Обновите загрузчик в лаунчере."), "warning", timeout=30000)
+
     def _check_before_launch(self) -> bool:
         """Перед «Играть»: подходит ли Java и хватит ли памяти. False — запуск отменён."""
         import java_check
         profile = self._profile()
+        need = self._loader_requirement()
+        if need:
+            buttons = ([tr("Обновить загрузчик")] if self._launcher_target() else []) + [tr("Играть так"), tr("Отмена")]
+            choice = ask_choice(self, QMessageBox.Icon.Warning, tr("Игра не запустится"), self._loader_need_text(need),
+                                buttons, default=0)
+            if choice is None or buttons[choice] == tr("Отмена"):
+                return False
+            if buttons[choice] == tr("Обновить загрузчик"):
+                self._update_loader_in_launcher(need.version)
+                return False
         try:
             issues = java_check.check(profile, self._mod_count())
         except Exception as e:  # Проверка — подсказка: её сбой не должен мешать игре

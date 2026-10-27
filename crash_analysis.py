@@ -35,9 +35,10 @@ class Suspect:
 
 @dataclass
 class Diagnosis:
-    kind: str          # "java" — не та версия Java, "memory" — не хватило памяти
+    kind: str          # "java" — не та версия Java, "memory" — не хватило памяти, "loader" — старый загрузчик
     text: str
     java: int = 0      # Для "java": какая Java нужна (0 — неизвестно)
+    version: str = ""  # Для "loader": какая версия загрузчика нужна
 
 
 @dataclass
@@ -53,8 +54,37 @@ _CLASS_VERSION_BASE = 44
 _TOO_OLD_JAVA = re.compile(r"class file version (\d+)(?:\.\d+)?\), this version of the Java Runtime only "
                            r"recognizes class file versions up to (\d+)")
 _TOO_NEW_JAVA = re.compile(r"Unsupported class file major version (\d+)")
+# Fabric/Quilt: «Mod 'Sodium Extra' (sodium-extra) … requires version 0.20.1 or later of mod 'Fabric Loader'
+# (fabricloader), but only the wrong version is present: 0.19.3!»
+_OLD_FABRIC_LOADER = re.compile(r"requires (?:version )?([\w.+-]+?) or later of (?:mod )?'([^']+)' \((fabricloader|quilt_loader)\)"
+                                r", but only the wrong version is present: ([\w.+-]+?)!?$", re.MULTILINE)
+_FABRIC_REQUESTER = re.compile(r"Mod '([^']+)' \([^)]*\) [\w.+-]+ requires (?:version )?[\w.+-]+ or later of (?:mod )?"
+                               r"'[^']+' \((?:fabricloader|quilt_loader)\)")
+# Forge/NeoForge: «Mod ID: 'neoforge', Requested by: 'x', Expected range: '[21.1.77,)', Actual version: '21.1.50'»
+_OLD_FORGE_LOADER = re.compile(r"Mod ID: '(neoforge|forge)', Requested by: '([^']+)', Expected range: '[\[(]([^,\])']+)"
+                               r"[^']*', Actual version: '([^']+)'")
+_LOADER_NAMES = {"fabricloader": "Fabric Loader", "quilt_loader": "Quilt Loader", "neoforge": "NeoForge", "forge": "Forge"}
 _MEMORY_MARKERS = ("java.lang.OutOfMemoryError", "Description: Out of memory", "GC overhead limit exceeded",
                    "Could not reserve enough space for object heap")
+
+
+def _version_key(version: str) -> list:
+    return [int(x) for x in re.findall(r"\d+", version)[:4]]
+
+
+def _old_loader(text: str) -> "Diagnosis | None":
+    """Модам нужен загрузчик новее установленного — обновить надо его, а не выключать моды."""
+    found = [(m.group(1), m.group(3), m.group(4)) for m in _OLD_FABRIC_LOADER.finditer(text)]
+    mods = list(dict.fromkeys(m.group(1) for m in _FABRIC_REQUESTER.finditer(text)))
+    for m in _OLD_FORGE_LOADER.finditer(text):
+        found.append((m.group(3).strip(), m.group(1), m.group(4)))
+        mods.append(m.group(2))
+    if not found:
+        return None
+    need, loader_id, have = max(found, key=lambda item: _version_key(item[0]))
+    who = tr(" (нужен для: {0})", ", ".join(dict.fromkeys(mods))[:200]) if mods else ""
+    return Diagnosis("loader", tr("Модам нужен {0} {1} или новее, а установлен {2}{3}.",
+                                  _LOADER_NAMES.get(loader_id, loader_id), need, have, who), version=need)
 
 
 def diagnose(text: str) -> List[Diagnosis]:
@@ -70,6 +100,9 @@ def diagnose(text: str) -> List[Diagnosis]:
     if match and not result:
         have = int(match.group(1)) - _CLASS_VERSION_BASE
         result.append(Diagnosis("java", tr("Загрузчик сборки не работает на Java {0} — нужна более старая Java.", have)))
+    loader = _old_loader(text)
+    if loader:
+        result.append(loader)
     if any(marker in text for marker in _MEMORY_MARKERS):
         result.append(Diagnosis("memory", tr("Игре не хватило памяти — выделите ей больше в лаунчере.")))
     return result

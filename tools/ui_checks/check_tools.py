@@ -166,6 +166,8 @@ check("краш: Sodium первым подозреваемым", dialog.suspect
 shot("03_crash", dialog)
 dialog.close()
 
+from PyQt6.QtWidgets import QPushButton  # noqa: E402
+
 # --- Вылет из-за памяти: плашка «не мод» с кнопкой исправления; проверка Java и памяти перед «Играть»
 import java_check  # noqa: E402
 with open(f"{GAME}/crash-reports/crash-oom.txt", "w", encoding="utf-8") as f:
@@ -180,10 +182,33 @@ wait_idle()
 pump(0.5)
 check(f"вылет из-за памяти: плашка с исправлением ({dialog.diagnosis.count()})", dialog.diagnosis.count() == 1)
 shot("03b_crash_memory", dialog)
-from PyQt6.QtWidgets import QPushButton  # noqa: E402
 fix_btn = next(b for b in dialog.findChildren(QPushButton) if b.text() == "Выделить больше памяти")
 fix_btn.click()
 check(f"кнопка исправления: {fixes}", fixes == ["memory"])
+
+# --- Вылет из-за старого загрузчика: «обновите загрузчик», а не «выключите моды»
+with open(f"{GAME}/crash-reports/crash-loader.txt", "w", encoding="utf-8") as f:
+    f.write("net.fabricmc.loader.impl.FormattedException: Some of your mods are incompatible with the game or each other!\n"
+            "\t - Mod 'Sodium' (sodium) 0.9.6 requires version 0.20.1 or later of mod 'Fabric Loader' (fabricloader), "
+            "but only the wrong version is present: 0.19.3!\n")
+os.utime(f"{GAME}/crash-reports/crash-loader.txt", (time.time() + 10, time.time() + 10))
+dialog = CrashDialog(w, w.tokens, find_crash_files(GAME), w._installed_mods(), w._run_task, None, ("loader",))
+dialog.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+dialog.show()
+wait_idle()
+pump(0.5)
+loader_btn = [b.text() for b in dialog.findChildren(QPushButton) if b.text().startswith("Обновить загрузчик")]
+check(f"вылет из-за загрузчика: кнопка {loader_btn}, моды не подозреваются",
+      loader_btn == ["Обновить загрузчик до 0.20.1"] and dialog.suspects.count() == 2)
+shot("03d_crash_loader", dialog)
+dialog.close()
+toasts.clear()
+real_loader_version = w.current_loader_version
+w.current_loader_version = "0.1.0"  # Моды песочницы требуют загрузчик новее
+w._check_loader_requirements()
+check(f"после обновления: предупреждение о загрузчике ({toasts[-1:]})",
+      any("Модам нужен Fabric" in text for kind, text in toasts))
+w.current_loader_version = real_loader_version
 
 applied = []
 java_check.read_settings = lambda profile: java_check.Settings("prism", 1024, 17)
