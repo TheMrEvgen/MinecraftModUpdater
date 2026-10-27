@@ -18,8 +18,10 @@ roll back any change. English and Russian interface.
   loader and the game version.
 - **Catalog** — mods, shaders, resource packs, data packs and ready-made modpacks from Modrinth and CurseForge,
   installed with dependencies in one click. Installed modpacks update to new versions and keep the mods you added.
-- **When the game crashes** — crash report analysis, a hint which mod update started the crashes, and an automatic
-  search for the problematic mod by elimination.
+- **When the game crashes** — crash report analysis (including wrong Java and out of memory, fixed in one click),
+  a hint which mod update started the crashes, and an automatic search for the problematic mod by elimination.
+- **Safety** — mods are scanned for known malware (fractureiser), mods from GitHub Releases update like the rest,
+  and a server pack (.zip) leaves out client-only mods.
 - **Background** — tray icon, background update checks for all modpacks with Windows notifications, app self-update.
 
 | | |
@@ -56,10 +58,13 @@ roll back any change. English and Russian interface.
 - Снимки всей сборки перед большими изменениями (жёсткие ссылки — почти не занимают места).
 - Пока игра запущена, изменения модов заблокированы.
 - Проверка целостности: битые архивы и остатки прерванных загрузок.
+- Проверка модов на вирусы: признаки червя fractureiser и следы заражения компьютера.
 
 **Игра**
-- Кнопка «Играть»: запуск сборки через её лаунчер (или своя команда).
-- После вылета — разбор краш-репорта: какие моды упоминаются в ошибке.
+- Кнопка «Играть»: запуск сборки через её лаунчер (или своя команда). Перед запуском — проверка Java и памяти
+  с исправлением прямо в настройках лаунчера.
+- После вылета — разбор краш-репорта: какие моды упоминаются в ошибке; «не та Java» и «не хватило памяти»
+  распознаются отдельно.
 - Поиск проблемного мода перебором, вручную или полностью автоматически: программа сама запускает игру,
   ждёт меню или вылета и выключает половину модов, пока не найдёт виновника.
 
@@ -69,6 +74,7 @@ roll back any change. English and Russian interface.
   версии сборки с сохранением ваших модов и настроек.
 - Моды, которых нет на Modrinth, опознаются на CurseForge по отпечатку файла и обновляются так же.
   Если автор запретил скачивание сторонними программами, программа откроет страницу файла на сайте.
+- Моды, которые выходят только на GitHub, обновляются из выпусков (Releases) репозитория.
 
 **Удобство**
 - Список модов: плоский, «только мои», дерево зависимостей; выбор колонок, компактные строки.
@@ -76,7 +82,8 @@ roll back any change. English and Russian interface.
 - Избранное, заметки, свои метки, наборы модов (быстро включить/выключить группу модов), Ctrl+Z.
 - Палитра команд Ctrl+K, свои горячие клавиши.
 - Темы: системная, тёмная, светлая, OLED, высококонтрастная; цвет акцента, масштаб, картинка в боковой панели.
-- Импорт и экспорт `.mrpack`, обмен списком модов строкой или файлом, синхронизация по ссылке, JSON для сервера.
+- Импорт и экспорт `.mrpack`, обмен списком модов строкой или файлом, синхронизация по ссылке, JSON для сервера,
+  сборка для сервера (.zip) без клиентских модов.
 - Установка из самой программы: ярлыки, пункт в «Установке и удалении программ», открытие `.mrpack`
   двойным щелчком и ссылки `modupdater://`.
 - Автообновление: программа сама находит новые версии на GitHub, скачивает с проверкой контрольной суммы и

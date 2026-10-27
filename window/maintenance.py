@@ -11,11 +11,96 @@ import config as app_config
 from i18n import tr
 from maintenance import backups_usage, check_integrity, prune_backups
 from ui.tools_dialogs import IntegrityDialog
+from content import MODS
 from ui_components import ask_choice, show_message
 from updater import UpdateTransaction
 
+MALWARE_CACHE = "malware_scan.json"
+
 
 class MaintenanceMixin:
+    # ================================================================== Проверка модов на вирусы
+
+    def _scan_malware(self, manual: bool = False):
+        """Фоновая проверка jar-файлов сборки (после чтения папки — раз за сеанс) или по кнопке — заново все."""
+        import malware_scan
+        game_dir = self._profile().get("mods_path", "")
+        if not game_dir:
+            return
+        if not manual and game_dir in self._malware_checked:
+            return
+        self._malware_checked.add(game_dir)
+        paths = malware_scan.jar_files(MODS.path(game_dir))
+        cache = os.path.join(os.path.dirname(app_config.CACHE_FILE), MALWARE_CACHE)
+        if not paths and not manual:
+            return
+        self._run_task(malware_scan.scan_folder, (paths, cache, manual),
+                       lambda result: self._on_malware_scanned(result, manual, game_dir),
+                       lambda e: logging.warning(tr("Проверка на вирусы: {0}", e)),
+                       tr("Проверяем моды на вирусы…") if manual else None)
+
+    def _on_malware_scanned(self, result, manual: bool, game_dir: str):
+        import malware_scan
+        for finding in result.findings:
+            logging.warning(tr("Проверка на вирусы: {0} — {1} ({2})", os.path.basename(finding.path), finding.detail,
+                               finding.member))
+        if result.system:
+            choice = ask_choice(self, QMessageBox.Icon.Critical, tr("Компьютер заражён"), tr(
+                "Найдены следы вируса fractureiser — он крадёт пароли, токены Discord и Microsoft:<br><br>{0}<br><br>"
+                "Не запускайте Minecraft, пока не выполните инструкцию по очистке, и смените пароли с другого "
+                "устройства.", "<br>".join(result.system)), [tr("Открыть инструкцию"), tr("Закрыть")], rich_text=True)
+            if choice == 0:
+                from PyQt6.QtCore import QUrl
+                from PyQt6.QtGui import QDesktopServices
+                QDesktopServices.openUrl(QUrl(malware_scan.INFO_URL))
+        files = malware_scan.group_by_file(result.findings)
+        if not files:
+            if manual:
+                self.toasts.show(tr("Проверено файлов: {0} — вирусов не найдено.", result.checked), "success")
+            return
+        if not result.malware and not manual:  # Только подозрительное — не прерываем, а предлагаем посмотреть
+            self.toasts.show(tr("В модах есть подозрительный код: {0}.", len(files)), "warning", tr("Подробнее"),
+                             lambda: self._show_malware(files, game_dir), timeout=15000)
+            return
+        self._show_malware(files, game_dir)
+
+    def _show_malware(self, files: dict, game_dir: str):
+        rows = []
+        for path, items in files.items():
+            danger = any(f.severity == "malware" for f in items)
+            kind = tr("<b style='color:{0}'>вирус</b>", self.tokens["danger"]) if danger else tr("подозрительно")
+            details = "; ".join(dict.fromkeys(f.detail for f in items))[:220]
+            rows.append(f"• <b>{os.path.basename(path)}</b> — {kind}: {details}")
+        malware = any(f.severity == "malware" for items in files.values() for f in items)
+        intro = (tr("В этих модах найден код вируса fractureiser. Уберите их и не запускайте игру с ними.")
+                 if malware else tr("В этих модах в коде спрятаны адреса — так делают вирусы, но иногда и обычные "
+                                    "моды. Если мод скачан не с Modrinth или CurseForge, лучше его убрать."))
+        choice = ask_choice(self, QMessageBox.Icon.Critical if malware else QMessageBox.Icon.Warning,
+                            tr("Опасные моды") if malware else tr("Подозрительные моды"),
+                            intro + "<br><br>" + "<br>".join(rows), [tr("Убрать в бэкап"), tr("Оставить")],
+                            default=0 if malware else 1, rich_text=True)
+        if choice == 0:
+            self._quarantine(list(files), game_dir)
+
+    def _quarantine(self, paths: List[str], game_dir: str):
+        """Убирает файлы из папки модов в бэкап (вернуть можно из истории)."""
+        if not self._confirm_game_not_running(paths):
+            return
+        transaction = UpdateTransaction(MODS.path(game_dir), "delete")
+        errors = []
+        for path in paths:
+            try:
+                transaction.backup_file(path)
+            except OSError as e:
+                errors.append(f"{os.path.basename(path)}: {e}")
+        if errors:
+            show_message(self, QMessageBox.Icon.Warning, tr("Не всё удалось"), "\n".join(errors[:10]))
+        self.toasts.show(tr("Убрано в бэкап: {0}", len(paths) - len(errors)), "success", tr("Отменить"),
+                         lambda: self._rollback_dir(transaction.dir), timeout=9000)
+        self.sessions.pop(self._skey(content=MODS), None)
+        if self.content is MODS:
+            self.start_local_scan()
+
     # ================================================================== Целостность и бэкапы
 
     def _check_integrity(self):

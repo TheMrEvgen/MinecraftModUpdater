@@ -28,7 +28,8 @@ CRASH_MARKERS = ("---- Minecraft Crash Report ----", "Minecraft has crashed", "I
                  "Incompatible mod set", "Mod resolution failed", "FormattedException",
                  "Exception in thread \"main\"", "Mixin apply failed", "Mixin transformation of",
                  "Encountered an unexpected exception", "Failed to start the minecraft server",
-                 "Game crashed! Crash report saved to", "Mod loading has failed", "Missing or unsupported mandatory dependencies")
+                 "Game crashed! Crash report saved to", "Mod loading has failed", "Missing or unsupported mandatory dependencies",
+                 "java.lang.OutOfMemoryError", "UnsupportedClassVersionError", "Unsupported class file major version")
 
 # Лаунчеры по полю source профиля
 LAUNCHER_TITLES = {"prism": "Prism Launcher", "multimc": "MultiMC", "modrinth": "Modrinth App",

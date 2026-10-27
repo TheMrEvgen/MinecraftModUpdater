@@ -18,7 +18,7 @@ from mod_updater_logic import format_date
 from query import Query, is_abandoned, parse_query
 from view_model import (
     CAT_ALL, DEP_TYPE_LABELS, GROUP_TITLES, entry_key, entry_tags, format_size, group_of, matches_category,
-    side_tag, status_of, status_sort_key, status_style, subtitle_for, update_date, waiting_days,
+    side_tag, source_title, status_of, status_sort_key, status_style, subtitle_for, update_date, waiting_days,
 )
 from i18n import tr
 
@@ -518,8 +518,8 @@ class ModDelegate(QStyledItemDelegate):
         """Значки после названия: (иконка или None, текст, цвет)."""
         t = self.tokens
         badges = []
-        if entry.get("source") == "curseforge":
-            badges.append((None, "CurseForge", t["text_muted"]))
+        if entry.get("source") in ("curseforge", "github"):
+            badges.append((None, source_title(entry), t["text_muted"]))
         wait = waiting_days(entry, self.min_age_days)
         if wait and status_of(entry) == ModStatus.UPDATE_AVAILABLE:
             badges.append((None, tr("ждёт {0} дн.", wait), t["text_muted"]))

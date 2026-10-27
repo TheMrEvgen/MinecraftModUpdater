@@ -217,6 +217,9 @@ def get_versions_by_ids(version_ids: List[str]) -> Dict[str, Dict]:
 
 def get_all_versions(project_id: str, game_version: str, loader: Loaders) -> List[Dict]:
     """Список всех версий мода для указанной версии игры и загрузчика (новые первыми)."""
+    if str(project_id).startswith("gh:"):  # Мод с GitHub — версии из его выпусков
+        import github_source
+        return github_source.get_versions(project_id, game_version, loader)
     if str(project_id).startswith("cf:"):  # Мод с CurseForge — версии оттуда, в том же формате
         import curseforge
         return curseforge.get_versions(project_id, game_version, loader)
@@ -256,6 +259,11 @@ def get_projects_info_from_ids(ids: Iterable[str]) -> Dict[str, Dict]:
     """Информация о нескольких проектах по их ID (название, иконка, client_side/server_side)."""
     ids = list(dict.fromkeys(i for i in ids if i))
     projects_dict: Dict[str, Dict] = {}
+    github_ids = [i for i in ids if str(i).startswith("gh:")]
+    if github_ids:
+        import github_source
+        projects_dict.update({i: github_source.get_project(i) for i in github_ids})
+        ids = [i for i in ids if i not in github_ids]
     curse_ids = [i for i in ids if str(i).startswith("cf:")]
     if curse_ids:
         import curseforge
@@ -299,6 +307,9 @@ def search_projects(query: str, project_type: str = "mod", game_version: Optiona
 
 def get_project(project_id: str) -> Dict:
     """Полная информация о проекте (GET /project/{id}): описание body, галерея, ссылки."""
+    if str(project_id).startswith("gh:"):
+        import github_source
+        return github_source.get_project(project_id)
     if str(project_id).startswith("cf:"):
         import curseforge
         return curseforge.get_project(project_id)
@@ -442,10 +453,10 @@ def get_latest_loader_version(loader: str, game_version: str) -> Optional[str]:
 # --- Скачивание ---
 
 def verify_file_hashes(filepath: str, expected_hashes: Optional[Dict[str, str]]) -> bool:
-    """Проверяет файл по самому надёжному из доступных хэшей (sha512, затем sha1)."""
+    """Проверяет файл по самому надёжному из доступных хэшей (sha512, sha256 — у GitHub, затем sha1)."""
     if not expected_hashes:
         return True
-    for algo in ("sha512", "sha1"):
+    for algo in ("sha512", "sha256", "sha1"):
         expected = expected_hashes.get(algo)
         if expected:
             return get_file_hash(filepath, algo) == expected.lower()

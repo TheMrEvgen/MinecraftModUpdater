@@ -22,7 +22,7 @@ def panel_width(available: int) -> int:
     """Ширина боковой панели: ~40% места под списком, но не уже 330 и не шире 420."""
     return max(PANEL_MIN, min(PANEL_MAX, int(available * 0.42)))
 from query import days_since, is_abandoned
-from view_model import entry_tags, format_size, status_of, status_style
+from view_model import entry_tags, format_size, source_title, status_of, status_style
 from i18n import language, tr
 
 
@@ -397,7 +397,7 @@ class DetailsPanel(QFrame):
         self.install_btn.setText(tr("Скачать {0} с CurseForge", entry.get("new_version") or "") if manual
                                  else f"{verb} {entry.get('new_version') or ''}".strip())
         self.install_btn.setVisible(can_install or manual)
-        self.page_btn.setText("CurseForge" if entry.get("source") == "curseforge" else "Modrinth")
+        self.page_btn.setText(source_title(entry))
         self.page_btn.setVisible(bool(entry.get("project_id")))
         self.file_btn.setVisible(bool(entry.get("filepath")))
         self.delete_btn.setVisible(bool(entry.get("filepath")))

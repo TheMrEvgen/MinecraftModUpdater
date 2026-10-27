@@ -5,8 +5,8 @@ from typing import Callable, Dict, List
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
-    QScrollArea, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 import icons
@@ -31,14 +31,16 @@ class CrashDialog(FramelessDialog):
     disable_requested = pyqtSignal(object)
     show_requested = pyqtSignal(object)
     bisect_requested = pyqtSignal()
+    fix_requested = pyqtSignal(str)  # "java" | "memory" — исправить в настройках лаунчера
 
     def __init__(self, parent, tokens: dict, files: List[str], entries: List[Dict], run_task: Callable,
-                 preferred: str = None):
+                 preferred: str = None, fixable: tuple = ()):
         super().__init__(parent, tr("Почему упала игра"), 680)
         self.resize(760, 620)
         self.tokens = tokens
         self.entries = entries
         self.run_task = run_task
+        self.fixable = fixable
         self.body.addWidget(label(tr("Программа читает последний краш-репорт или лог игры и ищет моды, которые "
                                   "упоминаются в ошибке. Это подсказка, а не приговор: виновника надёжнее всего "
                                   "находит поиск перебором."), "Muted", wrap=True))
@@ -60,6 +62,11 @@ class CrashDialog(FramelessDialog):
         self.open_btn.clicked.connect(self._open_file)
         row.addWidget(self.open_btn)
         self.body.addLayout(row)
+
+        # Вылет не из-за мода (Java, память) — главное в отчёте, поэтому сверху
+        self.diagnosis = QVBoxLayout()
+        self.diagnosis.setSpacing(6)
+        self.body.addLayout(self.diagnosis)
 
         self.summary = QPlainTextEdit()
         self.summary.setReadOnly(True)
@@ -108,6 +115,21 @@ class CrashDialog(FramelessDialog):
         t = self.tokens
         self.summary.setPlainText("\n".join(report.summary) or tr("В файле не найдено описания ошибки."))
         _clear(self.suspects)
+        _clear(self.diagnosis)
+        for item in report.diagnosis:
+            card = QFrame()
+            card.setObjectName("Banner")
+            row = QHBoxLayout(card)
+            row.setContentsMargins(12, 8, 8, 8)
+            text = label(f"<b>{item.text}</b><br>" + tr("Моды тут, скорее всего, ни при чём."), None, wrap=True)
+            text.setTextFormat(Qt.TextFormat.RichText)
+            row.addWidget(text, 1)
+            if item.kind in self.fixable:
+                fix = button(tr("Выделить больше памяти") if item.kind == "memory" else tr("Выбирать Java автоматически"),
+                             "Primary")
+                fix.clicked.connect(lambda _=False, kind=item.kind: (self.fix_requested.emit(kind), self.accept()))
+                row.addWidget(fix)
+            self.diagnosis.addWidget(card)
         if not report.suspects:
             self.suspects.addWidget(label(tr("Ни один мод не упоминается явно. Попробуйте поиск перебором."), "Muted", wrap=True))
         top = report.suspects[0].score if report.suspects else 1
@@ -255,6 +277,49 @@ class IntegrityDialog(FramelessDialog):
         if not problems:
             self.add_button(tr("Закрыть"), True, self.accept)
         self.finish_layout()
+
+
+# --- Сборка для сервера ---
+
+class ServerPackDialog(FramelessDialog):
+    """Какие моды положить в сборку для сервера: «только для клиента» уже сняты, остальное можно поправить."""
+
+    def __init__(self, parent, server: List[Dict], client: List[Dict]):
+        super().__init__(parent, tr("Сборка для сервера"), 560)
+        self.resize(600, 620)
+        unknown = sum(1 for e in server if not e.get("server_side"))
+        text = tr("В архив попадут моды, настройки (config) и всё для запуска сервера. Моды «только для клиента» "
+                  "по данным Modrinth уже сняты: на сервере они не нужны, а некоторые его роняют.")
+        if unknown:
+            text += " " + tr("Для {0} модов сторона неизвестна (не с Modrinth) — они оставлены.", unknown)
+        self.body.addWidget(label(text, "Muted", wrap=True))
+        self.list = QListWidget()
+        self.entries = sorted(server, key=lambda e: (e.get("name") or "").lower()) + \
+            sorted(client, key=lambda e: (e.get("name") or "").lower())
+        client_ids = {id(e) for e in client}
+        for entry in self.entries:
+            side = tr("только клиент") if id(entry) in client_ids else "" if entry.get("server_side") else tr("сторона неизвестна")
+            item = QListWidgetItem(f"{entry.get('name')}" + (f"   ·   {side}" if side else ""))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked if id(entry) in client_ids else Qt.CheckState.Checked)
+            self.list.addItem(item)
+        self.body.addWidget(self.list, 1)
+        self.add_button(tr("Отмена"))
+        self.ok = self.add_button("", True, self.accept)
+        self.list.itemChanged.connect(lambda _: self._update())
+        self.finish_layout()
+        self._update()
+
+    def selected(self) -> List[Dict]:
+        return [e for i, e in enumerate(self.entries) if self.list.item(i).checkState() == Qt.CheckState.Checked]
+
+    def skipped(self) -> List[Dict]:
+        return [e for i, e in enumerate(self.entries) if self.list.item(i).checkState() != Qt.CheckState.Checked]
+
+    def _update(self):
+        count = len(self.selected())
+        self.ok.setText(tr("Собрать архив ({0})", count))
+        self.ok.setEnabled(bool(count))
 
 
 # --- Клонирование ---

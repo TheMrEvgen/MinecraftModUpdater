@@ -141,6 +141,36 @@ from updater import list_transactions, rollback_transaction  # noqa: E402
 for m in list_transactions(mods):
     rollback_transaction(mods, m)
 print("   итог песочницы:", jars())
+
+# Мод, которого нет в каталогах, — связываем с GitHub через меню (выпуски подставные: без запросов к GitHub)
+import github_source  # noqa: E402
+github_source.LINKS_FILE = f"{SP}/github_links.json"
+if os.path.exists(github_source.LINKS_FILE):
+    os.remove(github_source.LINKS_FILE)
+github_source.releases = lambda repo, cache, session=None: [
+    {"id": 2, "tag_name": "v1.1", "name": "Local Mod 1.1", "published_at": "2026-05-01", "prerelease": False,
+     "assets": [{"id": 20, "name": "gh-only-mod-1.1.jar", "size": 22, "browser_download_url": "https://example.invalid/x.jar"}]},
+    {"id": 1, "tag_name": "v1.0", "name": "Local Mod 1.0", "published_at": "2026-04-01", "prerelease": False,
+     "assets": [{"id": 10, "name": "gh-only-mod-1.0.jar", "size": 22, "browser_download_url": "https://example.invalid/y.jar"}]}]
+with zipfile.ZipFile(f"{mods}/gh-only-mod-1.0.jar", "w") as z:  # Мод, которого нет ни на Modrinth, ни на CurseForge
+    z.writestr("fabric.mod.json", json.dumps({"id": "gh_only_mod_check", "name": "GH Only Mod", "version": "1.0"}))
+w._reread_folder()
+wait_idle()
+wait_idle()
+unknown = next(e for e in w.model.items() if (e.get("filepath") or "").endswith("gh-only-mod-1.0.jar"))
+from ui import dialogs as ui_dialogs  # noqa: E402
+ui_dialogs.ask_text = lambda *a, **k: "https://github.com/Someone/LocalMod"
+w._link_github(unknown)
+wait_idle()
+linked = next(e for e in w.model.items() if (e.get("filepath") or "").endswith("gh-only-mod-1.0.jar"))
+print(("OK  " if linked.get("source") == "github" and linked.get("new_version") == "v1.1" else "FAIL ") +
+      f"мод связан с GitHub: {linked.get('project_id')}, новая версия {linked.get('new_version')}")
+w._link_github(linked, unlink=True)
+wait_idle()
+unlinked = next(e for e in w.model.items() if (e.get("filepath") or "").endswith("gh-only-mod-1.0.jar"))
+print(("OK  " if unlinked.get("source") != "github" else "FAIL ") + "отвязан от GitHub")
+os.remove(f"{mods}/gh-only-mod-1.0.jar")
+
 print("диалоги:", dialogs)
 print("ошибки в уведомлениях:", [t[0] for t in toasts if t[1] == "error"])
 w.icon_loader.shutdown()

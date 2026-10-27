@@ -166,6 +166,78 @@ check("краш: Sodium первым подозреваемым", dialog.suspect
 shot("03_crash", dialog)
 dialog.close()
 
+# --- Вылет из-за памяти: плашка «не мод» с кнопкой исправления; проверка Java и памяти перед «Играть»
+import java_check  # noqa: E402
+with open(f"{GAME}/crash-reports/crash-oom.txt", "w", encoding="utf-8") as f:
+    f.write("---- Minecraft Crash Report ----\nDescription: Out of memory\n\njava.lang.OutOfMemoryError: Java heap space\n")
+os.utime(f"{GAME}/crash-reports/crash-oom.txt", (time.time() + 5, time.time() + 5))
+dialog = CrashDialog(w, w.tokens, find_crash_files(GAME), w._installed_mods(), w._run_task, None, ("memory",))
+dialog.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+fixes = []
+dialog.fix_requested.connect(fixes.append)
+dialog.show()
+wait_idle()
+pump(0.5)
+check(f"вылет из-за памяти: плашка с исправлением ({dialog.diagnosis.count()})", dialog.diagnosis.count() == 1)
+shot("03b_crash_memory", dialog)
+from PyQt6.QtWidgets import QPushButton  # noqa: E402
+fix_btn = next(b for b in dialog.findChildren(QPushButton) if b.text() == "Выделить больше памяти")
+fix_btn.click()
+check(f"кнопка исправления: {fixes}", fixes == ["memory"])
+
+applied = []
+java_check.read_settings = lambda profile: java_check.Settings("prism", 1024, 17)
+java_check.launcher_running = lambda profile: False
+java_check.set_memory = lambda profile, mb: (applied.append(("memory", mb)), ("x", "y"))[1]
+java_check.reset_java = lambda profile: (applied.append(("java", 0)), ("x", "y"))[1]
+w._profile()["source"] = "prism"
+w._profile().pop("launch_check_skipped", None)
+check("перед «Играть»: исправили Java и память", w._check_before_launch() and [k for k, _ in applied] == ["java", "memory"])
+applied.clear()
+w._fix_launch_setting("memory")
+check(f"исправление из разбора вылета: {applied}", applied and applied[0][0] == "memory" and applied[0][1] >= 2048)
+w._profile()["source"] = "manual"
+
+# --- Сборка для сервера: клиентские моды сняты, архив собран (сервер Fabric не скачиваем — подмена)
+import server_pack  # noqa: E402
+import window.transfer as transfer_module  # noqa: E402
+from ui.tools_dialogs import ServerPackDialog  # noqa: E402
+server_pack._fabric_server = lambda folder, *a, **k: "start.bat"
+pack_state = {}
+
+
+def fake_exec(dialog):
+    pack_state["checked"], pack_state["skipped"] = len(dialog.selected()), len(dialog.skipped())
+    shot("03c_server_pack", dialog)
+    return 1
+
+
+ServerPackDialog.exec = fake_exec
+transfer_module.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (f"{SP}/server-check.zip", ""))
+w.export_server_pack()
+wait_idle()
+pump(0.5)
+import zipfile as _zip  # noqa: E402
+names = _zip.ZipFile(f"{SP}/server-check.zip").namelist() if os.path.exists(f"{SP}/server-check.zip") else []
+check(f"сборка для сервера: {pack_state}, в архиве модов {sum(n.startswith('mods/') for n in names)}",
+      pack_state.get("skipped", 0) > 0 and "README_SERVER.txt" in names
+      and sum(n.startswith("mods/") for n in names) == pack_state.get("checked"))
+
+# --- Проверка на вирусы: заражённый мод (адрес fractureiser, спрятанный в байткоде) убирается в бэкап
+import zipfile  # noqa: E402
+code = bytearray(b"\xca\xfe\xba\xbe")
+for index, char in enumerate(b"85.217.144.130"):
+    code += b"\x59" + (bytes([3 + index]) if index <= 5 else b"\x10" + bytes([index])) + b"\x10" + bytes([char]) + b"\x54"
+infected = f"{GAME}/mods/totally-legit-1.0.jar"
+with zipfile.ZipFile(infected, "w") as z:
+    z.writestr("x/Utility.class", bytes(code))
+log.clear()
+w._scan_malware(True)
+wait_idle()
+pump(1.5)
+wait_idle()
+check(f"заражённый мод найден и убран в бэкап: {log[-1:] or toasts[-1:]}", not os.path.exists(infected))
+
 # --- Целостность
 with open(f"{GAME}/mods/broken.jar", "wb") as f:
     f.write(b"not a zip")

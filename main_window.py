@@ -135,7 +135,8 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         self.update_worker: Optional[UpdateWorker] = None
         self.loader_version_worker: Optional[LoaderVersionWorker] = None
         self._task_workers: List[TaskWorker] = []
-        self._modpack_checked: set = set()  # Сборки из каталога, для которых уже проверили новую версию
+        self._modpack_checked: set = set()
+        self._malware_checked: set = set()  # Папки игр, моды которых уже проверены на вирусы в этом сеансе  # Сборки из каталога, для которых уже проверили новую версию
 
         self.icon_loader = IconLoader(app_config.ICON_CACHE_DIR, self)
         self.icon_loader.icon_ready.connect(self._on_icon_ready)
@@ -712,11 +713,13 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         bisect.setEnabled(has_data and not self._profile().get("bisect"))
         tools.addAction(bisect)
         tools.addAction(make_action(tools, t, "shield", tr("Проверить целостность файлов"), self._check_integrity))
+        tools.addAction(make_action(tools, t, "shield", tr("Проверить моды на вирусы"), lambda: self._scan_malware(True)))
         menu.addAction(make_action(menu, t, "bar_chart", tr("Статистика сборки"), lambda: self._switch_page(PAGE_STATS)))
         menu.addAction(make_action(menu, t, "layers", tr("Моды во всех сборках…"), self._show_all_packs))
         menu.addSeparator()
         for icon_name, text, slot in (("share", tr("Поделиться списком…"), self.share_mod_list),
                                       ("save", tr("Экспорт JSON для сервера…"), self.export_server_json),
+                                      ("package", tr("Сборка для сервера (.zip)…"), self.export_server_pack),
                                       ("package", tr("Экспорт в .mrpack…"), self.export_mrpack)):
             action = make_action(menu, t, icon_name, text, slot)
             action.setEnabled(has_data)

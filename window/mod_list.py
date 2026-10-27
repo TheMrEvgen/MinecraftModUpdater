@@ -10,6 +10,7 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QMenu
 
 import icons
+from content import MODS
 from enums import ModStatus
 from i18n import tr
 from ui.mod_list import entry_at, meta_at
@@ -17,7 +18,7 @@ from ui.widgets import button, make_action
 from view_model import (
     CAT_ALL, CAT_DISABLED, CAT_INSTALL, CAT_NOT_FOUND, CAT_PROBLEMS, CAT_UPDATES, VIEW_FLAT, VIEW_MODES, VIEW_TREE,
     build_rows, category_counts, collect_tags, entry_key, format_size, is_updatable, iter_all_entries, pin_key,
-    status_of, waiting_days,
+    source_title, status_of, waiting_days,
 )
 from window.common import ANIMATION_MS, BULK_STATUSES, PAGE_MODS
 
@@ -475,6 +476,29 @@ class ModListMixin:
         elif self._checked_entries():
             self._set_all_checked(False)
 
+    def _link_github(self, entry: dict, unlink: bool = False):
+        """Мод не нашёлся в каталогах — связываем его с репозиторием на GitHub (или убираем связь)."""
+        import github_source
+        from ui.dialogs import ask_text
+        path = entry["filepath"]
+        key = github_source.link_key(path, github_source.jar_info(path).get("id", ""))
+        if unlink:
+            github_source.set_link(key, "")  # «Не с GitHub»: и по ссылке в метаданных больше не искать
+            self.toasts.show(tr("«{0}» больше не проверяется на GitHub.", entry.get("name")), "info")
+        else:
+            text = ask_text(self, tr("Мод с GitHub"),
+                            tr("Ссылка на репозиторий мода — программа будет брать новые версии из его выпусков (Releases)."),
+                            "https://github.com/автор/мод", github_source.jar_info(path).get("repo", ""))
+            if text is None:
+                return
+            repo = github_source.parse_repo(text)
+            if not repo:
+                self.toasts.show(tr("Это не ссылка на репозиторий GitHub."), "warning")
+                return
+            github_source.set_link(key, repo)
+            self.toasts.show(tr("«{0}» связан с {1} — проверяем обновления…", entry.get("name"), repo), "success")
+        self.start_scan(silent=True)
+
     def _show_entry_menu(self, entry: dict, pos):
         t = self.tokens
         menu = QMenu(self)
@@ -488,8 +512,8 @@ class ModListMixin:
         if entry.get("project_id"):
             menu.addAction(make_action(menu, t, "history", tr("Выбрать другую версию…"),
                                        lambda: (self._select_entry(entry), self._load_versions(entry))))
-            site = "CurseForge" if entry.get("source") == "curseforge" else "Modrinth"
-            menu.addAction(make_action(menu, t, "external", tr("Открыть на {0}", site), lambda: self._open_mod_page(entry)))
+            menu.addAction(make_action(menu, t, "external", tr("Открыть на {0}", source_title(entry)),
+                                       lambda: self._open_mod_page(entry)))
             if entry.get("manual_url") and not entry.get("download_url"):
                 menu.addAction(make_action(menu, t, "download", tr("Скачать новую версию с CurseForge"),
                                            lambda: webbrowser.open(entry["manual_url"])))
@@ -510,6 +534,11 @@ class ModListMixin:
             menu.addAction(make_action(menu, t, "tag", tr("Метки…"), lambda: self._show_tags_menu(entry, pos)))
         if self._abandoned(entry):
             menu.addAction(make_action(menu, t, "compass", tr("Найти замену в каталоге"), lambda: self._find_replacement(entry)))
+        if entry.get("filepath") and not self.is_import_mode and self.content is MODS:
+            if status_of(entry) == ModStatus.NOT_FOUND:
+                menu.addAction(make_action(menu, t, "code", tr("Указать страницу на GitHub…"), lambda: self._link_github(entry)))
+            elif entry.get("source") == "github":
+                menu.addAction(make_action(menu, t, "x", tr("Отвязать от GitHub"), lambda: self._link_github(entry, unlink=True)))
         if not entry.get("filepath") and entry.get("project_id") and entry.get("_required_by") \
                 and status_of(entry) in (ModStatus.REQUIRED, ModStatus.OPTIONAL) and not self.is_import_mode:
             menu.addSeparator()

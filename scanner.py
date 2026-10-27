@@ -587,8 +587,16 @@ def scan_mods(mods_path: str, game_version: str, loader: str, cache_file: Option
         from_curseforge = _curseforge_entries(unknown, game_version, loader if content is MODS else None, channel,
                                               cache, progress, check_cancel, installed_keys(mods_data))
         mark_cross_catalog_duplicates(mods_data, list(from_curseforge.values()))
+        # --- Ни там, ни там: GitHub Releases (по ссылке в метаданных мода или указанной вручную) ---
+        from_github = {}
+        if content is MODS:
+            import github_source
+            check_cancel()
+            from_github = github_source.entries_for(
+                [l for l in unknown if l['path'] not in from_curseforge], game_version, loader, channel.version_types,
+                lambda local: make_local_entry(local, ModStatus.UP_TO_DATE), apply_install_info, progress)
         for local in unknown:
-            entry = from_curseforge.get(local['path'])
+            entry = from_curseforge.get(local['path']) or from_github.get(local['path'])
             if entry is None:
                 entry = make_local_entry(local, ModStatus.NOT_FOUND)
                 entry["project_id"] = None
@@ -986,17 +994,20 @@ def check_target_version(entries: List[Dict], target_version: str, loader: Optio
     Для каждого установленного мода — есть ли версия под target_version.
     Возвращает [{entry, version}] (version = None, если версии нет или мод не опознан ни на Modrinth, ни на CurseForge).
     """
-    with_hash = [e for e in entries if e.get("sha1") and e.get("project_id") and not str(e["project_id"]).startswith("cf:")]
+    def external(entry):  # Моды с CurseForge и GitHub: Modrinth их не знает
+        return str(entry.get("project_id") or "").startswith(("cf:", "gh:"))
+
+    with_hash = [e for e in entries if e.get("sha1") and e.get("project_id") and not external(e)]
     latest = get_latest_versions_from_hashes([e["sha1"] for e in with_hash], target_version,
                                              content.loaders(loader), channel.version_types) if with_hash else {}
     result = []
     for entry in entries:
-        if str(entry.get("project_id") or "").startswith("cf:"):  # Мод с CurseForge: Modrinth его не знает
+        if external(entry):
             try:
                 version = get_latest_version(entry["project_id"], target_version, content.loaders(loader), None,
                                              channel.version_types)
-            except requests.RequestException as e:
-                logging.warning(tr("CurseForge: версии «{0}» не получены: {1}", entry.get("name"), e))
+            except Exception as e:
+                logging.warning(tr("Версии «{0}» не получены: {1}", entry.get("name"), e))
                 version = None
             result.append({"entry": entry, "version": version})
             continue

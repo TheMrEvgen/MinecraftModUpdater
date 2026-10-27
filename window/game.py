@@ -152,8 +152,9 @@ class GameMixin:
         if not game_dir:
             return
         dialog = CrashDialog(self, self.tokens, find_crash_files(game_dir), self._installed_mods(), self._run_task,
-                             preferred if isinstance(preferred, str) else None)
+                             preferred if isinstance(preferred, str) else None, self._launch_fixes())
         dialog.disable_requested.connect(lambda e: self._toggle_disabled([e]))
+        dialog.fix_requested.connect(self._fix_launch_setting)
         dialog.show_requested.connect(self._show_entry_in_list)
         dialog.bisect_requested.connect(self._start_bisect)
         dialog.exec()
@@ -190,11 +191,104 @@ class GameMixin:
                tr("Не удалось найти лаунчер — укажите команду запуска в настройках сборки"))
         self.play_btn.setToolTip(tip)
 
+    # ================================================================== Java и память
+
+    def _mod_count(self) -> int:
+        folder = MODS.path(self._game_dir())
+        try:
+            return sum(1 for name in os.listdir(folder) if name.lower().endswith(".jar"))
+        except OSError:
+            return 0
+
+    def _launch_fixes(self) -> tuple:
+        """Что программа умеет исправить в лаунчере этой сборки: память, Java."""
+        import java_check
+        source = self._profile().get("source")
+        return (("memory",) if source in java_check.FIXABLE else ()) + (("java",) if source in ("prism", "official") else ())
+
+    def _apply_launch_fixes(self, fixes: List[tuple]) -> bool:
+        """fixes — [(вид, значение)]: правит настройки лаунчера, предлагает отменить. False — не получилось."""
+        import java_check
+        from game_runner import LAUNCHER_TITLES
+        profile = self._profile()
+        if java_check.launcher_running(profile):
+            show_message(self, QMessageBox.Icon.Warning, tr("Закройте лаунчер"),
+                         tr("{0} открыт — пока он открыт, новые настройки не подхватятся. Закройте его и повторите.",
+                            LAUNCHER_TITLES.get(profile.get("source"), "")))
+            return False
+        backups, done = [], []
+        try:
+            for kind, value in fixes:
+                if kind == "java":
+                    backups.append(java_check.reset_java(profile))
+                    done.append(tr("Java выбирает лаунчер"))
+                else:
+                    backups.append(java_check.set_memory(profile, value))
+                    done.append(tr("памяти выделено {0}", java_check.format_gb(value)))
+        except (OSError, ValueError) as e:
+            for path, backup in reversed(backups):
+                java_check.restore(path, backup)
+            show_message(self, QMessageBox.Icon.Warning, tr("Не удалось исправить"), str(e))
+            return False
+        logging.info(tr("Настройки запуска: {0}", ", ".join(done)))
+
+        def undo():
+            for path, backup in reversed(backups):
+                java_check.restore(path, backup)
+            self.toasts.show(tr("Настройки лаунчера возвращены."), "info")
+        self.toasts.show(tr("Готово: {0}.", ", ".join(done)), "success", tr("Отменить"), undo, timeout=12000)
+        return True
+
+    def _fix_launch_setting(self, kind: str):
+        """Кнопка в разборе вылета: не та Java или не хватило памяти."""
+        import java_check
+        if kind == "java":
+            self._apply_launch_fixes([("java", 0)])
+            return
+        settings = java_check.read_settings(self._profile())
+        total = java_check.total_memory_mb()
+        want = java_check.recommended_memory(self._mod_count(), total)
+        if settings and settings.memory_mb and settings.memory_mb >= want:  # И так по рекомендации — ещё на 2 ГБ
+            want = settings.memory_mb + 2048
+            if total and want > total - java_check.SYSTEM_RESERVE_GB * 1024:
+                show_message(self, QMessageBox.Icon.Warning, tr("Памяти больше нет"), tr(
+                    "Игре уже выделено {0} из {1}. Больше выделить нельзя — уберите тяжёлые моды или шейдеры.",
+                    java_check.format_gb(settings.memory_mb), java_check.format_gb(total)))
+                return
+        self._apply_launch_fixes([("memory", want)])
+
+    def _check_before_launch(self) -> bool:
+        """Перед «Играть»: подходит ли Java и хватит ли памяти. False — запуск отменён."""
+        import java_check
+        profile = self._profile()
+        try:
+            issues = java_check.check(profile, self._mod_count())
+        except Exception as e:  # Проверка — подсказка: её сбой не должен мешать игре
+            logging.debug(f"Проверка Java и памяти: {e}")
+            return True
+        signature = sorted(f"{i.kind}:{i.value}" for i in issues)
+        if not issues or profile.get("launch_check_skipped") == signature:
+            return True
+        fixable = [i for i in issues if i.fix and i.kind.split("_")[0] in self._launch_fixes()]
+        text = "<br><br>".join(f"• {i.text}" for i in issues)
+        buttons = ([tr("Исправить и играть")] if fixable else []) + [tr("Играть так"), tr("Отмена")]
+        choice = ask_choice(self, QMessageBox.Icon.Warning, tr("Игра может не запуститься"), text, buttons,
+                            default=0, rich_text=True)
+        if choice is None or buttons[choice] == tr("Отмена"):
+            return False
+        if buttons[choice] == tr("Играть так"):
+            profile["launch_check_skipped"] = signature  # Не спрашивать снова, пока ничего не поменялось
+            self.save_config()
+            return True
+        return self._apply_launch_fixes([(i.kind.split("_")[0], i.value) for i in fixable])
+
     def _play(self):
         import game_runner
         plan = self._launch_plan()
         if not plan:
             self.toasts.show(tr("Не удалось найти лаунчер для этой сборки."), "warning", tr("Настроить"), self._edit_current_profile)
+            return
+        if not self._check_before_launch():
             return
         profile = self._profile()
         installation = profile.get("launcher_id") if profile.get("source") == "official" else None

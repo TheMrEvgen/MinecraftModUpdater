@@ -2,6 +2,7 @@
 
 Примесь к главному окну (ModUpdaterApp): методы работают с его атрибутами."""
 import os
+import sys
 from typing import List, Optional
 
 from PyQt6.QtCore import Qt
@@ -203,6 +204,51 @@ class TransferMixin:
                 self.toasts.show(tr('Файл сохранён: {0}', os.path.basename(path)), "success")
             except OSError as e:
                 show_message(self, QMessageBox.Icon.Critical, tr("Ошибка"), tr('Не удалось сохранить файл:\n{0}', e))
+
+    def export_server_pack(self):
+        """Zip для сервера: моды без «только для клиента», настройки, сервер загрузчика и скрипты запуска."""
+        import java_check
+        import server_pack
+        from ui.tools_dialogs import ServerPackDialog
+        from view_model import iter_all_entries
+        server, client = server_pack.split_entries(iter_all_entries(self.mods_data))
+        if not server and not client:
+            self.toasts.show(tr("В сборке нет включённых модов."), "warning")
+            return
+        dialog = ServerPackDialog(self, server, client)
+        if not dialog.exec():
+            return
+        chosen, skipped = dialog.selected(), dialog.skipped()
+        loader_version = self.current_loader_version or self.latest_loader_version or ""
+        path, _ = QFileDialog.getSaveFileName(self, tr("Сохранить сборку для сервера"),
+                                              f"{self.current_profile_name}-server.zip", "ZIP (*.zip)")
+        if not path:
+            return
+        game_dir = self._profile().get("mods_path", "")
+        memory = java_check.recommended_memory(len(chosen), None)
+
+        def build():
+            version = loader_version or get_latest_loader_version(self.loader, self.game_version) or ""
+            return server_pack.build(path, [e["filepath"] for e in chosen], game_dir, self.game_version, self.loader,
+                                     version, memory, [e.get("name") or "" for e in skipped])
+
+        def done(result):
+            for warning in result.warnings:
+                self.toasts.show(warning, "warning", timeout=12000)
+            self.toasts.show(tr("Сборка для сервера готова: {0} модов. Как запустить — в README_SERVER.txt.", result.mods),
+                             "success", tr("Показать"), lambda: self._show_path_in_folder(result.path), timeout=12000)
+
+        self._run_task(build, (), done,
+                       lambda e: show_message(self, QMessageBox.Icon.Critical, tr("Ошибка"),
+                                              tr("Не удалось собрать архив:\n{0}", e)),
+                       tr("Собираем сборку для сервера…"))
+
+    def _show_path_in_folder(self, path: str):
+        import subprocess
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        else:
+            self._open_path(os.path.dirname(path))
 
     def export_mrpack(self):
         loader_version = self.current_loader_version or self.latest_loader_version

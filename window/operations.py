@@ -62,6 +62,8 @@ class OperationsMixin:
             return
         self._set_data(mods_data)
         self.sessions[self._skey()] = mods_data
+        if self.content is MODS:
+            self._scan_malware()
         if mods_data and self.settings.get("auto_check", True):
             self.start_scan(silent=True)
 

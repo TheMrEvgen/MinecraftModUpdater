@@ -270,6 +270,14 @@ def category_counts(items: List[Dict]) -> Dict[str, int]:
     return counts
 
 
+SOURCE_TITLES = {"curseforge": "CurseForge", "github": "GitHub"}
+
+
+def source_title(entry: Dict) -> str:
+    """Откуда мод: Modrinth, CurseForge или GitHub."""
+    return SOURCE_TITLES.get(entry.get("source") or "", "Modrinth")
+
+
 def subtitle_for(entry: Dict) -> tuple[str, Optional[str]]:
     """Вторая строка под названием и её цветовая роль (всегда в одну строку)."""
     text, role = _subtitle(entry)

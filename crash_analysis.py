@@ -34,10 +34,45 @@ class Suspect:
 
 
 @dataclass
+class Diagnosis:
+    kind: str          # "java" — не та версия Java, "memory" — не хватило памяти
+    text: str
+    java: int = 0      # Для "java": какая Java нужна (0 — неизвестно)
+
+
+@dataclass
 class CrashReport:
     path: str
     summary: List[str]
     suspects: List[Suspect]
+    diagnosis: List[Diagnosis] = field(default_factory=list)
+
+
+# Номер формата class-файла -> версия Java: 52 — Java 8, 65 — Java 21, 69 — Java 25
+_CLASS_VERSION_BASE = 44
+_TOO_OLD_JAVA = re.compile(r"class file version (\d+)(?:\.\d+)?\), this version of the Java Runtime only "
+                           r"recognizes class file versions up to (\d+)")
+_TOO_NEW_JAVA = re.compile(r"Unsupported class file major version (\d+)")
+_MEMORY_MARKERS = ("java.lang.OutOfMemoryError", "Description: Out of memory", "GC overhead limit exceeded",
+                   "Could not reserve enough space for object heap")
+
+
+def diagnose(text: str) -> List[Diagnosis]:
+    """Вылеты не из-за мода: не та Java или нехватка памяти. Тут искать виноватый мод бесполезно."""
+    result = []
+    match = _TOO_OLD_JAVA.search(text)
+    if match:
+        need, have = (int(x) - _CLASS_VERSION_BASE for x in match.groups())
+        result.append(Diagnosis("java", tr("Игре или моду нужна Java {0}, а запущена Java {1}.", need, have), need))
+    elif "UnsupportedClassVersionError" in text:
+        result.append(Diagnosis("java", tr("Игре или моду нужна более новая Java, чем та, на которой её запустили.")))
+    match = _TOO_NEW_JAVA.search(text)
+    if match and not result:
+        have = int(match.group(1)) - _CLASS_VERSION_BASE
+        result.append(Diagnosis("java", tr("Загрузчик сборки не работает на Java {0} — нужна более старая Java.", have)))
+    if any(marker in text for marker in _MEMORY_MARKERS):
+        result.append(Diagnosis("memory", tr("Игре не хватило памяти — выделите ей больше в лаунчере.")))
+    return result
 
 
 def find_crash_files(game_dir: str) -> List[str]:
@@ -145,7 +180,7 @@ def analyze_crash(text: str, entries: List[Dict], path: str = "") -> CrashReport
         if score:
             suspects.append(Suspect(entry, score, list(dict.fromkeys(reasons))))
     suspects.sort(key=lambda s: -s.score)
-    return CrashReport(path, _summary(lines), suspects[:8])
+    return CrashReport(path, _summary(lines), suspects[:8], diagnose(text))
 
 
 def analyze_file(path: str, entries: List[Dict]) -> CrashReport:
