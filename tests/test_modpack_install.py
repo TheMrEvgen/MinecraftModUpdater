@@ -294,3 +294,62 @@ def test_folder_target_directly_into_chosen_folder(tmp_path):
     target = modpack_install.folder_target(str(chosen), "Пак", own_folder=False)
     assert not target.fresh and modpack_install.folder_has_mods(str(chosen))
     assert modpack_install.folder_target(str(tmp_path), "Пак").game_dir == str(tmp_path / "Пак")
+
+class MetaSession:
+    """Справочник Prism: свои сведения для каждого компонента; для одного — ошибка сети."""
+
+    def __init__(self, broken=()):
+        self.broken = set(broken)
+
+    def get(self, url, timeout=None, stream=False, headers=None):
+        uid = url.rsplit("/", 2)[-2]
+        meta = {"org.lwjgl3": {"name": "LWJGL 3", "volatile": True},
+                "net.minecraft": {"name": "Minecraft", "requires": [{"uid": "org.lwjgl3", "suggests": "3.3.3"}]},
+                "net.neoforged": {"name": "NeoForge", "requires": [{"uid": "net.minecraft", "equals": "1.21.1"}]}}
+        broken = uid in self.broken
+
+        class Response:
+            def raise_for_status(self):
+                if broken:
+                    raise OSError("нет сети")
+
+            def json(self):
+                return meta.get(uid, {"name": uid})
+
+        return Response()
+
+
+def test_prism_instance_appears_complete(tmp_path):
+    """Сборка Prism появляется в instances сразу целиком: полный instance.cfg и сведения о компонентах."""
+    root = tmp_path / "instances"
+    target = modpack_install.prism_target(str(root), "FTB: Stone/Block")
+    target.name = "FTB: Stone/Block"
+    plan = modpack_install.versions_plan("FTB", "1.21.1", "neoforge", "21.1.262")
+    modpack_install.prepare_target(target, plan, session=MetaSession())
+    assert sorted(os.listdir(root)) == ["FTB_ Stone_Block"]  # Временной папки не осталось
+    cfg = open(os.path.join(target.instance_dir, "instance.cfg"), encoding="utf-8").read()
+    assert "name=FTB: Stone/Block\n" in cfg and "InstanceType=OneSix" in cfg and "ManagedPack=false" in cfg
+    assert "OverrideJavaLocation=false" in cfg and "uuid=" in cfg and cfg.count("\n") > 40
+    pack = json.load(open(os.path.join(target.instance_dir, "mmc-pack.json"), encoding="utf-8"))
+    by_uid = {c["uid"]: c for c in pack["components"]}
+    assert list(by_uid) == ["org.lwjgl3", "net.minecraft", "net.neoforged"]
+    assert by_uid["org.lwjgl3"]["cachedVolatile"] and by_uid["org.lwjgl3"]["dependencyOnly"]
+    assert by_uid["net.minecraft"]["cachedRequires"] == [{"uid": "org.lwjgl3", "suggests": "3.3.3"}]
+    assert by_uid["net.neoforged"]["cachedName"] == "NeoForge" and by_uid["net.neoforged"]["version"] == "21.1.262"
+    assert os.path.isdir(target.game_dir)
+    from launchers import find_prism_instances  # Программа сама находит такую сборку как сборку Prism
+    os.makedirs(tmp_path / "x")
+    os.rename(root, tmp_path / "x" / "instances")
+    found = find_prism_instances(str(tmp_path / "x"))
+    assert [(i.name, i.game_version, i.loader, i.loader_version) for i in found] == [
+        ("FTB: Stone/Block", "1.21.1", "neoforge", "21.1.262")]
+
+
+def test_prism_instance_without_loader_meta(tmp_path):
+    """Справочник не ответил про загрузчик — сборка всё равно создаётся, Prism допишет сведения сам."""
+    target = modpack_install.prism_target(str(tmp_path), "Пак")
+    plan = modpack_install.versions_plan("Пак", "1.21.1", "neoforge", "21.1.262")
+    modpack_install.prepare_target(target, plan, session=MetaSession(broken={"net.neoforged"}))
+    pack = json.load(open(os.path.join(target.instance_dir, "mmc-pack.json"), encoding="utf-8"))
+    assert pack["components"][-1] == {"uid": "net.neoforged", "version": "21.1.262"}
+    assert os.listdir(tmp_path) == ["Пак"]

@@ -1208,6 +1208,7 @@
  "Сохранить…": "Save…",
  "Список модов": "Mod list",
  "Список сборок уже пуст.": "The modpack list is already empty.",
+ "Справочник Prism вернул непонятный ответ для {0} {1}": "The Prism metadata returned an unexpected answer for {0} {1}",
  "Справочник {0} не знает версию {1} для Minecraft {2}": "{0} metadata has no version {1} for Minecraft {2}",
  "Сравнение": "Comparison",
  "Сравнение сборок": "Modpack comparison",

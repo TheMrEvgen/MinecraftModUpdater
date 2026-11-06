@@ -101,7 +101,8 @@ def _read_instance_cfg_name(path: str) -> Optional[str]:
         parser = configparser.ConfigParser(interpolation=None, strict=False)
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             parser.read_string("[root]\n" + f.read())
-        return parser.get("root", "name", fallback=None)
+        # Prism пишет настройки в секцию [General], MultiMC — без секций
+        return parser.get("General", "name", fallback=None) or parser.get("root", "name", fallback=None)
     except (OSError, configparser.Error):
         return None
 

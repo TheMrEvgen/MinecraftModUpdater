@@ -333,30 +333,95 @@ def official_target(minecraft_dir: str, name: str) -> Target:
                   minecraft_dir=minecraft_dir, name=name)
 
 
-def write_prism_instance(target: Target, plan: PackPlan, session=None):
-    """instance.cfg и mmc-pack.json новой сборки Prism: Minecraft, LWJGL, intermediary и загрузчик."""
+# Настройки новой сборки Prism — те же поля, что Prism пишет сам (Java и память — автоматически, по умолчанию)
+PRISM_CFG_DEFAULTS = (
+    ("AutomaticJava", "true"), ("ExportAuthor", ""), ("ExportName", ""), ("ExportOptionalFiles", "true"),
+    ("ExportSummary", ""), ("ExportVersion", "1.0.0"), ("GlobalDataPacksEnabled", "false"), ("GlobalDataPacksPath", ""),
+    ("IgnoreJavaCompatibility", "false"), ("JoinServerOnLaunch", "false"), ("LogPrePostOutput", "true"),
+    ("ManagedPack", "false"), ("ManagedPackID", ""), ("ManagedPackName", ""), ("ManagedPackType", ""),
+    ("ManagedPackURL", ""), ("ManagedPackVersionID", ""), ("ManagedPackVersionName", ""), ("ModDownloadLoaders", "[]"),
+    ("OverrideCommands", "false"), ("OverrideConsole", "false"), ("OverrideEnv", "false"),
+    ("OverrideGameTime", "false"), ("OverrideJavaArgs", "false"), ("OverrideJavaLocation", "false"),
+    ("OverrideLegacySettings", "false"), ("OverrideMemory", "false"), ("OverrideMiscellaneous", "false"),
+    ("OverrideModDownloadLoaders", "false"), ("OverrideNativeWorkarounds", "false"), ("OverridePerformance", "false"),
+    ("OverrideWindow", "false"), ("Profiler", ""), ("UseAccountForInstance", "false"), ("lastLaunchTime", "0"),
+    ("lastTimePlayed", "0"), ("linkedInstances", "[]"), ("notes", ""), ("shortcuts", ""), ("totalTimePlayed", "0"),
+)
+
+
+def prism_instance_cfg(name: str) -> str:
+    """instance.cfg новой сборки Prism / MultiMC."""
+    import uuid
+    name = " ".join(str(name).split()) or "Modpack"  # Без переводов строк: это одна строка INI
+    lines = ["[General]", "ConfigVersion=1.3", "InstanceType=OneSix", "iconKey=default", f"name={name}"]
+    lines += [f"{key}={value}" for key, value in PRISM_CFG_DEFAULTS]
+    lines.append(f"uuid={uuid.uuid4().hex}")
+    return "\n".join(lines) + "\n"
+
+
+def _prism_component(uid: str, version: str, session=None, **flags) -> Dict:
+    """Компонент mmc-pack.json с теми же сведениями из справочника Prism, что лаунчер хранит сам (cached*)."""
     import launcher_pack
-    os.makedirs(target.instance_dir, exist_ok=True)
-    with open(os.path.join(target.instance_dir, "instance.cfg"), "w", encoding="utf-8") as f:
-        f.write(f"[General]\nConfigVersion=1.3\nInstanceType=OneSix\nname={os.path.basename(target.instance_dir)}\n"
-                "iconKey=default\nAutomaticJava=true\n")
+    component = {"uid": uid, "version": version, **flags}
+    try:
+        meta = launcher_pack.fetch_meta(uid, version, session)
+    except Exception as e:  # Без сведений сборка тоже откроется — Prism допишет их сам
+        logging.debug(f"Справочник Prism: {uid} {version}: {e}")
+        return component
+    component["cachedName"] = meta.get("name") or uid
+    component["cachedVersion"] = version
+    if meta.get("requires"):
+        component["cachedRequires"] = meta["requires"]
+    if meta.get("volatile"):
+        component["cachedVolatile"] = True
+    return component
+
+
+def write_prism_instance(target: Target, plan: PackPlan, session=None):
+    """
+    Новая сборка Prism / MultiMC: instance.cfg и mmc-pack.json (Minecraft, LWJGL, intermediary и загрузчик).
+    Сборка собирается во временной скрытой папке и появляется в instances одним переименованием — уже с
+    настройками. Иначе Prism, который следит за папкой, увидит пустую папку, пропустит её и покажет сборку только
+    после перезапуска.
+    """
+    import shutil
+    import uuid
+
+    import launcher_pack
+    requires = launcher_pack.fetch_requires(launcher_pack.MINECRAFT, plan.game_version, session)  # Есть ли версия
     components = []
-    requires = launcher_pack.fetch_requires(launcher_pack.MINECRAFT, plan.game_version, session)
     for need in requires:
         version = need.get("equals") or need.get("suggests")
         if version:
-            components.append({"uid": need["uid"], "version": version, "dependencyOnly": True})
-    components.append({"uid": launcher_pack.MINECRAFT, "version": plan.game_version, "important": True})
+            components.append(_prism_component(need["uid"], version, session, dependencyOnly=True))
+    minecraft = _prism_component(launcher_pack.MINECRAFT, plan.game_version, session, important=True)
+    minecraft.setdefault("cachedRequires", requires)
+    components.append(minecraft)
     if plan.loader in ("fabric", "quilt"):
-        components.append({"uid": launcher_pack.INTERMEDIARY, "version": plan.game_version, "dependencyOnly": True})
+        components.append(_prism_component(launcher_pack.INTERMEDIARY, plan.game_version, session, dependencyOnly=True))
     if plan.loader and plan.loader_version:
         version = plan.loader_version
         if plan.loader == "forge":  # В справочнике Prism версия Forge — без версии игры: «47.2.0»
             import official_launcher
             version = official_launcher.forge_version(plan.game_version, version)
-        components.append({"uid": launcher_pack.LOADER_UIDS[plan.loader], "version": version})
-    with open(os.path.join(target.instance_dir, launcher_pack.PACK_NAME), "w", encoding="utf-8") as f:
-        json.dump({"components": components, "formatVersion": 1}, f, indent=4)
+        components.append(_prism_component(launcher_pack.LOADER_UIDS[plan.loader], version, session))
+
+    root = os.path.dirname(os.path.normpath(target.instance_dir))
+    staging = os.path.join(root, f".modupdater-{uuid.uuid4().hex[:12]}")  # Prism не смотрит папки с точкой
+    game_name = os.path.basename(os.path.normpath(target.game_dir))
+    os.makedirs(os.path.join(staging, game_name))
+    try:
+        with open(os.path.join(staging, "instance.cfg"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(prism_instance_cfg(target.name or plan.name or os.path.basename(target.instance_dir)))
+        with open(os.path.join(staging, launcher_pack.PACK_NAME), "w", encoding="utf-8") as f:
+            json.dump({"components": components, "formatVersion": 1}, f, indent=4, ensure_ascii=False)
+        if os.path.exists(target.instance_dir):  # Пока качали справочник, папку с таким именем заняли
+            target.instance_dir = unique_dir(root, os.path.basename(os.path.normpath(target.instance_dir)))
+            target.game_dir = os.path.join(target.instance_dir, game_name)
+        os.rename(staging, target.instance_dir)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
 
 # --- Установка ---
@@ -565,9 +630,9 @@ def prepare_target(target: Target, plan: PackPlan, session=None, progress=lambda
                                 plan.game_version))
         target.version_id = official_launcher.install_loader(loader_dir, plan.loader, plan.game_version,
                                                              plan.loader_version, session, progress)
-    os.makedirs(target.game_dir, exist_ok=True)
-    if target.instance_dir:
+    if target.instance_dir:  # Prism / MultiMC: сборка появляется в лаунчере сразу целиком
         write_prism_instance(target, plan, session)
+    os.makedirs(target.game_dir, exist_ok=True)
 
 
 def transfer(game_dir: str, kind: str, root: str, name: str, game_version: str, loader: Optional[str],

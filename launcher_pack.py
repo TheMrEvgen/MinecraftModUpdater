@@ -97,12 +97,20 @@ def set_loader_version(path: str, loader: str, version: str) -> str:
     return backup
 
 
-def fetch_requires(uid: str, version: str, session=None) -> List[Dict]:
-    """Требования версии компонента из справочника Prism: [{"uid", "suggests"|"equals"}]."""
+def fetch_meta(uid: str, version: str, session=None) -> Dict:
+    """Версия компонента из справочника Prism: name, requires, volatile и прочее."""
     from mod_updater_logic import SESSION
     response = (session or SESSION).get(f"{META}/{uid}/{version}.json", timeout=20)
     response.raise_for_status()
-    return list(response.json().get("requires") or [])
+    data = response.json()
+    if not isinstance(data, dict):
+        raise ValueError(tr("Справочник Prism вернул непонятный ответ для {0} {1}", uid, version))
+    return data
+
+
+def fetch_requires(uid: str, version: str, session=None) -> List[Dict]:
+    """Требования версии компонента из справочника Prism: [{"uid", "suggests"|"equals"}]."""
+    return list(fetch_meta(uid, version, session).get("requires") or [])
 
 
 def set_game_version(path: str, game_version: str, loader: Optional[str], loader_version: Optional[str],
