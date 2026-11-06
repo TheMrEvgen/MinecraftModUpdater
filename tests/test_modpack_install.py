@@ -353,3 +353,82 @@ def test_prism_instance_without_loader_meta(tmp_path):
     pack = json.load(open(os.path.join(target.instance_dir, "mmc-pack.json"), encoding="utf-8"))
     assert pack["components"][-1] == {"uid": "net.neoforged", "version": "21.1.262"}
     assert os.listdir(tmp_path) == ["Пак"]
+
+
+def test_repair_downloads_missing_and_broken(tmp_path, monkeypatch):
+    """Проверка сборки: недостающее и испорченное качается заново, выключенное остаётся выключенным."""
+    game = str(tmp_path / "game")
+    files = [_file("a.jar", b"a"), _file("b.jar", b"b"), _file("c.jar", b"c"), _file("d.jar", b"d")]
+    archive = tmp_path / "v1.mrpack"
+    make_mrpack(archive, files, {"overrides/config/x.toml": "x=1", "overrides/config/mine.toml": "m=1"})
+    session = FakeSession({f"https://cdn.modrinth.com/{n}.jar": n.encode() for n in "abcd"})
+    monkeypatch.setattr("mod_updater_logic.SESSION", session)
+    plan = modpack_install.load_plan(str(archive))
+    modpack_install.install(plan, modpack_install.Target(game), session=session)
+    modpack_install.save_state(plan, "proj", game)
+    mods = os.path.join(game, "mods")
+    os.remove(os.path.join(mods, "a.jar"))                                     # Пропал
+    open(os.path.join(mods, "b.jar"), "wb").write(b"oops")                     # Оборвалась загрузка
+    os.rename(os.path.join(mods, "c.jar"), os.path.join(mods, "c.jar.disabled"))
+    open(os.path.join(mods, "c.jar.disabled"), "wb").write(b"bad")             # Выключенный и испорченный
+    os.remove(os.path.join(game, "config", "x.toml"))                          # Пропала настройка
+    open(os.path.join(game, "config", "mine.toml"), "w").write("m=my")         # Изменённая — не трогаем
+    open(os.path.join(mods, "user.jar"), "wb").write(b"u")                     # Свой мод — не трогаем
+
+    state = modpack_install.load_state(game)
+    assert state["archive"] == os.path.abspath(str(archive))
+    again = modpack_install.installed_plan(state, str(tmp_path / "dl"))
+    repair = modpack_install.plan_repair(again, game)
+    assert [f.path for f in repair.missing] == ["mods/a.jar"]
+    assert [f.path for f in repair.broken] == ["mods/b.jar", "mods/c.jar"]
+    assert repair.overrides == ["config/x.toml"] and repair.checked == 4 and not repair.empty
+    assert modpack_install.apply_repair(repair, again, game, session=session) == []
+    assert sorted(os.listdir(mods)) == ["ModUpdater_Backups", "a.jar", "b.jar", "c.jar.disabled", "d.jar", "user.jar"] \
+        or sorted(n for n in os.listdir(mods) if n.endswith((".jar", ".disabled"))) == [
+            "a.jar", "b.jar", "c.jar.disabled", "d.jar", "user.jar"]
+    assert open(os.path.join(mods, "b.jar"), "rb").read() == b"b"
+    assert open(os.path.join(mods, "c.jar.disabled"), "rb").read() == b"c"
+    assert open(os.path.join(game, "config", "x.toml")).read() == "x=1"
+    assert open(os.path.join(game, "config", "mine.toml")).read() == "m=my"
+    assert modpack_install.plan_repair(again, game).empty
+    assert not [n for n in os.listdir(os.path.join(game, modpack_install.STATE_DIR)) if n.startswith("repair-")]
+
+
+def test_same_version_for_curseforge_names():
+    """У CurseForge версия в manifest короче названия файла — это не «новая версия»."""
+    state = {"version": "1.24.1"}
+    assert modpack_install.same_version(state, {"version": "FTB StoneBlock 4 1.24.1", "filename": "x.zip"})
+    assert modpack_install.same_version(state, {"version": "", "filename": "ftb-stoneblock-4-1.24.1.zip"})
+    assert not modpack_install.same_version(state, {"version": "FTB StoneBlock 4 1.24.10", "filename": "a-1.24.10.zip"})
+    assert not modpack_install.same_version(state, {"version": "FTB StoneBlock 4 1.25.0", "filename": ""})
+    assert modpack_install.same_version({"version": "x", "file_id": 7}, {"id": 7, "version": "y"})
+    assert not modpack_install.same_version({"version": "1.0", "file_id": 7}, {"id": 8, "version": "1.0"})
+
+
+def test_check_update_no_false_alarm(tmp_path, monkeypatch):
+    os.makedirs(tmp_path / modpack_install.STATE_DIR)
+    with open(modpack_install.state_path(str(tmp_path)), "w", encoding="utf-8") as f:
+        json.dump({"project_id": "cf:1", "version": "1.24.1"}, f)
+    monkeypatch.setattr(modpack_install, "latest_pack_file",
+                        lambda p: {"version": "FTB StoneBlock 4 1.24.1", "filename": "ftb-1.24.1.zip", "id": 5})
+    assert modpack_install.check_update(str(tmp_path)) is None
+    monkeypatch.setattr(modpack_install, "latest_pack_file",
+                        lambda p: {"version": "FTB StoneBlock 4 1.25.0", "filename": "ftb-1.25.0.zip", "id": 6})
+    assert modpack_install.check_update(str(tmp_path))["latest"]["id"] == 6
+
+
+def test_manual_files_picked_from_downloads(tmp_path):
+    """Файлы «только с сайта», скачанные браузером, программа берёт из «Загрузок» — если совпала контрольная сумма."""
+    import hashlib
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    (downloads / "good.jar").write_bytes(b"good")
+    (downloads / "fake.jar").write_bytes(b"other")
+    good = modpack_install.PackFile("mods/good.jar", None, {"sha1": hashlib.sha1(b"good").hexdigest()})
+    fake = modpack_install.PackFile("mods/fake.jar", None, {"sha1": hashlib.sha1(b"real").hexdigest()})
+    pack = modpack_install.PackFile("resourcepacks/Pipes.zip", None, {})
+    (downloads / "Pipes.zip").write_bytes(b"zip")
+    picked = modpack_install.pick_manual_downloads([good, fake, pack], str(tmp_path / "game"), str(downloads))
+    assert picked == [good, pack]
+    assert (tmp_path / "game" / "mods" / "good.jar").read_bytes() == b"good"
+    assert not (tmp_path / "game" / "mods" / "fake.jar").exists() and (downloads / "good.jar").exists()

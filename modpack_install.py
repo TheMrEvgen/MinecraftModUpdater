@@ -60,6 +60,7 @@ class PackPlan:
     archive: str                      # Сам файл сборки (для overrides)
     overrides: List[str]              # Папки внутри архива, которые распаковываются в папку игры
     kind: str = "mrpack"              # mrpack — Modrinth, curseforge — .zip с manifest.json
+    source_file: Optional[Dict] = None  # Выпуск из каталога: pack_file() — {"url", "filename", "version", "id"}
 
     @property
     def manual(self) -> List[PackFile]:
@@ -727,25 +728,67 @@ def _extract_overrides(plan: PackPlan, game_dir: str):
 # --- Файл сборки из каталога ---
 
 def latest_pack_file(project_id: str) -> Dict:
-    """Последний выпуск сборки: {"url", "filename", "version"} (Modrinth .mrpack или CurseForge .zip)."""
+    """Последний выпуск сборки: {"url", "filename", "version", "id"} (Modrinth .mrpack или CurseForge .zip)."""
+    return pack_file(project_id)
+
+
+def same_version(state: Dict, info: Dict) -> bool:
+    """
+    Поставлен ли этот выпуск сборки. Точнее всего — по id файла (запоминается при установке). У старых установок
+    его нет: у CurseForge версия в manifest («1.24.1») короче названия файла («FTB StoneBlock 4 1.24.1»), поэтому
+    ищем её в названии целиком (1.24.1 ≠ 1.24.10).
+    """
+    if state.get("file_id") and info.get("id"):
+        return str(state["file_id"]) == str(info["id"])
+    version = str(state.get("version") or "")
+    if not version:
+        return False
+    if version == info.get("version"):
+        return True
+    pattern = r"(?<![\w.])" + re.escape(version) + r"(?!\w|\.\d)"  # «-1.24.1.zip» — да, «1.24.10» — нет
+    return any(re.search(pattern, str(info.get(k) or "")) for k in ("version", "filename"))
+
+
+def pack_file(project_id: str, state: Optional[Dict] = None) -> Dict:
+    """
+    Файл выпуска сборки: {"url", "filename", "version", "id"}. state — поставленная сборка: тогда ищется именно
+    её выпуск (для проверки и докачки), иначе — последний.
+    """
     import curseforge
     from mod_updater_logic import MODRINTH_API_BASE, _get_json
     if curseforge.is_curseforge(project_id):
-        files = curseforge._get(f"/mods/{curseforge.mod_id(project_id)}/files", {"pageSize": 30}).get("data") or []
-        files = [f for f in files if not f.get("isServerPack")]
-        files.sort(key=lambda f: (f.get("releaseType") != curseforge.RELEASE, -(_stamp(f.get("fileDate")))))
-        if not files:
-            raise ValueError(tr("У сборки нет файлов для скачивания"))
-        file = files[0]
-        if not file.get("downloadUrl"):
-            raise ValueError(tr("Автор разрешает скачивать сборку только с сайта CurseForge"))
-        return {"url": file["downloadUrl"], "filename": file["fileName"], "version": file.get("displayName") or ""}
-    versions = _get_json(f"{MODRINTH_API_BASE}/project/{project_id}/version")
-    if not versions:
+        files = []
+        for index in range(0, 150, 50):  # Свой выпуск может быть не самым новым — смотрим несколько страниц
+            page = curseforge._get(f"/mods/{curseforge.mod_id(project_id)}/files",
+                                   {"pageSize": 50, "index": index}).get("data") or []
+            files += [f for f in page if not f.get("isServerPack")]
+            if state is None or len(page) < 50:
+                break
+        infos = [{"url": f.get("downloadUrl"), "filename": f.get("fileName") or "", "id": f.get("id"),
+                  "version": f.get("displayName") or "", "release": f.get("releaseType") == curseforge.RELEASE,
+                  "date": _stamp(f.get("fileDate"))} for f in files]
+        infos.sort(key=lambda i: (not i["release"], -i["date"]) if state is None else -i["date"])
+    else:
+        versions = _get_json(f"{MODRINTH_API_BASE}/project/{project_id}/version") or []
+        infos = []
+        for version in versions:
+            primary = next((f for f in version["files"] if f.get("primary")), (version.get("files") or [None])[0])
+            if primary:
+                infos.append({"url": primary["url"], "filename": primary["filename"], "id": version.get("id"),
+                              "version": version.get("version_number") or "",
+                              "release": version.get("version_type") == "release"})
+        if state is None:
+            infos.sort(key=lambda i: not i["release"])  # Список уже от новых к старым: первый релиз
+    if state is not None:
+        infos = [i for i in infos if same_version(state, i)]
+        if not infos:
+            raise ValueError(tr("Выпуск {0} этой сборки больше не найден в каталоге.", state.get("version") or "?"))
+    if not infos:
         raise ValueError(tr("У сборки нет файлов для скачивания"))
-    version = next((v for v in versions if v.get("version_type") == "release"), versions[0])
-    primary = next((f for f in version["files"] if f.get("primary")), version["files"][0])
-    return {"url": primary["url"], "filename": primary["filename"], "version": version.get("version_number") or ""}
+    info = infos[0]
+    if not info.get("url"):
+        raise ValueError(tr("Автор разрешает скачивать сборку только с сайта CurseForge"))
+    return {k: info[k] for k in ("url", "filename", "version", "id")}
 
 
 def pack_changelog(project_id: str, current_version: str, target_version: str = "", game_version: str = "",
@@ -863,13 +906,17 @@ def _override_members(plan: PackPlan) -> Dict[str, zipfile.ZipInfo]:
 
 def save_state(plan: PackPlan, project_id: str, game_dir: str, title: str = ""):
     """Запоминает поставленную сборку: из какого проекта, какая версия и какие файлы — её."""
+    previous = load_state(game_dir)
     overrides = {}
     for relative in _override_members(plan):
         if os.path.isfile(_abs(game_dir, relative)):
             overrides[relative] = _sha1(_abs(game_dir, relative))
     state = {"project_id": project_id, "title": title or plan.name, "version": plan.version,
              "game_version": plan.game_version, "loader": plan.loader, "loader_version": plan.loader_version,
-             "files": [f.path for f in plan.files], "overrides": overrides}
+             "files": [f.path for f in plan.files], "overrides": overrides,
+             "archive": os.path.abspath(plan.archive) if plan.archive else "",
+             "file_id": (plan.source_file or {}).get("id")
+             or ((previous or {}).get("file_id") if (previous or {}).get("version") == plan.version else None)}
     os.makedirs(os.path.dirname(state_path(game_dir)), exist_ok=True)
     with open(state_path(game_dir), "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=1)
@@ -1033,6 +1080,142 @@ def check_update(game_dir: str) -> Optional[Dict]:
     if not state:
         return None
     latest = latest_pack_file(state["project_id"])
-    if latest.get("version") and latest["version"] != state.get("version"):
+    if latest.get("version") and not same_version(state, latest):
         return {"state": state, "latest": latest}
     return None
+
+
+# --- Проверка и докачка поставленной сборки ---
+#
+# Сборка сверяется со своим выпуском (тем, что поставлен, а не последним): файлы, которых нет на диске, и файлы,
+# у которых не совпала контрольная сумма (оборванная или испорченная загрузка), качаются заново. Выключенный мод
+# остаётся выключенным. Пропавшие настройки из сборки возвращаются, а изменённые пользователем — не трогаем.
+# Миры не проверяются: в них играют, и они меняются.
+
+def installed_plan(state: Dict, folder: str, session=None) -> PackPlan:
+    """План поставленного выпуска: из сохранённого архива или скачанный заново из каталога."""
+    archive = state.get("archive") or ""
+    plan = None
+    if archive and os.path.isfile(archive):
+        try:
+            plan = load_plan(archive)
+        except (ValueError, OSError, zipfile.BadZipFile):
+            plan = None
+        if plan is not None and str(plan.version) != str(state.get("version") or ""):
+            plan = None  # Архив от другого выпуска
+    if plan is None:
+        info = pack_file(state["project_id"], state)
+        plan = load_plan(download_pack(info, folder, session))
+        plan.source_file = info
+    return plan
+
+
+@dataclass
+class RepairPlan:
+    missing: List[PackFile]           # Файлов сборки нет на диске
+    broken: List[PackFile]            # Есть, но контрольная сумма не совпала
+    overrides: List[str]              # Пропавшие настройки из сборки
+    manual: List[PackFile]            # Пропали файлы, которые автор разрешает качать только с сайта
+    checked: int                      # Сколько файлов проверено
+
+    @property
+    def download(self) -> List[PackFile]:
+        return self.missing + self.broken
+
+    @property
+    def empty(self) -> bool:
+        return not (self.missing or self.broken or self.overrides or self.manual)
+
+
+def plan_repair(plan: PackPlan, game_dir: str, progress: Callable[[int, int, str], None] = lambda d, t, s: None,
+                cancelled: Callable[[], bool] = lambda: False) -> RepairPlan:
+    """Что не так со сборкой: каких файлов нет и какие испорчены (сверка по контрольным суммам)."""
+    files = [f for f in plan.files if not f.world]
+    missing, broken, manual = [], [], []
+    for i, item in enumerate(files):
+        if cancelled():
+            raise InstallCancelled()
+        progress(i, len(files), tr("Проверяем {0}", item.name or os.path.basename(item.path)))
+        current = _on_disk(game_dir, item.path)
+        if not current:
+            (missing if item.url else manual).append(item)
+        elif item.url and item.hashes and not _check_hash(_abs(game_dir, current), item.hashes):
+            broken.append(item)
+    overrides = [r for r in sorted(_override_members(plan)) if not os.path.isfile(_abs(game_dir, r))]
+    progress(len(files), len(files), tr("Проверка закончена"))
+    return RepairPlan(missing, broken, overrides, manual, len(files))
+
+
+def apply_repair(repair: RepairPlan, plan: PackPlan, game_dir: str,
+                 progress: Callable[[int, int, str], None] = lambda d, t, s: None,
+                 cancelled: Callable[[], bool] = lambda: False, session=None, job=None) -> List[str]:
+    """Качает недостающее и испорченное, возвращает пропавшие настройки. Возвращает ошибки (пустой — всё в порядке)."""
+    import tempfile
+
+    from mod_updater_logic import SESSION
+    errors = []
+    if repair.download:
+        work = tempfile.mkdtemp(prefix="repair-", dir=os.path.join(game_dir, STATE_DIR) if os.path.isdir(
+            os.path.join(game_dir, STATE_DIR)) else None)
+        try:
+            jobs = [(item, os.path.join(work, f"{i}.part")) for i, item in enumerate(repair.download)]
+            failed = download_files(jobs, progress, cancelled, session or SESSION, job=job)
+            for item, part in jobs:
+                if item.path in failed:
+                    errors.append(f"{item.path}: {failed[item.path]}")
+                    continue
+                relative = _on_disk(game_dir, item.path) or item.path  # Выключенный мод остаётся выключенным
+                destination = _abs(game_dir, relative)
+                os.makedirs(os.path.dirname(destination), exist_ok=True)
+                os.replace(part, destination)
+        finally:
+            import shutil
+            shutil.rmtree(work, ignore_errors=True)
+    if repair.overrides:
+        progress(len(repair.download), len(repair.download), tr("Возвращаем настройки сборки…"))
+        members = _override_members(plan)
+        with zipfile.ZipFile(plan.archive) as archive:
+            for relative in repair.overrides:
+                destination = _abs(game_dir, relative)
+                os.makedirs(os.path.dirname(destination), exist_ok=True)
+                with archive.open(members[relative]) as source, open(destination, "wb") as out:
+                    out.write(source.read())
+    picked = pick_manual_downloads(repair.manual, game_dir)
+    repair.manual = [m for m in repair.manual if m not in picked]  # Остались — их всё ещё нужно скачать с сайта
+    spread_datapacks(plan, game_dir)
+    logging.info(tr("Сборка проверена: перекачано {0}, возвращено настроек {1}, ошибок {2}",
+                    len(repair.download) - len(errors), len(repair.overrides), len(errors)))
+    return errors
+
+
+def pick_manual_downloads(items: List[PackFile], game_dir: str, folder: Optional[str] = None) -> List[PackFile]:
+    """
+    Файлы «только с сайта», которые пользователь скачал браузером: ищем их в папке «Загрузки» по имени, сверяем
+    контрольную сумму и кладём в сборку (копией — файл в «Загрузках» остаётся). Возвращает разложенные.
+    """
+    import shutil
+    folder = folder or downloads_folder()
+    picked = []
+    for item in items:
+        candidate = os.path.join(folder, os.path.basename(item.path))
+        if not os.path.isfile(candidate) or not _check_hash(candidate, item.hashes):
+            continue
+        destination = _abs(game_dir, item.path)
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        shutil.copy2(candidate, destination)
+        picked.append(item)
+    if picked:
+        logging.info(tr("Сборка: из папки «Загрузки» взято файлов — {0}", len(picked)))
+    return picked
+
+
+def remember_source(game_dir: str, plan: PackPlan):
+    """Дописывает к запомненной сборке, из какого архива и выпуска она (у установок старых версий этого нет)."""
+    state = load_state(game_dir)
+    if not state or str(state.get("version") or "") != str(plan.version):
+        return
+    state["archive"] = os.path.abspath(plan.archive)
+    if (plan.source_file or {}).get("id"):
+        state["file_id"] = plan.source_file["id"]
+    with open(state_path(game_dir), "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=1)

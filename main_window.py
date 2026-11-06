@@ -716,6 +716,10 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         bisect.setEnabled(has_data and not self._profile().get("bisect"))
         tools.addAction(bisect)
         tools.addAction(make_action(tools, t, "shield", tr("Проверить целостность файлов"), self._check_integrity))
+        import modpack_install
+        if modpack_install.load_state(self._profile().get("mods_path", "")):  # Сборка из каталога — сверить с выпуском
+            tools.addAction(make_action(tools, t, "download", tr("Проверить и докачать сборку…"),
+                                        lambda: self._repair_modpack()))
         tools.addAction(make_action(tools, t, "shield", tr("Проверить моды на вирусы"), lambda: self._scan_malware(True)))
         menu.addAction(make_action(menu, t, "bar_chart", tr("Статистика сборки"), lambda: self._switch_page(PAGE_STATS)))
         menu.addAction(make_action(menu, t, "layers", tr("Моды во всех сборках…"), self._show_all_packs))

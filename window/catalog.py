@@ -359,6 +359,80 @@ class CatalogMixin:
         title = state.get("title") or self.current_profile_name
         self._run_modpack_update(game_dir, title, plan, dialog.update, old)
 
+    def _repair_modpack(self, name: Optional[str] = None):
+        """«Проверить и докачать»: сверить сборку из каталога с её выпуском и докачать недостающее и испорченное."""
+        import modpack_install
+        from ui.modpack_dialog import ModpackRepairDialog
+        if self._busy:
+            self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
+            return
+        if name and name != self.current_profile_name:
+            self._load_profile(name)
+        game_dir = self._profile().get("mods_path", "")
+        state = modpack_install.load_state(game_dir)
+        if not state:
+            self.toasts.show(tr("Проверять можно только сборки, поставленные из каталога программы."), "warning")
+            return
+        if not self._confirm_game_not_running([]):
+            return
+        dialog = ModpackRepairDialog(self, state, game_dir, os.path.join(app_config.CONFIG_DIR, "modpacks"))
+        if not dialog.exec() or not dialog.repair:
+            return
+        self._run_modpack_repair(game_dir, state.get("title") or self.current_profile_name, dialog.plan, dialog.repair)
+
+    def _run_modpack_repair(self, game_dir: str, title: str, plan, repair, job=None):
+        """Докачка сборки в фоне. job — «Повторить» для того, что не скачалось."""
+        import webbrowser
+
+        import downloads
+        from ui.modpack_dialog import _Worker
+        if self._busy:
+            self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
+            return
+        worker = _Worker("repair", plan=plan, game_dir=game_dir, update=repair)
+        if job:
+            job.restart(list(job.files))
+            job.cancel_callback = worker.stop
+            self._start_download_timer()
+        else:
+            job = self._start_download(tr("Докачка сборки «{0}»", title), "modpack", worker.stop)
+        worker.download = job
+        self._set_busy("task", tr("Докачиваем сборку «{0}»…", title))
+
+        def failed(error: str):
+            self._set_busy(None)
+            job.finish(downloads.FAILED if error else downloads.CANCELLED, error or tr("Отменено"))
+            if error:
+                self.toasts.show(tr("Сборка «{0}» не докачана: {1}", title, error), "error", timeout=15000)
+
+        def done(errors: list):
+            self._set_busy(None)
+            if self._profile().get("mods_path") == game_dir:
+                self._forget_profile_lists()
+            job.finish(downloads.FAILED if errors else downloads.DONE,
+                       tr("Не скачалось файлов: {0}", len(errors)) if errors else tr("Сборка в порядке"))
+            if errors:
+                left = [f for f in repair.download if any(e.startswith(f.path + ":") for e in errors)]
+                import modpack_install  # Повтор — только того, что не скачалось
+                again = modpack_install.RepairPlan(left, [], [], [], repair.checked)
+                job.retry_callback = lambda: self._run_modpack_repair(game_dir, title, plan, again, job)
+                self.toasts.show(tr("«{0}»: не скачалось файлов — {1}:\n{2}", title, len(errors), "\n".join(errors[:8])),
+                                 "warning", tr("Повторить"), job.retry, timeout=0)
+            else:
+                fixed = len(repair.download) + len(repair.overrides)
+                self.toasts.show(tr("Сборка «{0}» в порядке: восстановлено файлов — {1}.", title, fixed), "success",
+                                 timeout=10000)
+                self._notify_download(tr("Сборка проверена"), tr("«{0}» в порядке.", title))
+            if repair.manual:
+                self.toasts.show(tr("Скачайте с сайта CurseForge (автор запретил программам): {0}",
+                                    ", ".join(f.name for f in repair.manual[:5])), "warning", tr("Открыть страницы"),
+                                 lambda: [webbrowser.open(f.manual_url) for f in repair.manual if f.manual_url],
+                                 timeout=30000)
+
+        worker.installed.connect(done)
+        worker.failed.connect(failed)
+        worker.start()
+
     def _run_modpack_update(self, game_dir: str, title: str, plan, update, old: tuple, job=None):
         """Обновление сборки в фоне. job — «Повторить» после сбоя (сборка тогда осталась прежней)."""
         import downloads

@@ -5,7 +5,8 @@ from PyQt6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimati
 from PyQt6.QtGui import QAction, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QVBoxLayout,
+    QLineEdit, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QStyle, QStyledItemDelegate,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -198,48 +199,139 @@ class ElidedLabel(ClickableLabel):
 
 # --- Уведомления (toasts) ---
 
+def breakable(text: str, longest: int = 28) -> str:
+    """Разрешает перенос внутри длинных «слов» (ссылки, пути, имена классов Java): невидимый пробел после . / _ ( :"""
+    import re
+
+    def split(match):
+        return re.sub(r"([./\\_(:-])", "\\1\u200b", match.group(0))
+    return re.sub(r"\S{%d,}" % longest, split, text)
+
+
 class Toast(QFrame):
+    """
+    Уведомление: значок, текст и крестик сверху, кнопки снизу. Высота — по тексту с переносами строк. Длинный
+    текст свёрнут до COLLAPSED_LINES строк и раскрывается кнопкой «Подробнее»; текст можно выделить и скопировать.
+    """
     closed = pyqtSignal(object)
+    resized = pyqtSignal()
 
     KIND_ICONS = {"info": ("info", "info"), "success": ("check_circle", "success"),
                   "warning": ("alert", "warning"), "error": ("error", "danger")}
+    WIDTH = 400
+    COLLAPSED_LINES = 4
+    EXPANDED_LINES = 14  # Дальше — прокрутка
 
     def __init__(self, parent: QWidget, tokens: dict, text: str, kind: str, action_text: Optional[str],
                  action: Optional[Callable], timeout: int):
         super().__init__(parent)
         self.setObjectName("Toast")
         self.text = text
-        self.setFixedWidth(380)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 12, 10, 12)
-        layout.setSpacing(10)
+        self.setFixedWidth(self.WIDTH)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 12, 10, 10)
+        outer.setSpacing(6)
+        top = QHBoxLayout()
+        top.setSpacing(10)
         icon_name, color_key = self.KIND_ICONS.get(kind, self.KIND_ICONS["info"])
         icon_label = QLabel()
         icon_label.setPixmap(icons.pixmap(icon_name, tokens[color_key], 20))
+        icon_label.setFixedWidth(20)
         icon_label.setAlignment(Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(icon_label)
-        text_label = QLabel(text)
-        text_label.setWordWrap(True)
-        layout.addWidget(text_label, 1)
-        if action_text and action:
-            action_btn = QPushButton(action_text)
-            action_btn.setObjectName("ToastAction")
-            action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            action_btn.clicked.connect(lambda: (action(), self.dismiss()))
-            layout.addWidget(action_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignTop)
+        self.text_label = QLabel(breakable(text))
+        self.text_label.setWordWrap(True)
+        self.text_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.text_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.text_label.setStyleSheet("background: transparent;")
+        self.scroll = QScrollArea()  # Раскрытый длинный текст прокручивается, а не растягивает окно
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        self.scroll.setWidget(self.text_label)
+        top.addWidget(self.scroll, 1)
         close_btn = QPushButton()
         close_btn.setObjectName("IconButton")
         close_btn.setIcon(icons.icon("x", tokens["text_muted"], 14))
         close_btn.setFixedSize(26, 26)
         close_btn.clicked.connect(self.dismiss)
-        layout.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignTop)
+        top.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignTop)
+        outer.addLayout(top)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
+        buttons.addSpacing(30)  # Под текстом, а не под значком
+        self.more_btn = QPushButton(tr("Подробнее"))
+        self.more_btn.setObjectName("ToastAction")
+        self.more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.more_btn.clicked.connect(self.toggle_expanded)
+        buttons.addWidget(self.more_btn)
+        self.copy_btn = QPushButton(tr("Копировать"))  # Исходный текст — без невидимых переносов
+        self.copy_btn.setObjectName("ToastAction")
+        self.copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_btn.clicked.connect(self._copy)
+        buttons.addWidget(self.copy_btn)
+        buttons.addStretch()
+        if action_text and action:
+            action_btn = QPushButton(action_text)
+            action_btn.setObjectName("ToastAction")
+            action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            action_btn.clicked.connect(lambda: (action(), self.dismiss()))
+            buttons.addWidget(action_btn)
+        self.buttons_row = QWidget()
+        self.buttons_row.setLayout(buttons)
+        buttons.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self.buttons_row)
         add_shadow(self, tokens, 30, 0.45)
-        self.adjustSize()
+
+        self.ensurePolished()
+        self.text_label.ensurePolished()
+        text_width = self.WIDTH - 14 - 10 - 20 - 10 - 26 - 10
+        self.text_label.setFixedWidth(text_width - 12)  # Место под полосу прокрутки — перенос строк не меняется
+        self._line = self.text_label.fontMetrics().lineSpacing()
+        self._full_height = self.text_label.heightForWidth(text_width - 12)
+        self.text_label.setFixedHeight(self._full_height)
+        self.expandable = self._full_height > self._line * self.COLLAPSED_LINES + 2
+        self.expanded = False
+        self.more_btn.setVisible(self.expandable)
+        self.copy_btn.setVisible(self.expandable)
+        self.buttons_row.setVisible(self.expandable or bool(action_text and action))
+        self._apply_size()
+
         self._timer = QTimer(self, singleShot=True, interval=timeout)
         self._timer.timeout.connect(self.dismiss)
         if timeout > 0:
             self._timer.start()
         self._closing = False
+
+    def _apply_size(self):
+        lines = self.EXPANDED_LINES if self.expanded else self.COLLAPSED_LINES
+        visible = min(self._full_height, self._line * lines + 3)
+        self.scroll.setFixedHeight(visible)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded if self.expanded
+                                               else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.verticalScrollBar().setValue(0)
+        self.more_btn.setText(tr("Свернуть") if self.expanded else tr("Подробнее"))
+        height = 12 + max(visible, 26) + 10
+        if self.buttons_row.isVisibleTo(self):
+            height += 6 + self.buttons_row.sizeHint().height()
+        self.setFixedHeight(height)
+
+    def _copy(self):
+        QApplication.clipboard().setText(self.text)
+        self.copy_btn.setText(tr("Скопировано"))
+        restore = QTimer(self, singleShot=True, interval=1500)  # Дочерний таймер: умрёт вместе с уведомлением
+        restore.timeout.connect(lambda: self.copy_btn.setText(tr("Копировать")))
+        restore.start()
+
+    def toggle_expanded(self):
+        """Раскрыть или свернуть длинный текст. Раскрытое уведомление само не закрывается — его читают."""
+        self.expanded = not self.expanded
+        if self.expanded:
+            self._timer.stop()
+            self._timer.setInterval(0)
+        self._apply_size()
+        self.resized.emit()
 
     def enterEvent(self, event):
         self._timer.stop()  # Не закрываем, пока пользователь читает
@@ -278,6 +370,7 @@ class ToastManager(QObject):
             old.dismiss()
         toast = Toast(self.host, self.tokens, text, kind, action_text, action, timeout)
         toast.closed.connect(self._remove)
+        toast.resized.connect(self._layout)
         self.toasts.append(toast)
         if len(self.toasts) > 3:  # Не больше трёх уведомлений сразу — старые уходят
             self.toasts[0].dismiss()
@@ -293,7 +386,6 @@ class ToastManager(QObject):
     def _layout(self):
         y = self.host.height() - 20
         for toast in reversed(self.toasts):
-            toast.adjustSize()
             y -= toast.height()
             toast.move(self.host.width() - toast.width() - 20, y)
             y -= 10

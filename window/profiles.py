@@ -484,6 +484,8 @@ class ProfilesMixin:
         if modpack_install.load_state(self.profiles[name].get("mods_path", "")):
             menu.addAction(make_action(menu, t, "download", tr("Обновить сборку из каталога…"),
                                        lambda: self._update_modpack(name)))
+            menu.addAction(make_action(menu, t, "shield", tr("Проверить и докачать сборку…"),
+                                       lambda: self._repair_modpack(name)))
         menu.addSeparator()
         menu.addAction(make_action(menu, t, "copy", tr("Клонировать сборку…"), lambda: self._clone_profile(name)))
         menu.addAction(make_action(menu, t, "share", tr("Перенести в другой лаунчер…"),

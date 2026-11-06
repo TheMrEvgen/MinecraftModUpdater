@@ -29,6 +29,8 @@ class PaletteMixin:
             Command(tr("Сборка для сервера (.zip)"), self.export_server_pack, "package", keywords=tr("сервер экспорт хостинг")),
             Command(tr("Экспорт для CurseForge (.zip)"), self.export_curseforge, "package",
                     keywords=tr("экспорт curseforge сборка архив")),
+            Command(tr("Проверить и докачать сборку"), lambda: self._repair_modpack(), "shield",
+                    keywords=tr("проверка докачать перекачать битые файлы целостность сборка")),
             Command(tr("Перенести в другой лаунчер"), lambda: self._transfer_profile(self.current_profile_name),
                     "share", keywords=tr("перенос prism modrinth curseforge лаунчер")),
             Command(tr("Открыть папку"), lambda: self._open_path(self.mods_path), "folder"),

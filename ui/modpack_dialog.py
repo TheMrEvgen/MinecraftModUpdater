@@ -43,8 +43,9 @@ class _Worker(SafeThread):
         try:
             if self.job == "prepare":
                 info = modpack_install.latest_pack_file(self.project_id)
-                path = modpack_install.download_pack(info, self.folder)
-                self.prepared.emit(modpack_install.load_plan(path))
+                plan = modpack_install.load_plan(modpack_install.download_pack(info, self.folder))
+                plan.source_file = info  # Какой именно выпуск поставлен — для проверки обновлений и докачки
+                self.prepared.emit(plan)
             elif self.job == "install":
                 errors = modpack_install.install(self.plan, self.target, self.progress.emit, lambda: self._cancelled,
                                                  job=self.download)
@@ -61,10 +62,21 @@ class _Worker(SafeThread):
             elif self.job == "prepare_update":
                 info = modpack_install.latest_pack_file(self.project_id)
                 plan = modpack_install.load_plan(modpack_install.download_pack(info, self.folder))
+                plan.source_file = info
                 state = modpack_install.load_state(self.game_dir) or {}
                 changelog = modpack_install.pack_changelog(self.project_id, state.get("version") or "", plan.version,
                                                            plan.game_version or "")
                 self.prepared.emit((plan, modpack_install.plan_update(state, plan, self.game_dir), changelog))
+            elif self.job == "prepare_repair":  # Сверить сборку с её выпуском
+                state = modpack_install.load_state(self.game_dir) or {}
+                plan = modpack_install.installed_plan(state, self.folder)
+                modpack_install.remember_source(self.game_dir, plan)
+                self.prepared.emit((plan, modpack_install.plan_repair(plan, self.game_dir, self.progress.emit,
+                                                                      lambda: self._cancelled)))
+            elif self.job == "repair":
+                self.installed.emit(modpack_install.apply_repair(self.update, self.plan, self.game_dir,
+                                                                 self.progress.emit, lambda: self._cancelled,
+                                                                 job=self.download))
             else:
                 self.installed.emit(modpack_install.apply_update(self.update, self.plan, self.game_dir,
                                                                  self.progress.emit, lambda: self._cancelled,
@@ -449,3 +461,102 @@ class TransferDialog(FramelessDialog):
     @property
     def name(self) -> str:
         return self.name_edit.text().strip()
+
+
+class ModpackRepairDialog(FramelessDialog):
+    """Проверка сборки: сверка файлов с её выпуском. После accept(): plan и repair — что докачать (в фоне)."""
+
+    def __init__(self, parent, state: Dict, game_dir: str, downloads: str):
+        super().__init__(parent, tr("Проверка сборки"), 560)
+        self.plan = None
+        self.repair = None
+        self.worker: Optional[_Worker] = None
+        self.body.addWidget(label(state.get("title") or "", "SectionTitle"))
+        self.info = label(tr("Сверяем файлы сборки с её версией {0}…", state.get("version") or "?"), "Muted", wrap=True)
+        self.body.addWidget(self.info)
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setRange(0, 0)
+        self.body.addWidget(self.progress)
+        self.progress_text = label("", "Faint", wrap=True)
+        self.body.addWidget(self.progress_text)
+        self.details = QTextBrowser()
+        self.details.setMinimumHeight(160)
+        self.details.hide()
+        self.body.addWidget(self.details)
+        self.body.addStretch()
+        self.pages_btn = self.add_button(tr("Открыть страницы"), False, self._open_pages)
+        self.pages_btn.hide()
+        self.cancel_btn = self.add_button(tr("Отмена"), False, self._cancel)
+        self.fix_btn = self.add_button(tr("Докачать"), True, self.accept)
+        self.fix_btn.setEnabled(False)
+        self.finish_layout()
+        self.worker = _Worker("prepare_repair", state.get("project_id") or "", downloads, game_dir=game_dir)
+        self.worker.progress.connect(self._on_progress)
+        self.worker.prepared.connect(self._on_checked)
+        self.worker.failed.connect(self._on_failed)
+        self.worker.start()
+
+    def _on_progress(self, done: int, total: int, text: str):
+        self.progress.setRange(0, max(1, total))
+        self.progress.setValue(done)
+        self.progress_text.setText(tr("{0} из {1}: {2}", done, total, text))
+
+    def _on_checked(self, result):
+        self.plan, self.repair = result
+        repair = self.repair
+        self.progress.hide()
+        if repair.empty:
+            self.info.setText(tr("Всё в порядке: файлов проверено — {0}, все на месте и целые.", repair.checked))
+            self.progress_text.setText("")
+            self.cancel_btn.setText(tr("Закрыть"))
+            return
+        lines = [tr("Проверено файлов: {0}.", repair.checked)]
+        if repair.missing:
+            lines.append(tr("Не хватает: {0}", len(repair.missing)))
+        if repair.broken:
+            lines.append(tr("Испорчены (не совпала контрольная сумма): {0}", len(repair.broken)))
+        if repair.overrides:
+            lines.append(tr("Пропали настройки из сборки: {0}", len(repair.overrides)))
+        if repair.manual:
+            ready = sum(os.path.isfile(os.path.join(modpack_install.downloads_folder(), os.path.basename(f.path)))
+                        for f in repair.manual)
+            lines.append(tr("Нет файлов, которые автор разрешает скачивать только с сайта: {0}. Скачайте их по "
+                            "ссылкам в папку «Загрузки» — программа сама найдёт их и разложит по местам.",
+                            len(repair.manual)))
+            if ready:
+                lines.append(tr("Уже лежат в «Загрузках»: {0}", ready))
+            self.pages_btn.setText(tr("Открыть страницы ({0})", len(repair.manual)))
+            self.pages_btn.show()
+        self.info.setText("\n".join(lines))
+        self.progress_text.setText(tr("Ваши моды и изменённые вами настройки не трогаем; выключенные моды останутся "
+                                      "выключенными."))
+        names = [f"• {f.path}" for f in repair.missing] + [f"• {f.path} — " + tr("испорчен") for f in repair.broken]
+        names += [f"• {r}" for r in repair.overrides] + [f"• {f.path} — " + tr("только с сайта") for f in repair.manual]
+        self.details.setPlainText("\n".join(names[:500]))
+        self.details.show()
+        self.fix_btn.setEnabled(bool(repair.download or repair.overrides or repair.manual))
+
+    def _open_pages(self):
+        import webbrowser
+        for item in self.repair.manual if self.repair else []:
+            if item.manual_url:
+                webbrowser.open(item.manual_url)
+
+    def _on_failed(self, error: str):
+        if not error:
+            super().reject()
+            return
+        self.progress.hide()
+        self.progress_text.setText(tr("Не удалось проверить: {0}", error))
+
+    def _cancel(self):
+        if self.worker and self.worker.isRunning():
+            self.progress_text.setText(tr("Отменяем…"))
+            self.worker.stop()
+            self.worker.wait(3000)
+        super().reject()
+
+    def reject(self):
+        self._cancel()
+
