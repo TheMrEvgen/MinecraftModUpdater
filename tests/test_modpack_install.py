@@ -228,7 +228,8 @@ def test_curseforge_pack_downloads_maps(tmp_path, monkeypatch):
             "hashes": [{"algo": 1, "value": hashlib.sha1(jar).hexdigest()}]},
         2: {"id": 2, "modId": 20, "fileName": "island.zip", "downloadUrl": "https://edge/island.zip", "hashes": []},
         3: {"id": 3, "modId": 30, "fileName": "Плоский мир.zip", "downloadUrl": "https://edge/flat.zip", "hashes": []},
-        4: {"id": 4, "modId": 40, "fileName": "dp.zip", "downloadUrl": "https://edge/dp.zip", "hashes": []},
+        4: {"id": 4, "modId": 40, "fileName": "dp.zip", "downloadUrl": "https://edge/dp.zip",
+            "hashes": [{"algo": 1, "value": hashlib.sha1(b"datapack").hexdigest()}]},
     }
     cf_mods = {10: {"id": 10, "classId": 6, "name": "Мод"}, 20: {"id": 20, "classId": 17, "name": "Остров"},
                30: {"id": 30, "classId": 17, "name": "Плоский"}, 40: {"id": 40, "classId": 6945, "name": "Датапак"}}
@@ -242,15 +243,22 @@ def test_curseforge_pack_downloads_maps(tmp_path, monkeypatch):
     with zipfile.ZipFile(archive, "w") as z:
         z.writestr("manifest.json", json.dumps(manifest))
     plan = modpack_install.load_plan(str(archive))
-    assert [(f.path, f.world) for f in plan.files] == [("mods/mod.jar", False), ("saves/island.zip", True),
-                                                       ("saves/Плоский мир.zip", True)]
-    session = FakeSession({"https://edge/mod.jar": jar, "https://edge/island.zip": world, "https://edge/flat.zip": flat})
+    assert [(f.path, f.world, f.datapack) for f in plan.files] == [
+        ("mods/mod.jar", False, False), ("saves/island.zip", True, False), ("saves/Плоский мир.zip", True, False),
+        ("datapacks/dp.zip", False, True)]
+    assert plan.kind == "curseforge"
+    session = FakeSession({"https://edge/mod.jar": jar, "https://edge/island.zip": world, "https://edge/flat.zip": flat,
+                           "https://edge/dp.zip": b"datapack"})
     game = tmp_path / "game"
     assert modpack_install.install(plan, modpack_install.Target(str(game)), session=session) == []
     assert (game / "mods" / "mod.jar").read_bytes() == jar
     assert (game / "saves" / "Остров" / "level.dat").read_bytes() == b"lvl"
     assert (game / "saves" / "Плоский мир" / "region" / "r.0.0.mca").read_bytes() == b"f"
     assert sorted(os.listdir(game / "saves")) == ["Остров", "Плоский мир"]  # Архивы карт удалены
+    # Датапак: общая папка datapacks и копия в каждом мире сборки
+    assert (game / "datapacks" / "dp.zip").read_bytes() == b"datapack"
+    for world in ("Остров", "Плоский мир"):
+        assert (game / "saves" / world / "datapacks" / "dp.zip").read_bytes() == b"datapack"
 
     # Обновление: уже поставленную карту не трогаем (в ней играют), новую — добавляем
     modpack_install.save_state(plan, "cf:1", str(game))

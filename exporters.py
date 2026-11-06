@@ -143,3 +143,107 @@ def build_mrpack_index(mods_data: List[Dict], game_version: str, loader: str, lo
 def write_mrpack(path: str, index: Dict) -> None:
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("modrinth.index.json", json.dumps(index, indent=4, ensure_ascii=False))
+
+
+# --- Сборка CurseForge (.zip с manifest.json) ---
+#
+# Моды с CurseForge записываются ссылкой (проект и файл) — CurseForge App скачает их сам. Остальные файлы
+# (моды не с CurseForge, настройки, миры…) кладутся в папку overrides архива: при импорте приложение
+# распаковывает её в папку игры. Такой архив импортируется в CurseForge App: «Создать профиль» → «Импорт».
+
+CURSEFORGE_OVERRIDES = "overrides"
+
+
+def curseforge_loader_id(loader: str, game_version: str, loader_version: str) -> str:
+    """«forge-47.2.0», «neoforge-21.1.77», «fabric-0.16.5» — как загрузчик записан в manifest.json."""
+    version = loader_version or ""
+    if loader == "forge" and version.startswith(f"{game_version}-"):
+        version = version[len(game_version) + 1:]
+    return f"{loader}-{version}"
+
+
+def build_curseforge_manifest(name: str, version: str, game_version: str, loader: str, loader_version: str,
+                              files: List[tuple], author: str = "") -> Dict:
+    """files — [(id проекта, id файла)] модов с CurseForge."""
+    return {
+        "minecraft": {"version": game_version,
+                      "modLoaders": [{"id": curseforge_loader_id(loader, game_version, loader_version), "primary": True}]
+                      if loader else []},
+        "manifestType": "minecraftModpack", "manifestVersion": 1,
+        "name": name, "version": version or "1.0", "author": author,
+        "files": [{"projectID": int(p), "fileID": int(f), "required": True} for p, f in files],
+        "overrides": CURSEFORGE_OVERRIDES,
+    }
+
+
+def write_curseforge_pack(path: str, manifest: Dict, overrides: List[tuple],
+                          progress=lambda done, total: None) -> int:
+    """
+    Пишет .zip сборки CurseForge. overrides — [(файл или папка на диске, путь в папке игры)]; папки — целиком.
+    Возвращает число файлов в overrides. Пишется во временный файл и подменяется в конце.
+    """
+    import os
+    items = []
+    for source, relative in overrides:
+        if os.path.isdir(source):
+            for root, _, names in os.walk(source):
+                for name in names:
+                    full = os.path.join(root, name)
+                    items.append((full, relative.rstrip("/") + "/" + os.path.relpath(full, source).replace(os.sep, "/")))
+        elif os.path.isfile(source):
+            items.append((source, relative))
+    tmp = path + ".part"
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+        for i, (source, relative) in enumerate(items):
+            zf.write(source, f"{CURSEFORGE_OVERRIDES}/{relative}")
+            progress(i + 1, len(items))
+    os.replace(tmp, path)
+    return len(items)
+
+
+CURSEFORGE_EXPORT_FOLDERS = ("config", "defaultconfigs", "kubejs")  # Настройки сборки, которые кладём в архив
+
+
+def build_curseforge_export(path: str, entries: List[Dict], game_dir: str, name: str, game_version: str,
+                            loader: str, loader_version: str = "") -> tuple:
+    """
+    Экспорт сборки в формат CurseForge. Моды, опознанные на CurseForge (и уже как моды CurseForge, и по
+    отпечатку файла), записываются ссылкой; остальные кладутся в архив целиком. Возвращает (по ссылке, в архиве).
+    """
+    import os
+
+    import curseforge
+    from content import enabled_name
+    from mod_updater_logic import get_latest_loader_version
+    if loader and not loader_version:
+        loader_version = get_latest_loader_version(loader, game_version) or ""
+    refs, unknown, seen = {}, [], set()
+    for entry in entries:
+        filepath = entry.get("filepath")
+        if not filepath or os.path.normcase(filepath) in seen or not os.path.isfile(filepath):
+            continue
+        seen.add(os.path.normcase(filepath))
+        info = entry.get("installed_info") or {}
+        if curseforge.is_curseforge(entry.get("project_id")) and info.get("cf_file_id"):
+            refs[curseforge.mod_id(entry["project_id"])] = info["cf_file_id"]
+        else:
+            unknown.append(filepath)
+    if unknown and curseforge.available():  # Мод с Modrinth часто есть и на CurseForge — ищем по отпечатку
+        try:
+            prints = {curseforge.file_fingerprint(p): p for p in unknown}
+            for fp, match in curseforge.match_fingerprints(prints).items():
+                file = match.get("file") or {}
+                if match.get("mod_id") and file.get("id") and fp in prints:
+                    refs[int(match["mod_id"])] = int(file["id"])
+                    unknown.remove(prints.pop(fp))
+        except Exception as e:  # Без сети всё просто окажется внутри архива
+            import logging
+            logging.warning(tr("CurseForge: не удалось опознать моды по отпечатку: {0}", e))
+    overrides = [(p, "mods/" + enabled_name(os.path.basename(p))) for p in unknown]
+    overrides += [(os.path.join(game_dir, n), n) for n in CURSEFORGE_EXPORT_FOLDERS
+                  if game_dir and os.path.isdir(os.path.join(game_dir, n))]
+    manifest = build_curseforge_manifest(name, "1.0", game_version, loader, loader_version, sorted(refs.items()))
+    write_curseforge_pack(path, manifest, overrides)
+    return len(refs), len(unknown)

@@ -6,7 +6,9 @@ import datetime
 import logging
 import os
 import shutil
+import sys
 import zipfile
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Set
 
 from content import MODS, ContentType, enabled_name, is_disabled
@@ -158,6 +160,20 @@ def movable_items(source: str) -> List[str]:
                   if name.lower() not in LAUNCHER_ITEMS and not name.lower().startswith("launcher_"))
 
 
+def folder_size(path: str) -> int:
+    """Размер файла или папки со всем содержимым, байт."""
+    if os.path.isfile(path):
+        return os.path.getsize(path)
+    total = 0
+    for root, _, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return total
+
+
 def _inside(path: str, parent: str) -> bool:
     path, parent = (os.path.normcase(os.path.realpath(p)) for p in (path, parent))
     return path == parent or path.startswith(parent.rstrip(os.sep) + os.sep)
@@ -174,6 +190,13 @@ def move_game_dir(source: str, target: str, keep_source: bool = False) -> List[s
     if _inside(target, source):
         raise ValueError(tr("Новая папка находится внутри старой — выберите папку вне её."))
     os.makedirs(target, exist_ok=True)
+    if keep_source or os.stat(source).st_dev != os.stat(target).st_dev:  # Файлы копируются — нужно место
+        need = sum(folder_size(os.path.join(source, n)) for n in movable_items(source))
+        free = shutil.disk_usage(target).free
+        if need > free:
+            from view_model import format_size
+            raise ValueError(tr("Не хватает места: сборке нужно {0}, а на диске свободно {1}.",
+                                format_size(need), format_size(free)))
     moved = []
     for name in movable_items(source):
         src, dst = os.path.join(source, name), os.path.join(target, name)
@@ -200,6 +223,99 @@ def move_game_dir(source: str, target: str, keep_source: bool = False) -> List[s
     else:
         logging.info(tr("Сборка {0} перенесена в {1}: {2}", source, target, what))
     return moved
+
+
+# --- Удаление сборки с диска ---
+
+def to_recycle_bin(path: str):
+    """Удаляет файл или папку в Корзину Windows (можно восстановить). Не Windows — удаляет насовсем."""
+    if not os.path.exists(path):
+        return
+    if sys.platform != "win32":
+        shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [("hwnd", wintypes.HWND), ("wFunc", ctypes.c_uint), ("pFrom", ctypes.c_wchar_p),
+                    ("pTo", ctypes.c_wchar_p), ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL),
+                    ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", ctypes.c_wchar_p)]
+
+    fo_delete, flags = 3, 0x0040 | 0x0010 | 0x0004 | 0x0400  # ALLOWUNDO | NOCONFIRMATION | SILENT | NOERRORUI
+    operation = SHFILEOPSTRUCTW(None, fo_delete, os.path.abspath(path) + "\0", None, flags, False, None, None)
+    code = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
+    if code or operation.fAnyOperationsAborted or os.path.exists(path):
+        raise OSError(tr("Не удалось удалить {0} (код {1}) — возможно, файлы открыты в игре или лаунчере.", path, code))
+
+
+def _protected(path: str) -> bool:
+    """Папки, которые нельзя удалять целиком: корень диска, профиль пользователя и его стандартные папки."""
+    path = os.path.normcase(os.path.abspath(path))
+    if os.path.dirname(path) == path:
+        return True
+    home = os.path.expanduser("~")
+    roots = [home] + [os.path.join(home, n) for n in ("Desktop", "Documents", "Downloads", "AppData")]
+    roots += [os.getenv(k) or "" for k in ("APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)",
+                                           "SystemRoot", "USERPROFILE")]
+    return any(r and path == os.path.normcase(os.path.abspath(r)) for r in roots)
+
+
+@dataclass
+class Deletion:
+    paths: List[str]                    # Что уходит в Корзину
+    official_key: str = ""              # Установка Minecraft Launcher, которую убрать из его списка
+    modrinth_root: str = ""             # Modrinth App: убрать профиль из его базы
+
+
+def deletion_plan(profile: Dict) -> Deletion:
+    """
+    Что удалить вместе со сборкой. ValueError — удалять нельзя: общая папка лаунчера (в ней версии игры и другие
+    сборки, например .minecraft) или системная папка; такую сборку можно только убрать из списка.
+    """
+    import official_launcher
+    from game_runner import instance_dir
+    game_dir = profile.get("mods_path") or ""
+    if not game_dir or not os.path.isdir(game_dir):
+        raise ValueError(tr("Папки сборки нет на диске — просто уберите её из списка."))
+    source = profile.get("source") or "manual"
+    if source in ("prism", "multimc"):
+        instance = instance_dir(game_dir)
+        if os.path.isfile(os.path.join(instance, "mmc-pack.json")) and not _protected(instance):
+            return Deletion([instance])
+    shared = any(os.path.exists(os.path.join(game_dir, n)) for n in ("versions", "libraries", "launcher_profiles.json"))
+    if shared or _protected(game_dir):
+        raise ValueError(tr("«{0}» — общая папка лаунчера (в ней версии игры и, возможно, другие сборки). Её нельзя "
+                            "удалить целиком: уберите сборку из списка, а лишнее удалите вручную.", game_dir))
+    deletion = Deletion([game_dir])
+    if source == "official" and profile.get("launcher_id"):
+        deletion.official_key = profile["launcher_id"]
+    if source == "modrinth":
+        import modrinth_app
+        root = os.path.dirname(os.path.dirname(os.path.normpath(game_dir)))  # <данные>/profiles/<сборка>
+        if os.path.isfile(os.path.join(root, modrinth_app.DB_NAME)):
+            deletion.modrinth_root = root
+    if source == "official" and not deletion.official_key:
+        mc_dir = official_launcher.minecraft_dir()
+        if os.path.normcase(os.path.abspath(game_dir)) == os.path.normcase(os.path.abspath(mc_dir)):
+            raise ValueError(tr("Это папка .minecraft самого лаунчера — удалить её целиком нельзя."))
+    return deletion
+
+
+def delete_pack(deletion: Deletion):
+    """Удаляет сборку по плану deletion_plan: сначала записи лаунчеров, потом папки — в Корзину."""
+    if deletion.modrinth_root:
+        import modrinth_app
+        modrinth_app.check(deletion.modrinth_root)  # Приложение открыто — ничего не трогаем
+    for path in deletion.paths:
+        to_recycle_bin(path)
+    if deletion.official_key:
+        import official_launcher
+        official_launcher.remove_installation(official_launcher.minecraft_dir(), deletion.official_key)
+    if deletion.modrinth_root:
+        import modrinth_app
+        modrinth_app.remove_profile(deletion.modrinth_root, deletion.paths[0])
+    logging.info(tr("Сборка удалена в Корзину: {0}", ", ".join(deletion.paths)))
 
 
 # --- Сравнение сборок ---

@@ -357,6 +357,53 @@ def restore(path: str, backup: str):
     shutil.copy2(backup, path)
 
 
+# --- Поиск установленной Java ---
+
+def java_candidates() -> List[str]:
+    """java.exe на компьютере: JAVA_HOME, PATH, своя Java лаунчеров (Minecraft Launcher, Prism) и обычные папки JDK."""
+    import glob
+    exe = "java.exe" if sys.platform == "win32" else "java"
+    found = []
+    home = os.getenv("JAVA_HOME")
+    if home:
+        found.append(os.path.join(home, "bin", exe))
+    on_path = shutil.which("java")
+    if on_path:
+        found.append(on_path)
+    appdata, local = os.getenv("APPDATA") or "", os.getenv("LOCALAPPDATA") or ""
+    programs = [os.getenv(k) for k in ("ProgramFiles", "ProgramFiles(x86)") if os.getenv(k)]
+    patterns = [
+        # Minecraft Launcher качает свою Java (обычный и из Microsoft Store)
+        os.path.join(appdata, ".minecraft", "runtime", "*", "*", "*", "bin", exe),
+        os.path.join(local, "Packages", "Microsoft.4297127D64EC6_8wekyb3d8bbwe", "LocalCache", "Local", "runtime",
+                     "*", "*", "*", "bin", exe),
+        os.path.join(appdata, "PrismLauncher", "java", "*", "bin", exe),
+        os.path.join(appdata, "PrismLauncher", "java", "*", "*", "bin", exe),
+        os.path.join(appdata, "ModrinthApp", "meta", "java_versions", "*", "bin", exe),
+    ]
+    for root in programs:
+        for vendor in ("Java", "Eclipse Adoptium", "Microsoft", "Zulu", "BellSoft", "Amazon Corretto", "Semeru"):
+            patterns.append(os.path.join(root, vendor, "*", "bin", exe))
+    for pattern in patterns:
+        found.extend(sorted(glob.glob(pattern), reverse=True))  # Новые версии — первыми
+    result, seen = [], set()
+    for path in found:
+        key = os.path.normcase(os.path.abspath(path))
+        if key not in seen and os.path.isfile(path):
+            seen.add(key)
+            result.append(path)
+    return result
+
+
+def find_java(minimum: int, maximum: Optional[int] = None) -> Optional[str]:
+    """Подходящая Java (версия от minimum до maximum). None — на компьютере такой нет."""
+    for path in java_candidates():
+        version = java_version_of(path)
+        if version and version >= minimum and (maximum is None or version <= maximum):
+            return path
+    return None
+
+
 def launcher_running(profile: Dict) -> bool:
     """Открыт ли лаунчер сборки: пока он открыт, правка его настроек не подхватится (и он её затрёт)."""
     if profile.get("source") == "official":

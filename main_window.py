@@ -723,7 +723,8 @@ class ModUpdaterApp(ProfilesMixin, ModListMixin, OperationsMixin, TransferMixin,
         for icon_name, text, slot in (("share", tr("Поделиться списком…"), self.share_mod_list),
                                       ("save", tr("Экспорт JSON для сервера…"), self.export_server_json),
                                       ("package", tr("Сборка для сервера (.zip)…"), self.export_server_pack),
-                                      ("package", tr("Экспорт в .mrpack…"), self.export_mrpack)):
+                                      ("package", tr("Экспорт в .mrpack…"), self.export_mrpack),
+                                      ("package", tr("Экспорт для CurseForge (.zip)…"), self.export_curseforge)):
             action = make_action(menu, t, icon_name, text, slot)
             action.setEnabled(has_data)
             menu.addAction(action)

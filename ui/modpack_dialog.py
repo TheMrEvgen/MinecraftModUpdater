@@ -49,7 +49,8 @@ class _Worker(SafeThread):
                 errors = modpack_install.install(self.plan, self.target, self.progress.emit, lambda: self._cancelled,
                                                  job=self.download)
                 try:
-                    modpack_install.save_state(self.plan, self.project_id, self.target.game_dir, self.title)
+                    if not self.target.curseforge_zip:  # Архив для CurseForge App: сборку поставит приложение
+                        modpack_install.save_state(self.plan, self.project_id, self.target.game_dir, self.title)
                 except OSError as e:  # Без записи сборка работает, только не обновится из каталога
                     logging.warning(tr("Сборка: не удалось запомнить состав: {0}", e))
                 self.installed.emit(errors)
@@ -77,12 +78,18 @@ class _Worker(SafeThread):
 class ModpackInstallDialog(FramelessDialog):
     """После accept(): plan и target — что и куда ставить. Сама установка идёт в фоне (окно её запускает)."""
 
-    def __init__(self, parent, hit: Dict, prism_instances: Optional[str], default_folder: str, downloads: str,
-                 minecraft_dir: Optional[str] = None):
-        super().__init__(parent, tr("Установка сборки"), 560)
+    RADIO_TEXTS = {
+        "prism": tr("Prism Launcher — «Играть» работает сразу"),
+        "multimc": "MultiMC",
+        "official": tr("Minecraft Launcher — своя установка"),
+        "modrinth": tr("Modrinth App (закройте его на время установки)"),
+        "curseforge": tr("CurseForge App — архив для импорта"),
+    }
+
+    def __init__(self, parent, hit: Dict, launchers: Dict[str, str], default_folder: str, downloads: str):
+        super().__init__(parent, tr("Установка сборки"), 580)
         self.hit = hit
-        self.prism_instances = prism_instances
-        self.minecraft_dir = minecraft_dir
+        self.launchers = launchers  # Лаунчеры на компьютере: modpack_install.available_launchers()
         self.plan = None
         self.target = None
         self.errors = []
@@ -94,19 +101,21 @@ class ModpackInstallDialog(FramelessDialog):
         self.body.addWidget(label(tr("Название"), "Faint"))
         self.name_edit = QLineEdit(hit.get("title") or "")
         self.body.addWidget(self.name_edit)
+        self.body.addWidget(label(tr("Куда поставить"), "Faint"))
         self.where = QButtonGroup(self)
-        self.prism_radio = QRadioButton(tr("Новая сборка в Prism Launcher — «Играть» работает сразу"))
-        self.official_radio = QRadioButton(tr("Новая установка в Minecraft Launcher — со своей папкой игры"))
-        self.folder_radio = QRadioButton(tr("Папка на диске (запустить в своём лаунчере)"))
-        self.where.addButton(self.prism_radio)
-        self.where.addButton(self.official_radio)
+        self.radios: Dict[str, QRadioButton] = {}
+        for kind, text in self.RADIO_TEXTS.items():
+            radio = QRadioButton(text)
+            radio.setVisible(kind in launchers and kind != "official")  # Minecraft Launcher — когда прочитаем сборку
+            self.where.addButton(radio)
+            self.body.addWidget(radio)
+            self.radios[kind] = radio
+        self.folder_radio = QRadioButton(tr("Папка на диске (для своего лаунчера)"))
         self.where.addButton(self.folder_radio)
-        self.prism_radio.setVisible(bool(prism_instances))
-        self.official_radio.setVisible(False)  # Только для Fabric/Quilt — станет ясно, когда прочитаем сборку
-        (self.prism_radio if prism_instances else self.folder_radio).setChecked(True)
-        self.body.addWidget(self.prism_radio)
-        self.body.addWidget(self.official_radio)
         self.body.addWidget(self.folder_radio)
+        self.prism_radio, self.official_radio = self.radios["prism"], self.radios["official"]
+        first = next((r for k, r in self.radios.items() if k in launchers and k != "official"), self.folder_radio)
+        first.setChecked(True)
         row = QHBoxLayout()
         self.folder_edit = QLineEdit(default_folder)
         browse = button(tr("Обзор…"), None, "folder", parent.tokens, "text")
@@ -119,10 +128,18 @@ class ModpackInstallDialog(FramelessDialog):
         self.own_folder = QCheckBox(tr("Создать внутри папку с названием сборки"))
         self.own_folder.setChecked(True)
         self.body.addWidget(self.own_folder)
+        self.loader_here = QCheckBox(tr("Поставить загрузчик в папку versions"))
+        self.loader_here.setToolTip(tr("Для Legacy Launcher, TLauncher и других лаунчеров, которые берут версии игры "
+                                       "из папки игры"))
+        self.body.addWidget(self.loader_here)
         self.folder_hint = label("", "Faint", wrap=True)
         self.body.addWidget(self.folder_hint)
+        self.curseforge_hint = label(tr("Архив появится в папке «Загрузки». В CurseForge App: «Создать профиль» → "
+                                        "«Импорт» → выберите этот архив."), "Faint", wrap=True)
+        self.body.addWidget(self.curseforge_hint)
         self.loader_text = "Fabric"
         self.own_folder.toggled.connect(lambda *_: self._refresh_where())
+        self.loader_here.toggled.connect(lambda *_: self._refresh_where())
         self.folder_edit.textEdited.connect(self._folder_chosen)
         self.where.buttonToggled.connect(lambda *_: self._refresh_where())
 
@@ -149,15 +166,25 @@ class ModpackInstallDialog(FramelessDialog):
         worker.failed.connect(self._on_failed)
         worker.start()
 
+    def _kind(self) -> str:
+        """Куда ставим: ключ лаунчера или "folder"."""
+        return next((k for k, r in self.radios.items() if r.isChecked() and k in self.launchers), "folder")
+
     def _refresh_where(self):
         folder = self.folder_radio.isChecked()
         self.folder_edit.setEnabled(folder)
-        self.own_folder.setVisible(folder)
-        self.folder_hint.setVisible(folder)
+        for widget in (self.own_folder, self.loader_here, self.folder_hint):
+            widget.setVisible(folder)
+        self.curseforge_hint.setVisible(self.radios["curseforge"].isChecked())
         where = (tr("Внутри появится папка сборки — она и будет папкой игры.") if self.own_folder.isChecked()
                  else tr("Моды, настройки и карты лягут прямо в эту папку (в mods, config, saves…)."))
-        self.folder_hint.setText(where + " " + tr("Загрузчик ({0}) поставьте в лаунчере сами, указав эту папку как "
-                                                  "папку игры.", self.loader_text))
+        if self.loader_here.isChecked():
+            where += " " + tr("Загрузчик {0} появится в списке версий лаунчера (Legacy Launcher, TLauncher и похожих).",
+                              self.loader_text)
+        else:
+            where += " " + tr("Загрузчик ({0}) поставьте в лаунчере сами, указав эту папку как папку игры.",
+                              self.loader_text)
+        self.folder_hint.setText(where)
 
     def _browse(self):
         path = QFileDialog.getExistingDirectory(self, tr("Куда поставить сборку"), self.folder_edit.text())
@@ -170,8 +197,11 @@ class ModpackInstallDialog(FramelessDialog):
         def norm(p):
             return os.path.normcase(os.path.normpath(p.strip() or "."))
         self.own_folder.setChecked(norm(path) == norm(self.default_folder))
+        # Папка лаунчера с versions (как .minecraft) — загрузчик туда же
+        self.loader_here.setChecked(bool(path.strip()) and modpack_install.looks_like_launcher_dir(path.strip()))
 
     def _on_prepared(self, plan):
+        from view_model import format_size
         self.plan = plan
         self.progress.hide()
         loader = LOADER_TITLES.get(plan.loader, plan.loader or "?")
@@ -179,25 +209,41 @@ class ModpackInstallDialog(FramelessDialog):
                   len(plan.files))
         if plan.version:
             text = tr("Версия сборки {0}. ", plan.version) + text
+        size = plan.size()
+        if size:
+            text += " · " + tr("займёт около {0}", format_size(size))
         if plan.manual:
             text += "\n" + tr("{0} — автор разрешает скачивать только с сайта; ссылки покажем после установки.",
                               ", ".join(f.name for f in plan.manual[:4]))
         self.info.setText(text)
         self.loader_text = f"{loader} {plan.loader_version or ''}".strip()
+        self.loader_here.setEnabled(bool(plan.loader and plan.loader_version))
+        if not self.loader_here.isEnabled():
+            self.loader_here.setChecked(False)
         self._refresh_where()
         import official_launcher
-        official = bool(self.minecraft_dir and official_launcher.can_install(plan.loader) and plan.loader_version)
+        official = bool("official" in self.launchers and official_launcher.can_install(plan.loader) and plan.loader_version)
         self.official_radio.setVisible(official)
-        if official and not self.prism_instances:
+        if plan.loader in official_launcher.INSTALLER_LOADERS:
+            self.official_radio.setText(self.RADIO_TEXTS["official"] + " · " + tr("нужна Java"))
+            self.official_radio.setToolTip(tr("{0} ставится своим установщиком — программа запустит его сама на Java, "
+                                              "найденной на компьютере.", loader))
+        if official and not any(k in self.launchers for k in ("prism", "multimc")):
             self.official_radio.setChecked(True)
         self.install_btn.setEnabled(bool(plan.game_version))
 
     def _install(self):
+        from view_model import format_size
         name = self.name_edit.text().strip() or self.plan.name
-        if self.prism_radio.isChecked() and self.prism_instances:
-            self.target = modpack_install.prism_target(self.prism_instances, name)
-        elif self.official_radio.isChecked() and self.minecraft_dir:
-            self.target = modpack_install.official_target(self.minecraft_dir, name)
+        kind = self._kind()
+        if kind != "folder":
+            self.target = modpack_install.make_target(kind, self.launchers[kind], name)
+            if kind == "modrinth":
+                import modrinth_app
+                if modrinth_app.running():
+                    self.progress_text.setText(tr("Закройте Modrinth App — пока оно открыто, новую сборку в него не "
+                                                  "добавить."))
+                    return
         else:
             folder = self.folder_edit.text().strip()
             if not folder:
@@ -209,8 +255,15 @@ class ModpackInstallDialog(FramelessDialog):
                     tr("В папке «{0}» уже есть моды. Поставить сборку прямо сюда? Файлы с такими же именами "
                        "заменятся, остальные останутся.", folder), tr("Поставить сюда"), tr("Отмена")):
                 return
-            self.target = modpack_install.folder_target(folder, name, own_folder=own)
-            self.target.name = name
+            self.target = modpack_install.folder_target(folder, name, own_folder=own,
+                                                        loader_here=self.loader_here.isChecked())
+        need, free = self.plan.size(), modpack_install.free_space(self.target.curseforge_zip or self.target.game_dir)
+        if need and free is not None and free < need * 1.1 and not confirm(
+                self, tr("Мало места на диске"),
+                tr("Сборке нужно около {0}, а на диске свободно {1}. Установка может оборваться на середине.\n\n"
+                   "Всё равно ставить?", format_size(need), format_size(free)), tr("Ставить"), tr("Отмена")):
+            self.target = None
+            return
         self.accept()  # Качается в фоне: ход — в индикаторе и на странице «Загрузки»
 
     def _on_progress(self, done: int, total: int, text: str):
@@ -352,3 +405,47 @@ class ModpackUpdateDialog(FramelessDialog):
 
     def reject(self):
         self._cancel()
+
+
+class TransferDialog(FramelessDialog):
+    """Перенос сборки в другой лаунчер. После accept(): kind (ключ лаунчера), name, keep (оставить копию)."""
+
+    def __init__(self, parent, name: str, launchers: Dict[str, str], current_source: str):
+        super().__init__(parent, tr("Перенести в другой лаунчер"), 520)
+        self.launchers = launchers
+        self.body.addWidget(label(tr("Создастся новая сборка с той же версией Minecraft и загрузчиком, и в неё "
+                                     "переедут моды, настройки, миры, ресурспаки и шейдеры."), "Muted", wrap=True))
+        self.body.addWidget(label(tr("Название"), "Faint"))
+        self.name_edit = QLineEdit(name)
+        self.body.addWidget(self.name_edit)
+        self.group = QButtonGroup(self)
+        self.radios: Dict[str, QRadioButton] = {}
+        for kind, title in modpack_install.LAUNCHER_TITLES.items():
+            if kind not in launchers or kind == current_source:
+                continue
+            text = title if kind != "curseforge" else tr("{0} — архив для импорта (старая сборка останется)", title)
+            radio = QRadioButton(text)
+            self.group.addButton(radio)
+            self.body.addWidget(radio)
+            self.radios[kind] = radio
+        if self.radios:
+            next(iter(self.radios.values())).setChecked(True)
+        else:
+            self.body.addWidget(label(tr("Других лаунчеров на компьютере не нашлось."), "Faint", wrap=True))
+        self.keep = QCheckBox(tr("Оставить копию в старом месте"))
+        self.body.addWidget(self.keep)
+        self.hint = label(tr("Для Modrinth App закройте приложение на время переноса."), "Faint", wrap=True)
+        self.body.addWidget(self.hint)
+        self.body.addStretch()
+        self.add_button(tr("Отмена"), False, self.reject)
+        ok = self.add_button(tr("Перенести"), True, self.accept)
+        ok.setEnabled(bool(self.radios))
+        self.finish_layout()
+
+    @property
+    def kind(self) -> str:
+        return next((k for k, r in self.radios.items() if r.isChecked()), "")
+
+    @property
+    def name(self) -> str:
+        return self.name_edit.text().strip()

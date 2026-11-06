@@ -176,15 +176,11 @@ class CatalogMixin:
 
     def _install_modpack(self, hit: dict):
         """Готовая сборка из каталога: новая сборка Prism, установка Minecraft Launcher или папка. Качается в фоне."""
-        from launchers import _appdata, _prism_instance_dir
+        import modpack_install
         from ui.modpack_dialog import ModpackInstallDialog
-        prism_root = os.path.join(_appdata(), "PrismLauncher")
-        prism = _prism_instance_dir(prism_root) if os.path.isdir(prism_root) else None
         default = os.path.join(os.path.expanduser("~"), "MinecraftModpacks")  # Латиница: Java не любит кириллицу в путях
-        import official_launcher
-        minecraft = official_launcher.minecraft_dir()
-        dialog = ModpackInstallDialog(self, hit, prism, default, os.path.join(app_config.CONFIG_DIR, "modpacks"),
-                                      minecraft if os.path.isdir(minecraft) else None)
+        dialog = ModpackInstallDialog(self, hit, modpack_install.available_launchers(), default,
+                                      os.path.join(app_config.CONFIG_DIR, "modpacks"))
         if not dialog.exec() or not dialog.target:
             return
         import downloads
@@ -272,6 +268,14 @@ class CatalogMixin:
         import downloads
         job.finish(downloads.FAILED if errors else downloads.DONE,
                    tr("Не скачалось файлов: {0}", len(errors)) if errors else tr("Установлена"))
+        if target.curseforge_zip:  # Сборку поставит CurseForge App из архива — в наш список она попадёт сама
+            self._notify_download(tr("Архив для CurseForge App готов"), os.path.basename(target.curseforge_zip))
+            self.toasts.show(tr("Архив готов: {0}. В CurseForge App: «Создать профиль» → «Импорт» → выберите этот "
+                                "файл.", target.curseforge_zip) +
+                             (" " + tr("Не скачалось файлов: {0}.", len(errors)) if errors else ""),
+                             "success" if not errors else "warning", tr("Показать"),
+                             lambda: self._show_path_in_folder(target.curseforge_zip), timeout=30000)
+            return
         name, n = target.name or os.path.basename(target.instance_dir or target.game_dir), 2
         base = name
         while name in self.profiles:
@@ -289,14 +293,23 @@ class CatalogMixin:
             self._refresh_sidebar()
         self._notify_download(tr("Сборка установлена"), tr("«{0}» готова к игре.", name),
                               lambda: (self._load_profile(name), self._refresh_sidebar()))
-        if target.instance_dir or target.launcher_id:
+        if target.instance_dir or target.launcher_id or target.modrinth_root:
+            import modpack_install
             self.toasts.show(tr("Сборка «{0}» установлена в {1}.", name,
-                                "Prism Launcher" if target.instance_dir else "Minecraft Launcher"),
+                                modpack_install.LAUNCHER_TITLES.get(target.source, target.source)),
                              "success", tr("Открыть"), lambda: self._load_profile(name), timeout=15000)
+        elif target.version_id:  # Папка с versions: загрузчик уже стоит, осталось выбрать версию в лаунчере
+            self.toasts.show(tr("Сборка «{0}» установлена в {1}. В лаунчере выберите версию {2}.", name,
+                                target.game_dir, target.version_id), "success", timeout=20000)
         else:
             self.toasts.show(tr("Сборка «{0}» установлена в {1}. Поставьте загрузчик {2} {3} в лаунчере и укажите эту "
                                 "папку как папку игры.", name, target.game_dir, plan.loader or "", plan.loader_version or ""),
                              "success", timeout=20000)
+        if plan.datapacks:
+            self.toasts.show(tr("Датапаки сборки ({0}) добавлены во все её миры. Для нового мира добавьте их из папки "
+                                "datapacks кнопкой «Пакеты данных» при создании мира.", len(plan.datapacks)),
+                             "info", tr("Открыть папку"),
+                             lambda: self._open_path(os.path.join(target.game_dir, "datapacks")), timeout=20000)
         if plan.manual:
             self.toasts.show(tr("Скачайте с сайта CurseForge (автор запретил программам): {0}",
                                 ", ".join(f.name for f in plan.manual[:5])), "warning", tr("Открыть страницы"),

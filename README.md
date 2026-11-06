@@ -14,10 +14,14 @@ roll back any change. English and Russian interface.
 - **Updates you can trust** — every change is recorded and can be undone; a snapshot of the modpack is made before big
   updates; “What's new” shows changelogs before updating; fresh releases can be held back for a few days.
 - **Works with your launcher** — Prism Launcher, MultiMC, Modrinth App, CurseForge, Legacy Launcher and the official
-  launcher are found automatically. For Prism and the official launcher (Fabric/Quilt) the app can even update the
-  loader and the game version.
+  launcher are found automatically. For Prism and the official launcher the app can even update the loader and the
+  game version (Forge and NeoForge are installed by their own installer, run by the app).
 - **Catalog** — mods, shaders, resource packs, data packs and ready-made modpacks from Modrinth and CurseForge,
-  installed with dependencies in one click. Installed modpacks update to new versions and keep the mods you added.
+  installed with dependencies in one click — into Prism, MultiMC, the official launcher, Modrinth App, CurseForge App
+  (import archive) or any folder, together with the maps and data packs of the modpack. Installed modpacks update to
+  new versions and keep the mods you added.
+- **Move between launchers** — a modpack moves (or is copied) to another launcher with the same game and loader
+  versions; a modpack you no longer need can be deleted to the Recycle Bin. Export to `.mrpack` and CurseForge `.zip`.
 - **When the game crashes** — crash report analysis (including wrong Java and out of memory, fixed in one click),
   a hint which mod update started the crashes, and an automatic search for the problematic mod by elimination.
 - **Your language** — mod descriptions and changelogs can be translated into the interface language; adding a new
@@ -46,6 +50,9 @@ roll back any change. English and Russian interface.
   любую папку игры или сервера можно добавить вручную.
 - Моды, шейдеры и ресурспаки — на отдельных вкладках.
 - Группы сборок, клонирование, сравнение двух сборок.
+- Перенос сборки в другой лаунчер (Prism, MultiMC, Minecraft Launcher, Modrinth App, CurseForge App) с той же версией
+  игры и загрузчика — или просто в другую папку из «Настроек сборки».
+- Удаление сборки с диска в Корзину; общие папки лаунчеров (например, `.minecraft`) программа целиком не удаляет.
 
 **Обновления**
 - Проверка по хэшам файлов: программа точно знает, какая версия установлена.
@@ -72,8 +79,11 @@ roll back any change. English and Russian interface.
 
 **Каталог Modrinth и CurseForge**
 - Поиск с фильтрами по категориям и версиям, страница проекта со скриншотами и версиями, массовая установка.
-- Готовые сборки: установка одной кнопкой — новой сборкой в Prism Launcher или в папку; обновление до новой
-  версии сборки с сохранением ваших модов и настроек.
+- Готовые сборки: установка одной кнопкой — новой сборкой в Prism Launcher, MultiMC, Minecraft Launcher (в том
+  числе Forge и NeoForge — их установщик программа запускает сама) или Modrinth App, архивом для импорта в
+  CurseForge App либо прямо в выбранную папку (загрузчик — в её `versions` для Legacy Launcher, TLauncher и
+  похожих). Карты и датапаки сборки ставятся вместе с ней; перед установкой видно, сколько места она займёт.
+  Обновление до новой версии сборки — с сохранением ваших модов, настроек и миров.
 - Моды, которых нет на Modrinth, опознаются на CurseForge по отпечатку файла и обновляются так же.
   Если автор запретил скачивание сторонними программами, программа откроет страницу файла на сайте.
 - Моды, которые выходят только на GitHub, обновляются из выпусков (Releases) репозитория.
@@ -85,7 +95,8 @@ roll back any change. English and Russian interface.
 - Избранное, заметки, свои метки, наборы модов (быстро включить/выключить группу модов), Ctrl+Z.
 - Палитра команд Ctrl+K, свои горячие клавиши.
 - Темы: системная, тёмная, светлая, OLED, высококонтрастная; цвет акцента, масштаб, картинка в боковой панели.
-- Импорт и экспорт `.mrpack`, обмен списком модов строкой или файлом, синхронизация по ссылке, JSON для сервера,
+- Импорт и экспорт `.mrpack`, экспорт сборки для CurseForge (`.zip`: моды с CurseForge — ссылками, остальные и
+  настройки — внутри архива), обмен списком модов строкой или файлом, синхронизация по ссылке, JSON для сервера,
   сборка для сервера (.zip) без клиентских модов.
 - Установка из самой программы: ярлыки, пункт в «Установке и удалении программ», открытие `.mrpack`
   двойным щелчком и ссылки `modupdater://`.

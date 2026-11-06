@@ -486,6 +486,8 @@ class ProfilesMixin:
                                        lambda: self._update_modpack(name)))
         menu.addSeparator()
         menu.addAction(make_action(menu, t, "copy", tr("Клонировать сборку…"), lambda: self._clone_profile(name)))
+        menu.addAction(make_action(menu, t, "share", tr("Перенести в другой лаунчер…"),
+                                   lambda: self._transfer_profile(name)))
         others = [n for n in self.profiles if n != name]
         if others:
             compare = menu.addMenu(icons.icon("git_compare", t["text_muted"], 16), tr("Сравнить с…"))
@@ -493,7 +495,106 @@ class ProfilesMixin:
                 compare.addAction(other, lambda o=other: self._compare_profiles(name, o))
         menu.addSeparator()
         menu.addAction(make_action(menu, t, "x", tr("Убрать из списка"), lambda: self._remove_profile(name), "danger"))
+        menu.addAction(make_action(menu, t, "trash", tr("Удалить сборку с диска…"),
+                                   lambda: self._delete_profile_files(name), "danger"))
         menu.exec(pos)
+
+    def _transfer_profile(self, name: str):
+        """Перенос сборки в другой лаунчер: новая сборка там с той же версией игры и загрузчиком."""
+        from ui.modpack_dialog import TransferDialog
+        if self._busy or name not in self.profiles:
+            return
+        profile = self.profiles[name]
+        game_dir = profile.get("mods_path") or ""
+        if not game_dir or not os.path.isdir(game_dir):
+            self.toasts.show(tr("Папки сборки нет на диске — переносить нечего."), "warning")
+            return
+        launchers = modpack_install.available_launchers()
+        dialog = TransferDialog(self, name, launchers, profile.get("source") or "manual")
+        if not dialog.exec() or not dialog.kind:
+            return
+        kind, new_name, keep = dialog.kind, dialog.name or name, dialog.keep.isChecked()
+        if name != self.current_profile_name:
+            self._load_profile(name)
+        if not self._confirm_game_not_running([]):
+            return
+        game_version = profile.get("game_version") or self.game_version
+        loader = profile.get("loader") or self.loader
+        loader_version = profile.get("loader_version") or self.current_loader_version
+        title = modpack_install.LAUNCHER_TITLES.get(kind, kind)
+
+        def done(target):
+            if target.curseforge_zip:
+                self.toasts.show(tr("Архив для CurseForge App готов: {0}. В приложении: «Создать профиль» → «Импорт».",
+                                    target.curseforge_zip), "success", tr("Показать"),
+                                 lambda: self._show_path_in_folder(target.curseforge_zip), timeout=30000)
+                return
+            if not keep:
+                self.hidden_instances.append(game_dir)  # Старая папка больше не сборка
+            updated = {**profile, "mods_path": target.game_dir, "source": target.source,
+                       "game_version": game_version, "loader": loader, "loader_version": loader_version or ""}
+            updated.pop("launcher_id", None)
+            if target.launcher_id:
+                updated["launcher_id"] = target.launcher_id
+            new_key = new_name
+            if keep:  # Копия — новая сборка рядом со старой
+                n = 2
+                while new_key in self.profiles:
+                    new_key, n = f"{new_name} ({n})", n + 1
+                self.profiles[new_key] = updated
+            else:
+                if new_key != name and new_key in self.profiles:
+                    new_key = name
+                self.profiles = {(new_key if k == name else k): (updated if k == name else v)
+                                 for k, v in self.profiles.items()}
+                self._drop_sessions(name)
+            self.save_config()
+            self._refresh_sidebar()
+            self._load_profile(new_key)
+            self._refresh_sidebar()
+            self.toasts.show(tr("Сборка «{0}» теперь в {1}.", new_key, title), "success", tr("Открыть папку"),
+                             lambda: self._open_path(target.game_dir), timeout=12000)
+
+        def failed(error):
+            show_message(self, QMessageBox.Icon.Warning, tr("Перенос сборки"),
+                         tr("Не удалось перенести сборку в {0}: {1}", title, error))
+
+        self._run_task(modpack_install.transfer, (game_dir, kind, launchers[kind], new_name, game_version, loader,
+                                                  loader_version, keep), done, failed,
+                       tr("Переносим сборку в {0}…", title))
+
+    def _delete_profile_files(self, name: str):
+        """Удаляет сборку с диска (в Корзину) и из списка. Общие папки лаунчеров не удаляются."""
+        from maintenance import delete_pack, deletion_plan, folder_size
+        from view_model import format_size
+        if self._busy or name not in self.profiles:
+            return
+        profile = self.profiles[name]
+        try:
+            deletion = deletion_plan(profile)
+        except ValueError as e:
+            show_message(self, QMessageBox.Icon.Warning, tr("Удалить сборку"), str(e))
+            return
+        size = sum(folder_size(p) for p in deletion.paths)
+        text = tr("Удалить «{0}» с диска?\n\nВ Корзину уйдёт:\n{1}\n({2})\n\nМоды, настройки и миры этой сборки "
+                  "можно будет восстановить из Корзины.", name, "\n".join(deletion.paths), format_size(size))
+        if deletion.official_key:
+            text += "\n" + tr("Установка пропадёт и из списка Minecraft Launcher.")
+        if not confirm(self, tr("Удалить сборку"), text, tr("Удалить"), tr("Отмена")):
+            return
+        if name != self.current_profile_name:
+            self._load_profile(name)
+        if not self._confirm_game_not_running([]):
+            return
+
+        def done(_):
+            self._drop_profile(name)
+            self.toasts.show(tr("Сборка «{0}» удалена в Корзину.", name), "success")
+
+        self._run_task(delete_pack, (deletion,), done,
+                       lambda e: show_message(self, QMessageBox.Icon.Warning, tr("Удалить сборку"),
+                                              tr("Не удалось удалить сборку: {0}", e)),
+                       tr("Удаляем сборку…"))
 
     @staticmethod
     def _is_placeholder(name: str, profile: dict) -> bool:
@@ -511,6 +612,12 @@ class ProfilesMixin:
             return
         if not confirm(self, tr("Убрать сборку"), tr('Убрать «{0}» из списка?\nФайлы игры и моды не будут удалены.', name),
                        tr("Убрать"), tr("Отмена")):
+            return
+        self._drop_profile(name)
+
+    def _drop_profile(self, name: str):
+        """Убирает сборку из списка (без вопросов) и открывает другую."""
+        if name not in self.profiles:
             return
         profile = self.profiles.pop(name)
         if profile.get("mods_path"):

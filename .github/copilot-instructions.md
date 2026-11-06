@@ -23,7 +23,8 @@
 | `launch_history.py` | История запусков игры (меню, вылет, время загрузки) и поиск операции с модами, после которой игра вылетает |
 | `launcher_pack.py` | Версии игры и загрузчика в сборке Prism/MultiMC (`mmc-pack.json`): правка с копией, требования из meta.prismlauncher.org |
 | `all_packs.py`, `ui/all_packs_dialog.py` | Все сборки сразу: поиск мода, одинаковые файлы и их объединение жёсткими ссылками (только по команде) |
-| `modpack_install.py`, `ui/modpack_dialog.py` | Готовая сборка из каталога: чтение .mrpack/.zip CurseForge, скачивание с проверкой хэшей, overrides, новый экземпляр Prism |
+| `modpack_install.py`, `ui/modpack_dialog.py` | Готовая сборка из каталога: чтение .mrpack/.zip CurseForge (с картами и датапаками), скачивание с проверкой хэшей, overrides; цели установки во всех лаунчерах (`available_launchers`, `make_target`, `prepare_target` → файлы → `register_target`) и перенос сборки в другой лаунчер (`transfer`) |
+| `modrinth_app.py` | Профиль Modrinth App: строка в `app.db` (столбцы читаются из базы), только при закрытом приложении, с копией базы |
 | `background_check.py` | Проверка обновлений сборки без окна (общая для консоли и трея): `check_all`, `new_updates` |
 | `window/common.py` | Константы окна: страницы, статусы для «Обновить все», заголовки загрузчиков |
 | `ui/mod_list.py` | Список модов: `ModListModel` + `ModFilterProxy` + `ModDelegate` (вся строка рисуется делегатом) |
@@ -54,7 +55,7 @@
 | `updater.py` | Установка, транзакции для отката, снимки сборки (жёсткие ссылки), выключение `*.disabled`, проверка блокировки файлов |
 | `curseforge.py` | CurseForge API: отпечаток файла (MurmurHash2), поиск, файлы; перевод в формат Modrinth. id проектов — `cf:123`, `get_all_versions`/`get_project` в `mod_updater_logic` перенаправляют такие id сюда |
 | `mod_updater_logic.py` | HTTP: Modrinth API, версии загрузчиков, скачивание с проверкой хэша |
-| `exporters.py` | Строка «Поделиться», JSON для сервера, `.mrpack` |
+| `exporters.py` | Строка «Поделиться», JSON для сервера, `.mrpack`, сборка CurseForge (`.zip` с manifest.json) |
 | `game_detection.py` | Определение версии игры и загрузчика по папке `versions` |
 | `config.py` | Пути (platformdirs), атомарное сохранение конфига, логирование с ротацией |
 | `enums.py` | `ModStatus` (str-Enum со статусами для отображения), `UpdateChannel` |

@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
 from content import MODS
 from exporters import (
-    build_mrpack_index, build_share_data, decode_share_string, encode_share_string, parse_share_data,
-    save_server_json, write_mrpack,
+    build_curseforge_export, build_mrpack_index, build_share_data, decode_share_string, encode_share_string,
+    parse_share_data, save_server_json, write_mrpack,
 )
 from i18n import tr
 from mod_updater_logic import get_latest_loader_version
@@ -278,6 +278,28 @@ class TransferMixin:
             self.toasts.show(tr('Сборка ({0} модов) сохранена в {1}', len(index['files']), os.path.basename(path)), "success")
         except OSError as e:
             show_message(self, QMessageBox.Icon.Critical, tr("Ошибка"), tr('Не удалось сохранить файл:\n{0}', e))
+
+    def export_curseforge(self):
+        """Сборка в формате CurseForge (.zip): моды с CurseForge — ссылками, остальные и настройки — в overrides."""
+        path, _ = QFileDialog.getSaveFileName(self, tr("Сохранить сборку CurseForge"),
+                                              f"{self.current_profile_name}.zip", "CurseForge Modpack (*.zip)")
+        if not path:
+            return
+        from view_model import iter_all_entries
+        entries = [e for e in iter_all_entries(self.mods_data) if e.get("filepath") and not e.get("disabled")]
+        game_dir = self._profile().get("mods_path", "")
+        args = (path, entries, game_dir, self.current_profile_name, self.game_version, self.loader,
+                self.current_loader_version or self.latest_loader_version or "")
+
+        def done(result):
+            linked, embedded = result
+            text = tr("Сборка CurseForge сохранена: модов по ссылке — {0}, внутри архива — {1}.", linked, embedded)
+            self.toasts.show(text, "success", tr("Показать"), lambda: self._show_path_in_folder(path), timeout=15000)
+
+        self._run_task(build_curseforge_export, args, done,
+                       lambda e: show_message(self, QMessageBox.Icon.Critical, tr("Ошибка"),
+                                              tr("Не удалось собрать архив:\n{0}", e)),
+                       tr("Собираем сборку CurseForge…"))
 
     # ================================================================== Перетаскивание
 

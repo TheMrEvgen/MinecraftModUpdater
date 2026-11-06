@@ -8,7 +8,11 @@
 Fabric и Quilt ставятся так же, как это делают их установщики: файл версии из их справочника кладётся в
 versions/<id>/<id>.json (рядом — пустой <id>.jar, без него лаунчер считает версию сломанной), а версия
 установки меняется в launcher_profiles.json. Перед каждой правкой launcher_profiles.json сохраняется копия —
-изменение можно отменить. Forge и NeoForge ставятся только своими установщиками.
+изменение можно отменить.
+
+Forge и NeoForge ставятся только своими установщиками: программа скачивает установщик с их сайта и запускает его
+без окна (java -jar …-installer.jar --installClient <папка>) на подходящей Java, найденной на компьютере.
+Так же загрузчик ставится и в любую папку игры, где лаунчер берёт версии из папки versions (Legacy Launcher и т.п.).
 """
 import datetime
 import json
@@ -69,17 +73,41 @@ def installations(mc_dir: str) -> List[Dict]:
     return result
 
 
+INSTALLER_LOADERS = ("forge", "neoforge")  # Ставятся своим установщиком (нужна Java)
+INSTALLER_TIMEOUT = 20 * 60                # Установщик качает Minecraft и библиотеки — может идти долго
+
+
 def version_id(loader: str, game_version: str, loader_version: str) -> str:
+    if loader in INSTALLER_LOADERS:
+        version = forge_version(game_version, loader_version) if loader == "forge" else loader_version
+        return f"{game_version}-forge-{version}" if loader == "forge" else f"neoforge-{version}"
     return LOADER_META[loader][1].format(loader=loader_version, game=game_version)
 
 
+def forge_version(game_version: str, loader_version: str) -> str:
+    """«1.20.1-47.2.0» → «47.2.0»: так версия Forge записана в имени установщика."""
+    prefix = f"{game_version}-"
+    return loader_version[len(prefix):] if loader_version.startswith(prefix) else loader_version
+
+
 def can_install(loader: Optional[str]) -> bool:
-    return loader in LOADER_META
+    return loader in LOADER_META or loader in INSTALLER_LOADERS
 
 
-def install_loader(mc_dir: str, loader: str, game_version: str, loader_version: str, session=None) -> str:
-    """Ставит Fabric/Quilt нужной версии в versions/ (если ещё не стоит). Возвращает id версии для лаунчера."""
+def ensure_profiles_file(mc_dir: str):
+    """Пустой launcher_profiles.json: без него установщики Forge/NeoForge отказываются ставить."""
+    if not os.path.isfile(profiles_path(mc_dir)):
+        os.makedirs(mc_dir, exist_ok=True)
+        with open(profiles_path(mc_dir), "w", encoding="utf-8") as f:
+            json.dump({"profiles": {}, "settings": {}, "version": 3}, f)
+
+
+def install_loader(mc_dir: str, loader: str, game_version: str, loader_version: str, session=None,
+                   progress=lambda text: None) -> str:
+    """Ставит загрузчик нужной версии в versions/ (если ещё не стоит). Возвращает id версии для лаунчера."""
     from mod_updater_logic import SESSION
+    if loader in INSTALLER_LOADERS:
+        return _install_with_installer(mc_dir, loader, game_version, loader_version, session, progress)
     if loader not in LOADER_META:
         raise ValueError(tr("{0} ставится только своим установщиком — поставьте его вручную.", loader))
     base, _ = LOADER_META[loader]
@@ -103,6 +131,64 @@ def install_loader(mc_dir: str, loader: str, game_version: str, loader_version: 
     jar = os.path.join(folder, f"{vid}.jar")
     if not os.path.exists(jar):
         open(jar, "wb").close()
+    return vid
+
+
+def _version_dirs(mc_dir: str) -> set:
+    versions = os.path.join(mc_dir, "versions")
+    return set(os.listdir(versions)) if os.path.isdir(versions) else set()
+
+
+def _installed_id(mc_dir: str, expected: str, before: set, loader: str) -> Optional[str]:
+    """id версии, которую поставил установщик: ожидаемый или новая папка в versions с именем загрузчика."""
+    if os.path.isfile(os.path.join(mc_dir, "versions", expected, f"{expected}.json")):
+        return expected
+    new = sorted(n for n in _version_dirs(mc_dir) - before if loader in n.lower())
+    return new[0] if new else None
+
+
+def _install_with_installer(mc_dir: str, loader: str, game_version: str, loader_version: str, session=None,
+                            progress=lambda text: None) -> str:
+    """Forge / NeoForge: скачать установщик и запустить его без окна. Возвращает id установленной версии."""
+    import subprocess
+    import tempfile
+
+    import java_check
+    import server_pack
+    expected = version_id(loader, game_version, loader_version)
+    if _installed_id(mc_dir, expected, _version_dirs(mc_dir), loader) == expected:
+        return expected  # Уже стоит
+    need = java_check.required_java(game_version, loader) or (17, None)
+    java = java_check.find_java(*need)
+    if not java:
+        raise ValueError(tr("Для установки {0} нужна Java {1} — её нет на компьютере. Запустите один раз Minecraft "
+                            "Launcher (он скачает свою Java) или установите Java {1}, затем повторите.",
+                            loader, need[0]))
+    ensure_profiles_file(mc_dir)
+    version = forge_version(game_version, loader_version) if loader == "forge" else loader_version
+    url = server_pack.INSTALLERS[loader].format(g=game_version, v=version)
+    before = _version_dirs(mc_dir)
+    with tempfile.TemporaryDirectory(prefix="modupdater-loader-") as work:
+        installer = os.path.join(work, f"{loader}-installer.jar")
+        progress(tr("Скачиваем установщик {0} {1}…", loader, version))
+        server_pack._download(url, installer, session)
+        progress(tr("Ставим {0} {1} (установщик качает Minecraft и библиотеки)…", loader, version))
+        output = ""
+        for option in ("--installClient", "--install-client"):  # Старые и новые установщики называют ключ по-разному
+            try:
+                result = subprocess.run([java, "-jar", installer, option, os.path.abspath(mc_dir)], cwd=work,
+                                        capture_output=True, text=True, errors="replace", timeout=INSTALLER_TIMEOUT,
+                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except subprocess.TimeoutExpired:
+                raise ValueError(tr("Установщик {0} не уложился в {1} минут.", loader, INSTALLER_TIMEOUT // 60))
+            output = (result.stdout or "") + (result.stderr or "")
+            if "not a recognized option" not in output and "UnrecognizedOption" not in output:
+                break
+    vid = _installed_id(mc_dir, expected, before, loader)
+    if result.returncode != 0 or not vid:
+        tail = "\n".join(output.strip().splitlines()[-6:])
+        raise ValueError(tr("Установщик {0} завершился с ошибкой:\n{1}", loader, tail or result.returncode))
+    logging.info(tr("Minecraft Launcher: установлен {0}", vid))
     return vid
 
 
@@ -131,15 +217,24 @@ def _now() -> str:
 
 def add_installation(mc_dir: str, name: str, vid: str, game_dir: str) -> tuple:
     """Новая установка со своей папкой игры. Возвращает (id установки, копия файла)."""
-    if not os.path.isfile(profiles_path(mc_dir)):  # Лаунчер ещё ни разу не запускали
-        os.makedirs(mc_dir, exist_ok=True)
-        with open(profiles_path(mc_dir), "w", encoding="utf-8") as f:
-            json.dump({"profiles": {}, "settings": {}, "version": 3}, f)
+    ensure_profiles_file(mc_dir)  # Лаунчер ещё ни разу не запускали
     data = read_profiles(mc_dir)
     key = uuid.uuid4().hex
     data["profiles"][key] = {"name": name, "type": "custom", "created": _now(), "lastUsed": _now(), "icon": "Furnace",
                              "lastVersionId": vid, "gameDir": os.path.abspath(game_dir)}
     return key, _write(mc_dir, data)
+
+
+def remove_installation(mc_dir: str, key: str) -> Optional[str]:
+    """Убирает установку из списка лаунчера. Возвращает путь копии файла (None — установки уже нет)."""
+    try:
+        data = read_profiles(mc_dir)
+    except (OSError, ValueError):
+        return None
+    if key not in data["profiles"]:
+        return None
+    del data["profiles"][key]
+    return _write(mc_dir, data)
 
 
 def set_installation_version(mc_dir: str, key: str, vid: str) -> str:

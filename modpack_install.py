@@ -46,6 +46,7 @@ class PackFile:
     manual_url: str = ""
     name: str = ""
     world: bool = False       # Карта (мир CurseForge): скачанный .zip распаковывается в saves, сам архив удаляется
+    datapack: bool = False    # Датапак: лежит в datapacks/ папки игры и копируется во все миры сборки
 
 
 @dataclass
@@ -58,10 +59,32 @@ class PackPlan:
     files: List[PackFile]
     archive: str                      # Сам файл сборки (для overrides)
     overrides: List[str]              # Папки внутри архива, которые распаковываются в папку игры
+    kind: str = "mrpack"              # mrpack — Modrinth, curseforge — .zip с manifest.json
 
     @property
     def manual(self) -> List[PackFile]:
         return [f for f in self.files if not f.url]
+
+    @property
+    def datapacks(self) -> List[PackFile]:
+        return [f for f in self.files if f.datapack]
+
+    def size(self) -> int:
+        """Сколько места займёт сборка, байт: файлы, распакованные overrides и карты (архив карты — примерно вдвое)."""
+        total = sum(f.size * (2 if f.world else 1) for f in self.files)
+        if self.archive and os.path.isfile(self.archive):
+            try:
+                with zipfile.ZipFile(self.archive) as archive:
+                    total += sum(m.file_size for m in archive.infolist()
+                                 if any(m.filename.startswith(p) for p in self.overrides))
+            except zipfile.BadZipFile:
+                pass
+        return total
+
+
+def versions_plan(name: str, game_version: str, loader: Optional[str], loader_version: Optional[str]) -> PackPlan:
+    """План без файлов: только версии игры и загрузчика (перенос сборки в другой лаунчер)."""
+    return PackPlan(name, "", game_version, loader, loader_version, [], "", [])
 
 
 def safe_name(name: str) -> str:
@@ -97,7 +120,7 @@ def load_plan(archive: str) -> PackPlan:
     files = _curseforge_files(manifest)
     overrides = str(manifest.get("overrides") or "overrides").strip("/") + "/"
     return PackPlan(manifest.get("name") or os.path.basename(archive), str(manifest.get("version") or ""), game, loader,
-                    loader_version, files, archive, [overrides])
+                    loader_version, files, archive, [overrides], kind="curseforge")
 
 
 def _curseforge_files(manifest: Dict) -> List[PackFile]:
@@ -107,7 +130,8 @@ def _curseforge_files(manifest: Dict) -> List[PackFile]:
     wanted = [f for f in manifest["files"] if f.get("fileID") and f.get("projectID") and f.get("required", True)]
     files = curseforge.get_files_by_ids(f["fileID"] for f in wanted)
     mods = curseforge.get_mods(f["projectID"] for f in wanted)
-    folders = {curseforge.CLASS_MODS: "mods", 12: "resourcepacks", 6552: "shaderpacks", CLASS_WORLDS: "saves"}
+    folders = {curseforge.CLASS_MODS: "mods", 12: "resourcepacks", 6552: "shaderpacks", CLASS_WORLDS: "saves",
+               CLASS_DATAPACKS: DATAPACKS_DIR}
     result = []
     for item in wanted:
         file, mod = files.get(int(item["fileID"])), mods.get(int(item["projectID"]))
@@ -116,16 +140,39 @@ def _curseforge_files(manifest: Dict) -> List[PackFile]:
         class_id = mod.get("classId", curseforge.CLASS_MODS)
         folder = folders.get(class_id)
         if not folder:
-            continue  # Датапаки ставятся в конкретный мир — в сборку не кладём
+            continue  # Прочие классы (дополнения к другим играм и т.п.) к Minecraft не относятся
         version = curseforge.to_version(file, mod)
         sha1 = curseforge.file_sha1(file)
         result.append(PackFile(f"{folder}/{file['fileName']}", version["files"][0]["url"], {"sha1": sha1} if sha1 else {},
                                int(file.get("fileLength") or 0), version.get("manual_url", ""), mod.get("name") or "",
-                               world=class_id == CLASS_WORLDS))
+                               world=class_id == CLASS_WORLDS, datapack=class_id == CLASS_DATAPACKS))
     return result
 
 
-CLASS_WORLDS = 17  # Класс CurseForge «Worlds» — карты, которые автор сборки положил в неё
+CLASS_WORLDS = 17       # Класс CurseForge «Worlds» — карты, которые автор сборки положил в неё
+CLASS_DATAPACKS = 6945  # Класс CurseForge «Data Packs»
+DATAPACKS_DIR = "datapacks"  # Датапаки сборки: общая папка в папке игры, оттуда — копии в каждый мир
+
+
+def spread_datapacks(plan: PackPlan, game_dir: str) -> List[str]:
+    """
+    Кладёт датапаки сборки во все её миры (saves/<мир>/datapacks), где их ещё нет. Новые миры игра не трогает —
+    датапак из папки datapacks добавляется при создании мира кнопкой «Пакеты данных». Возвращает миры.
+    """
+    from content import list_worlds
+    names = [os.path.basename(f.path) for f in plan.datapacks]
+    names = [n for n in names if os.path.isfile(os.path.join(game_dir, DATAPACKS_DIR, n))]
+    if not names:
+        return []
+    import shutil
+    worlds = list_worlds(game_dir)
+    for world in worlds:
+        folder = os.path.join(game_dir, "saves", world, "datapacks")
+        os.makedirs(folder, exist_ok=True)
+        for name in names:
+            if not os.path.exists(os.path.join(folder, name)):
+                shutil.copy2(os.path.join(game_dir, DATAPACKS_DIR, name), os.path.join(folder, name))
+    return worlds
 
 
 def unpack_world(archive: str, saves_dir: str, file_name: str = "") -> List[str]:
@@ -175,6 +222,59 @@ class Target:
     name: str = ""                       # Название установки в Minecraft Launcher
     launcher_id: str = ""                # Заполняется после установки: id новой установки лаунчера
     fresh: bool = True                   # Папку создали для сборки: при отмене её можно удалить целиком
+    loader_here: bool = False            # Папка: поставить загрузчик в её versions (Legacy Launcher и т.п.)
+    version_id: str = ""                 # Заполняется после установки: id версии загрузчика в versions
+    modrinth_root: str = ""              # Modrinth App: его папка данных — записать профиль в app.db
+    curseforge_zip: str = ""             # CurseForge App: собрать архив для импорта (сюда), а не ставить
+
+
+# Куда можно поставить сборку: ключ → название. Какие из них есть на компьютере — available_launchers()
+LAUNCHER_TITLES = {"prism": "Prism Launcher", "multimc": "MultiMC", "official": "Minecraft Launcher",
+                   "modrinth": "Modrinth App", "curseforge": "CurseForge App"}
+
+
+def available_launchers() -> Dict[str, str]:
+    """Лаунчеры на этом компьютере: ключ → папка (экземпляров Prism/MultiMC, .minecraft, данных Modrinth App…)."""
+    import modrinth_app
+    import official_launcher
+    from launchers import _appdata, _prism_instance_dir
+    appdata = _appdata()
+    result = {}
+    for key, folder in (("prism", "PrismLauncher"), ("multimc", "MultiMC")):
+        root = os.path.join(appdata, folder)
+        if os.path.isdir(root):
+            result[key] = _prism_instance_dir(root)
+    minecraft = official_launcher.minecraft_dir()
+    if os.path.isdir(minecraft):
+        result["official"] = minecraft
+    modrinth = modrinth_app.find_root()
+    if modrinth:
+        result["modrinth"] = modrinth
+    curseforge = os.path.join(os.path.expanduser("~"), "curseforge", "minecraft")
+    if os.path.isdir(curseforge):
+        result["curseforge"] = curseforge
+    return result
+
+
+def downloads_folder() -> str:
+    folder = os.path.join(os.path.expanduser("~"), "Downloads")
+    return folder if os.path.isdir(folder) else os.path.expanduser("~")
+
+
+def make_target(kind: str, root: str, name: str) -> Target:
+    """Новая сборка в лаунчере kind (ключ LAUNCHER_TITLES); root — его папка из available_launchers()."""
+    if kind in ("prism", "multimc"):
+        return prism_target(root, name, kind)
+    if kind == "official":
+        return official_target(root, name)
+    if kind == "modrinth":
+        return Target(game_dir=unique_dir(os.path.join(root, "profiles"), name), source="modrinth",
+                      modrinth_root=root, name=name)
+    if kind == "curseforge":  # Ставим во временную папку и упаковываем в архив для импорта
+        import config as app_config
+        return Target(game_dir=unique_dir(os.path.join(app_config.CONFIG_DIR, "staging"), name), source="curseforge",
+                      name=name, curseforge_zip=os.path.join(downloads_folder(), f"{safe_name(name)} (CurseForge).zip"))
+    raise ValueError(tr("Неизвестный лаунчер: {0}", kind))
 
 
 def unique_dir(parent: str, name: str) -> str:
@@ -185,11 +285,32 @@ def unique_dir(parent: str, name: str) -> str:
     return path
 
 
-def folder_target(parent: str, name: str, own_folder: bool = True) -> Target:
-    """own_folder — создать внутри parent папку с названием сборки; иначе ставить прямо в parent."""
+def folder_target(parent: str, name: str, own_folder: bool = True, loader_here: bool = False) -> Target:
+    """own_folder — создать внутри parent папку с названием сборки; иначе ставить прямо в parent.
+    loader_here — поставить загрузчик в папку versions этой папки игры."""
     if own_folder:
-        return Target(game_dir=unique_dir(parent, name))
-    return Target(game_dir=parent, fresh=folder_is_empty(parent))
+        return Target(game_dir=unique_dir(parent, name), loader_here=loader_here, name=name)
+    return Target(game_dir=parent, fresh=folder_is_empty(parent), loader_here=loader_here, name=name)
+
+
+def looks_like_launcher_dir(path: str) -> bool:
+    """Папка игры, в которой лаунчер держит и версии (как .minecraft): туда загрузчик ставится в versions."""
+    return any(os.path.exists(os.path.join(path, n)) for n in ("versions", "launcher_profiles.json"))
+
+
+def free_space(path: str) -> Optional[int]:
+    """Свободно на диске, где будет path (байт); None — не узнать."""
+    import shutil
+    probe = os.path.abspath(path)
+    while probe and not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            return None
+        probe = parent
+    try:
+        return shutil.disk_usage(probe).free
+    except OSError:
+        return None
 
 
 def folder_is_empty(path: str) -> bool:
@@ -229,7 +350,11 @@ def write_prism_instance(target: Target, plan: PackPlan, session=None):
     if plan.loader in ("fabric", "quilt"):
         components.append({"uid": launcher_pack.INTERMEDIARY, "version": plan.game_version, "dependencyOnly": True})
     if plan.loader and plan.loader_version:
-        components.append({"uid": launcher_pack.LOADER_UIDS[plan.loader], "version": plan.loader_version})
+        version = plan.loader_version
+        if plan.loader == "forge":  # В справочнике Prism версия Forge — без версии игры: «47.2.0»
+            import official_launcher
+            version = official_launcher.forge_version(plan.game_version, version)
+        components.append({"uid": launcher_pack.LOADER_UIDS[plan.loader], "version": version})
     with open(os.path.join(target.instance_dir, launcher_pack.PACK_NAME), "w", encoding="utf-8") as f:
         json.dump({"components": components, "formatVersion": 1}, f, indent=4)
 
@@ -394,25 +519,102 @@ def download_files(jobs: List[tuple], progress: ProgressCallback, cancelled: Cal
 def install(plan: PackPlan, target: Target, progress: ProgressCallback = lambda d, t, s: None,
             cancelled: Callable[[], bool] = lambda: False, session=None, job=None) -> List[str]:
     """Ставит сборку. Возвращает ошибки (пустой список — всё скачано). Файлы «только с сайта» пропускаются."""
+    import shutil
+
     from mod_updater_logic import SESSION
     session = session or SESSION
-    version_id = None
-    if target.minecraft_dir:  # Сначала загрузчик: если его справочник недоступен, моды качать незачем
-        import official_launcher
-        version_id = official_launcher.install_loader(target.minecraft_dir, plan.loader, plan.game_version,
-                                                      plan.loader_version, session)
-    os.makedirs(target.game_dir, exist_ok=True)
-    if target.instance_dir:
-        write_prism_instance(target, plan)
+    if target.curseforge_zip and plan.kind == "curseforge":
+        # Сборка и так в формате CurseForge: приложение само скачает моды при импорте
+        os.makedirs(os.path.dirname(target.curseforge_zip), exist_ok=True)
+        shutil.copy2(plan.archive, target.curseforge_zip)
+        return []
+    prepare_target(target, plan, session, lambda text: progress(0, len(plan.files), text))
     files = [f for f in plan.files if f.url]
     errors = download_missing(plan, target.game_dir, [f.path for f in files], progress, cancelled, session, job)
     progress(len(files), len(files), tr("Распаковываем настройки сборки…"))
     _extract_overrides(plan, target.game_dir)
-    if version_id:
-        import official_launcher
-        target.launcher_id, _ = official_launcher.add_installation(target.minecraft_dir, target.name, version_id,
-                                                                   target.game_dir)
+    spread_datapacks(plan, target.game_dir)
+    if target.curseforge_zip:  # Архив для импорта в CurseForge App: всё скачанное — в overrides
+        import exporters
+        progress(len(files), len(files), tr("Упаковываем архив для CurseForge App…"))
+        manifest = exporters.build_curseforge_manifest(plan.name, plan.version, plan.game_version, plan.loader,
+                                                       plan.loader_version or "", [])
+        overrides = [(os.path.join(target.game_dir, n), n) for n in sorted(os.listdir(target.game_dir))]
+        try:
+            exporters.write_curseforge_pack(target.curseforge_zip, manifest, overrides)
+        finally:
+            shutil.rmtree(target.game_dir, ignore_errors=True)
+        return errors
+    register_target(target, plan)
     return errors
+
+
+def prepare_target(target: Target, plan: PackPlan, session=None, progress=lambda text: None):
+    """
+    До файлов сборки: загрузчик (Minecraft Launcher или папка versions) и описание экземпляра лаунчера (Prism,
+    MultiMC). Сначала загрузчик: если его не поставить, качать моды незачем. Modrinth App проверяется заранее.
+    """
+    import official_launcher
+    if target.modrinth_root:
+        import modrinth_app
+        modrinth_app.check(target.modrinth_root)
+    loader_dir = target.minecraft_dir or (target.game_dir if target.loader_here else None)
+    if loader_dir and plan.loader:
+        if not plan.loader_version:
+            raise ValueError(tr("Не удалось узнать версию загрузчика {0} для Minecraft {1}", plan.loader,
+                                plan.game_version))
+        target.version_id = official_launcher.install_loader(loader_dir, plan.loader, plan.game_version,
+                                                             plan.loader_version, session, progress)
+    os.makedirs(target.game_dir, exist_ok=True)
+    if target.instance_dir:
+        write_prism_instance(target, plan, session)
+
+
+def transfer(game_dir: str, kind: str, root: str, name: str, game_version: str, loader: Optional[str],
+             loader_version: Optional[str], keep_source: bool = False, session=None,
+             progress=lambda text: None) -> Target:
+    """
+    Переносит сборку из папки game_dir в новую сборку лаунчера kind: создаёт экземпляр с той же версией игры и
+    загрузчиком, переносит (или копирует) моды, настройки и миры и регистрирует сборку в лаунчере.
+    CurseForge App — архив для импорта (старая сборка остаётся на месте). Возвращает новую цель.
+    """
+    import shutil
+
+    import exporters
+    from maintenance import move_game_dir, movable_items
+    from mod_updater_logic import get_latest_loader_version
+    if loader and not loader_version:
+        loader_version = get_latest_loader_version(loader, game_version)
+    plan = versions_plan(name, game_version, loader, loader_version)
+    target = make_target(kind, root, name)
+    if target.curseforge_zip:
+        progress(tr("Упаковываем архив для CurseForge App…"))
+        manifest = exporters.build_curseforge_manifest(name, "", game_version, loader or "", loader_version or "", [])
+        os.makedirs(os.path.dirname(target.curseforge_zip), exist_ok=True)
+        exporters.write_curseforge_pack(target.curseforge_zip, manifest,
+                                        [(os.path.join(game_dir, n), n) for n in movable_items(game_dir)])
+        return target
+    try:
+        prepare_target(target, plan, session, progress)
+    except BaseException:
+        shutil.rmtree(target.instance_dir or target.game_dir, ignore_errors=True)  # Новая папка — убираем начатое
+        raise
+    progress(tr("Копируем сборку…") if keep_source else tr("Переносим сборку…"))
+    move_game_dir(game_dir, target.game_dir, keep_source)
+    register_target(target, plan)
+    return target
+
+
+def register_target(target: Target, plan: PackPlan):
+    """После файлов сборки: новая установка в Minecraft Launcher, профиль в Modrinth App."""
+    if target.minecraft_dir and target.version_id:
+        import official_launcher
+        target.launcher_id, _ = official_launcher.add_installation(target.minecraft_dir, target.name or plan.name,
+                                                                   target.version_id, target.game_dir)
+    if target.modrinth_root:
+        import modrinth_app
+        modrinth_app.add_profile(target.modrinth_root, target.game_dir, target.name or plan.name, plan.game_version,
+                                 plan.loader, plan.loader_version)
 
 
 def download_missing(plan: PackPlan, game_dir: str, paths: List[str], progress: ProgressCallback = lambda d, t, s: None,
@@ -434,11 +636,14 @@ def download_missing(plan: PackPlan, game_dir: str, paths: List[str], progress: 
                 os.remove(part)
             continue
         os.replace(part, part[:-len(".part")])
+    spread_datapacks(plan, game_dir)
     return [f"{path}: {error}" for path, error in failed.items()]
 
 
 def _extract_overrides(plan: PackPlan, game_dir: str):
     """Настройки модов, ресурспаки и прочее из папки overrides архива — в папку игры."""
+    if not plan.archive:
+        return
     root = os.path.realpath(game_dir)
     with zipfile.ZipFile(plan.archive) as archive:
         for member in archive.infolist():
