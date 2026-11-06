@@ -141,6 +141,67 @@ def clone_game_dir(source: str, target: str, include_saves: bool = False) -> Lis
     return copied
 
 
+# --- Перенос сборки в другую папку (другой лаунчер) ---
+
+# Служебное лаунчера, а не сборки: версии игры, библиотеки, ресурсы, Java, логи, учётные записи. Не переносим —
+# в новой папке это всё у своего лаунчера. modpacks — другие сборки Minecraft Launcher, их тоже не трогаем.
+LAUNCHER_ITEMS = {"versions", "libraries", "assets", "runtime", "bin", "natives", "webcache", "webcache2", "logs",
+                  "crash-reports", "debug", ".mixin.out", "modpacks", "treatment_tags.json", "usercache.json",
+                  "usernamecache.json"}
+
+
+def movable_items(source: str) -> List[str]:
+    """Что из папки игры относится к сборке: моды, настройки, миры, ресурспаки, шейдеры и прочее."""
+    if not os.path.isdir(source):
+        return []
+    return sorted(name for name in os.listdir(source)
+                  if name.lower() not in LAUNCHER_ITEMS and not name.lower().startswith("launcher_"))
+
+
+def _inside(path: str, parent: str) -> bool:
+    path, parent = (os.path.normcase(os.path.realpath(p)) for p in (path, parent))
+    return path == parent or path.startswith(parent.rstrip(os.sep) + os.sep)
+
+
+def move_game_dir(source: str, target: str, keep_source: bool = False) -> List[str]:
+    """
+    Переносит сборку из одной папки игры в другую (например, в папку другого лаунчера). Совпадающие папки
+    сливаются, одинаковые файлы в новой папке заменяются. keep_source — скопировать, ничего не удаляя в старой.
+    Возвращает перенесённое. ValueError — папки вложены друг в друга так, что перенос невозможен.
+    """
+    if not os.path.isdir(source):
+        raise ValueError(tr("Старой папки сборки нет: {0}", source))
+    if _inside(target, source):
+        raise ValueError(tr("Новая папка находится внутри старой — выберите папку вне её."))
+    os.makedirs(target, exist_ok=True)
+    moved = []
+    for name in movable_items(source):
+        src, dst = os.path.join(source, name), os.path.join(target, name)
+        if _inside(target, src):
+            continue  # Новая папка лежит внутри этого элемента (например, старая папка — .minecraft)
+        if os.path.isdir(src):
+            if keep_source or os.path.exists(dst):
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+                if not keep_source:
+                    shutil.rmtree(src)
+            else:
+                shutil.move(src, dst)
+        else:
+            if keep_source:
+                shutil.copy2(src, dst)
+            else:
+                if os.path.isfile(dst):
+                    os.remove(dst)  # shutil.move не заменяет файл на другом диске
+                shutil.move(src, dst)
+        moved.append(name)
+    what = ", ".join(moved) or "—"
+    if keep_source:
+        logging.info(tr("Сборка {0} скопирована в {1}: {2}", source, target, what))
+    else:
+        logging.info(tr("Сборка {0} перенесена в {1}: {2}", source, target, what))
+    return moved
+
+
 # --- Сравнение сборок ---
 
 def _compare_key(entry: Dict) -> str:

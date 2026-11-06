@@ -17,12 +17,12 @@ from enums import UpdateChannel
 from game_detection import detect_game_versions, extract_loader_version
 from i18n import tr
 from launchers import discover_instances
-from maintenance import clone_game_dir, compare_entries
+from maintenance import clone_game_dir, compare_entries, move_game_dir, movable_items
 from scanner import scan_local
 from ui.dialogs import ask_text
 from ui.tools_dialogs import CloneDialog, CompareDialog
 from ui.widgets import make_action, profile_subtitle, style_segments
-from ui_components import ProfileDialog, confirm, show_message
+from ui_components import ProfileDialog, ask_choice, confirm, show_message
 from view_model import CAT_ALL, iter_all_entries
 from window.common import LOADER_TITLES, PAGE_MODS
 from workers import LoaderVersionWorker
@@ -79,9 +79,20 @@ class ProfilesMixin:
                 self.current_profile_name = next(iter(self.profiles))
         return added
 
+    def _drop_placeholder(self):
+        """Появилась настоящая сборка — пустая заглушка «Default» больше не нужна."""
+        default = self.profiles.get("Default")
+        if default is not None and len(self.profiles) > 1 and self._is_placeholder("Default", default):
+            del self.profiles["Default"]
+            self._drop_sessions("Default")
+            if self.current_profile_name == "Default":
+                self.current_profile_name = next(iter(self.profiles))
+
     def _refresh_sidebar(self):
         items = []
         for name, profile in self.profiles.items():
+            if self._is_placeholder(name, profile):
+                continue  # Заглушка без папки: в списке слева её не показываем
             items.append({"name": name, "subtitle": profile_subtitle(profile),
                           "tooltip": profile.get("mods_path") or tr("Папка не указана"), "group": profile.get("group") or "",
                           "color": profile.get("color") or "", "icon": profile.get("icon") or ""})
@@ -222,7 +233,8 @@ class ProfilesMixin:
     def _update_header(self):
         t = self.tokens
         profile = self._profile()
-        self.title_label.setText(self.current_profile_name)
+        self.title_label.setText(tr("Сборок пока нет") if self._is_placeholder(self.current_profile_name, profile)
+                                 else self.current_profile_name)
         self.game_chip.setText(f"Minecraft {self.game_version or '?'}")
         self.game_chip.setToolTip(tr("Изменить версию игры и загрузчик"))
         loader_title = LOADER_TITLES.get(self.loader, self.loader or tr("Загрузчик ?"))
@@ -390,6 +402,7 @@ class ProfilesMixin:
         if dialog.exec():
             name, profile = dialog.result_profile()
             self.profiles[name] = profile
+            self._drop_placeholder()
             self._refresh_sidebar()
             self._load_profile(name)
             self._refresh_sidebar()
@@ -405,15 +418,57 @@ class ProfilesMixin:
         if not dialog.exec():
             return
         name, profile = dialog.result_profile()
-        if profile.get("mods_path") != self.profiles[old_name].get("mods_path"):
-            profile["source"] = "manual"
-        self.profiles = {(name if k == old_name else k): (profile if k == old_name else v) for k, v in self.profiles.items()}
-        self._drop_sessions(old_name)
-        if self.current_profile_name == old_name:
-            self.current_profile_name = name
+        old_path, new_path = self.profiles[old_name].get("mods_path") or "", profile.get("mods_path") or ""
+
+        def norm(path):
+            return os.path.normcase(os.path.normpath(path))
+
+        def apply():
+            if old_name not in self.profiles:
+                return
+            if new_path != old_path:
+                profile["source"] = "manual"
+            self.profiles = {(name if k == old_name else k): (profile if k == old_name else v)
+                             for k, v in self.profiles.items()}
+            self._drop_sessions(old_name)
+            self.save_config()
+            if self.current_profile_name == old_name:
+                self.current_profile_name = name
+                self._refresh_sidebar()
+                self._load_profile(name)
             self._refresh_sidebar()
-            self._load_profile(name)
-        self._refresh_sidebar()
+
+        if not old_path or not new_path or norm(old_path) == norm(new_path) or not movable_items(old_path):
+            apply()
+            return
+        # Папку сменили: переносим сборку (моды, настройки, миры…) в новую папку — например, в другой лаунчер
+        choice = ask_choice(self, QMessageBox.Icon.Question, tr("Перенести сборку?"),
+                            tr("Папка игры меняется:\n{0}\n→ {1}\n\nПеренести туда моды, настройки, миры, ресурспаки и "
+                               "шейдеры сборки? Файлы лаунчера (версии игры, библиотеки, логи) не переносятся.",
+                               old_path, new_path),
+                            [tr("Перенести"), tr("Скопировать"), tr("Только сменить путь"), tr("Отмена")], default=0)
+        if choice == 2:
+            apply()
+            return
+        if choice not in (0, 1) or not self._confirm_game_not_running([]):
+            return
+        keep = choice == 1
+
+        def moved(items):
+            if not keep:
+                self.hidden_instances.append(old_path)  # Старая папка больше не сборка — не находить её снова
+            apply()
+            self.toasts.show((tr("Сборка скопирована в {0}.", new_path) if keep
+                              else tr("Сборка перенесена в {0}.", new_path)), "success", tr("Открыть папку"),
+                             lambda: self._open_path(new_path), timeout=10000)
+
+        def failed(error):
+            show_message(self, QMessageBox.Icon.Warning, tr("Перенос сборки"),
+                         tr("Не удалось перенести сборку: {0}\n\nПуть к сборке не изменён. Часть файлов уже могла "
+                            "оказаться в новой папке — проверьте обе папки.", error))
+
+        self._run_task(move_game_dir, (old_path, new_path, keep), moved, failed,
+                       tr("Копируем сборку…") if keep else tr("Переносим сборку…"))
 
     def _show_profile_menu(self, name: str, pos):
         t = self.tokens
@@ -440,20 +495,35 @@ class ProfilesMixin:
         menu.addAction(make_action(menu, t, "x", tr("Убрать из списка"), lambda: self._remove_profile(name), "danger"))
         menu.exec(pos)
 
+    @staticmethod
+    def _is_placeholder(name: str, profile: dict) -> bool:
+        """Пустая сборка без папки, которую программа держит, когда настоящих сборок нет."""
+        return name == "Default" and not profile.get("mods_path")
+
     def _remove_profile(self, name: str):
-        if len(self.profiles) <= 1:
-            self.toasts.show(tr("Нельзя убрать единственную сборку."), "warning")
+        if name not in self.profiles:
+            return
+        if self._busy:
+            self.toasts.show(tr("Дождитесь окончания текущей операции."), "warning")
+            return
+        if len(self.profiles) == 1 and self._is_placeholder(name, self.profiles[name]):
+            self.toasts.show(tr("Список сборок уже пуст."), "info")
             return
         if not confirm(self, tr("Убрать сборку"), tr('Убрать «{0}» из списка?\nФайлы игры и моды не будут удалены.', name),
                        tr("Убрать"), tr("Отмена")):
             return
         profile = self.profiles.pop(name)
-        if profile.get("source", "manual") != "manual" and profile.get("mods_path"):
+        if profile.get("mods_path"):
             self.hidden_instances.append(profile["mods_path"])  # Не добавлять снова при автопоиске
         self._drop_sessions(name)
-        if name == self.current_profile_name:
+        if not self.profiles:  # Убрали последнюю — остаётся пустой список (программе нужна пустая сборка-заглушка)
+            self.profiles["Default"] = app_config.default_profile()
+            self.current_profile_name = "Default"
+            self._load_profile("Default")
+        elif name == self.current_profile_name:
             self.current_profile_name = next(iter(self.profiles))
             self._load_profile(self.current_profile_name)
+        self.save_config()
         self._refresh_sidebar()
 
     def _discover_now(self):
@@ -527,9 +597,11 @@ class ProfilesMixin:
         return sorted({p.get("group") or "" for p in self.profiles.values()} - {""})
 
     def _on_profiles_reordered(self, order: List[tuple]):
-        if len(order) != len(self.profiles):
+        hidden = {n: p for n, p in self.profiles.items() if self._is_placeholder(n, p)}  # Заглушки нет в списке
+        if len(order) + len(hidden) != len(self.profiles):
             return
         self.profiles = {name: {**self.profiles[name], "group": group} for name, group in order if name in self.profiles}
+        self.profiles.update(hidden)
         self._refresh_sidebar()
         self.save_config()
 

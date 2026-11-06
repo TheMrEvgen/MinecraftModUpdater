@@ -196,7 +196,8 @@ class CatalogMixin:
 
         def failed(error: str):
             import shutil
-            shutil.rmtree(target.instance_dir or target.game_dir, ignore_errors=True)  # Папка новая — убираем начатое
+            if target.fresh:  # Папка новая — убираем начатое; в папке пользователя ничего не удаляем
+                shutil.rmtree(target.instance_dir or target.game_dir, ignore_errors=True)
             job.finish(downloads.FAILED if error else downloads.CANCELLED, error or tr("Отменено"))
             if error:
                 self.toasts.show(tr("Сборка «{0}» не установлена: {1}", title, error), "error", timeout=15000)
@@ -280,6 +281,7 @@ class CatalogMixin:
                                "loader_version": plan.loader_version or "", "manual_mode": True, "source": target.source}
         if target.launcher_id:
             self.profiles[name]["launcher_id"] = target.launcher_id
+        self._drop_placeholder()
         self.save_config()
         self._refresh_sidebar()
         if not self._busy:  # Пользователь ничем не занят — сразу показываем новую сборку

@@ -1,16 +1,18 @@
 """Окна готовой сборки из каталога: установка (что внутри, куда ставить) и обновление до новой версии."""
 import logging
+import os
 from typing import Dict, Optional
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
-    QButtonGroup, QFileDialog, QHBoxLayout, QLineEdit, QProgressBar, QRadioButton, QTextBrowser,
+    QButtonGroup, QCheckBox, QFileDialog, QHBoxLayout, QLineEdit, QProgressBar, QRadioButton, QTextBrowser,
 )
 
 import modpack_install
 from i18n import tr
 from ui.dialogs import FramelessDialog
 from ui.widgets import button, label
+from ui_components import confirm
 from workers import SafeThread
 
 LOADER_TITLES = {"fabric": "Fabric", "forge": "Forge", "neoforge": "NeoForge", "quilt": "Quilt"}
@@ -112,9 +114,16 @@ class ModpackInstallDialog(FramelessDialog):
         row.addWidget(self.folder_edit, 1)
         row.addWidget(browse)
         self.body.addLayout(row)
-        self.folder_hint = label(tr("Внутри появится папка сборки. Загрузчик ({0}) поставьте в лаунчере сами, указав эту "
-                                    "папку как папку игры.", "Fabric"), "Faint", wrap=True)
+        # Своя папка для сборки — только в общей папке по умолчанию; выбранную вручную папку считаем папкой игры
+        self.default_folder = default_folder
+        self.own_folder = QCheckBox(tr("Создать внутри папку с названием сборки"))
+        self.own_folder.setChecked(True)
+        self.body.addWidget(self.own_folder)
+        self.folder_hint = label("", "Faint", wrap=True)
         self.body.addWidget(self.folder_hint)
+        self.loader_text = "Fabric"
+        self.own_folder.toggled.connect(lambda *_: self._refresh_where())
+        self.folder_edit.textEdited.connect(self._folder_chosen)
         self.where.buttonToggled.connect(lambda *_: self._refresh_where())
 
         self.progress = QProgressBar()
@@ -143,12 +152,24 @@ class ModpackInstallDialog(FramelessDialog):
     def _refresh_where(self):
         folder = self.folder_radio.isChecked()
         self.folder_edit.setEnabled(folder)
+        self.own_folder.setVisible(folder)
         self.folder_hint.setVisible(folder)
+        where = (tr("Внутри появится папка сборки — она и будет папкой игры.") if self.own_folder.isChecked()
+                 else tr("Моды, настройки и карты лягут прямо в эту папку (в mods, config, saves…)."))
+        self.folder_hint.setText(where + " " + tr("Загрузчик ({0}) поставьте в лаунчере сами, указав эту папку как "
+                                                  "папку игры.", self.loader_text))
 
     def _browse(self):
         path = QFileDialog.getExistingDirectory(self, tr("Куда поставить сборку"), self.folder_edit.text())
         if path:
             self.folder_edit.setText(path)
+            self._folder_chosen(path)
+
+    def _folder_chosen(self, path: str):
+        """Выбрали конкретную папку — ставим прямо в неё, а не в подпапку с названием сборки."""
+        def norm(p):
+            return os.path.normcase(os.path.normpath(p.strip() or "."))
+        self.own_folder.setChecked(norm(path) == norm(self.default_folder))
 
     def _on_prepared(self, plan):
         self.plan = plan
@@ -162,8 +183,8 @@ class ModpackInstallDialog(FramelessDialog):
             text += "\n" + tr("{0} — автор разрешает скачивать только с сайта; ссылки покажем после установки.",
                               ", ".join(f.name for f in plan.manual[:4]))
         self.info.setText(text)
-        self.folder_hint.setText(tr("Внутри появится папка сборки. Загрузчик ({0} {1}) поставьте в лаунчере сами, указав "
-                                    "эту папку как папку игры.", loader, plan.loader_version or ""))
+        self.loader_text = f"{loader} {plan.loader_version or ''}".strip()
+        self._refresh_where()
         import official_launcher
         official = bool(self.minecraft_dir and official_launcher.can_install(plan.loader) and plan.loader_version)
         self.official_radio.setVisible(official)
@@ -178,7 +199,18 @@ class ModpackInstallDialog(FramelessDialog):
         elif self.official_radio.isChecked() and self.minecraft_dir:
             self.target = modpack_install.official_target(self.minecraft_dir, name)
         else:
-            self.target = modpack_install.folder_target(self.folder_edit.text().strip(), name)
+            folder = self.folder_edit.text().strip()
+            if not folder:
+                self.progress_text.setText(tr("Укажите папку для сборки."))
+                return
+            own = self.own_folder.isChecked()
+            if not own and modpack_install.folder_has_mods(folder) and not confirm(
+                    self, tr("Папка уже занята"),
+                    tr("В папке «{0}» уже есть моды. Поставить сборку прямо сюда? Файлы с такими же именами "
+                       "заменятся, остальные останутся.", folder), tr("Поставить сюда"), tr("Отмена")):
+                return
+            self.target = modpack_install.folder_target(folder, name, own_folder=own)
+            self.target.name = name
         self.accept()  # Качается в фоне: ход — в индикаторе и на странице «Загрузки»
 
     def _on_progress(self, done: int, total: int, text: str):

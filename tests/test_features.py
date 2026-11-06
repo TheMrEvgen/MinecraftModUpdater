@@ -237,3 +237,29 @@ def test_dependency_installed_from_other_catalog_is_not_missing(tmp_path):
     ]
     drop_satisfied_dependencies(data)
     assert [d["name"] for d in data[0]["dependencies"]] == ["Cooking for Blockheads"]  # Этого правда нет
+
+
+def test_move_game_dir_to_other_launcher(tmp_path):
+    """Перенос сборки в папку другого лаунчера: моды, настройки, миры — да; служебное лаунчера — нет."""
+    from maintenance import move_game_dir
+    old, new = tmp_path / ".minecraft", tmp_path / "Other" / "game"
+    for rel, data in {"mods/a.jar": b"a", "config/x.toml": b"x", "saves/W/level.dat": b"w", "options.txt": b"o",
+                      "versions/1.21.1/1.21.1.jar": b"v", "launcher_profiles.json": b"{}", "logs/latest.log": b"l",
+                      "modpacks/Other/mods/b.jar": b"b"}.items():
+        (old / rel).parent.mkdir(parents=True, exist_ok=True)
+        (old / rel).write_bytes(data)
+    (new / "mods").mkdir(parents=True)
+    (new / "mods" / "a.jar").write_bytes(b"old")  # Совпадающий файл заменяется
+    (new / "mods" / "keep.jar").write_bytes(b"k")
+    moved = move_game_dir(str(old), str(new))
+    assert moved == ["config", "mods", "options.txt", "saves"]
+    assert (new / "mods" / "a.jar").read_bytes() == b"a" and (new / "mods" / "keep.jar").exists()
+    assert (new / "saves" / "W" / "level.dat").exists() and not (new / "versions").exists()
+    assert not (old / "mods").exists() and (old / "versions").exists() and (old / "modpacks" / "Other").exists()
+
+    copy = tmp_path / "copy"
+    assert move_game_dir(str(new), str(copy), keep_source=True) == ["config", "mods", "options.txt", "saves"]
+    assert (new / "mods" / "a.jar").exists() and (copy / "mods" / "a.jar").exists()
+    import pytest
+    with pytest.raises(ValueError):
+        move_game_dir(str(new), str(new / "inner"))

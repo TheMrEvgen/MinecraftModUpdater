@@ -7,8 +7,9 @@
                                                       (Fabric/Quilt) или папка
     install(plan, target, progress, cancelled)     — скачать файлы с проверкой хэшей и распаковать overrides
 
-Сборка ставится в новую пустую папку, поэтому настройки модов, ресурспаки и шейдеры из сборки (overrides)
-распаковываются целиком — перезаписывать нечего. Для Prism создаётся экземпляр с нужными версиями
+Сборка ставится в новую папку или прямо в выбранную пользователем; настройки модов, ресурспаки, шейдеры и миры из
+сборки (overrides) распаковываются целиком. Карты, которые сборка CurseForge подключает отдельными проектами
+(класс «Worlds»), скачиваются и распаковываются в saves. Для Prism создаётся экземпляр с нужными версиями
 Minecraft, загрузчика и LWJGL (по справочнику Prism), и «Играть» работает сразу.
 """
 import hashlib
@@ -44,6 +45,7 @@ class PackFile:
     size: int = 0
     manual_url: str = ""
     name: str = ""
+    world: bool = False       # Карта (мир CurseForge): скачанный .zip распаковывается в saves, сам архив удаляется
 
 
 @dataclass
@@ -105,20 +107,61 @@ def _curseforge_files(manifest: Dict) -> List[PackFile]:
     wanted = [f for f in manifest["files"] if f.get("fileID") and f.get("projectID") and f.get("required", True)]
     files = curseforge.get_files_by_ids(f["fileID"] for f in wanted)
     mods = curseforge.get_mods(f["projectID"] for f in wanted)
-    folders = {curseforge.CLASS_MODS: "mods", 12: "resourcepacks", 6552: "shaderpacks"}
+    folders = {curseforge.CLASS_MODS: "mods", 12: "resourcepacks", 6552: "shaderpacks", CLASS_WORLDS: "saves"}
     result = []
     for item in wanted:
         file, mod = files.get(int(item["fileID"])), mods.get(int(item["projectID"]))
         if not file or not mod:
             continue
-        folder = folders.get(mod.get("classId", curseforge.CLASS_MODS))
+        class_id = mod.get("classId", curseforge.CLASS_MODS)
+        folder = folders.get(class_id)
         if not folder:
-            continue  # Датапаки и прочее ставятся в мир — в сборку не кладём
+            continue  # Датапаки ставятся в конкретный мир — в сборку не кладём
         version = curseforge.to_version(file, mod)
         sha1 = curseforge.file_sha1(file)
         result.append(PackFile(f"{folder}/{file['fileName']}", version["files"][0]["url"], {"sha1": sha1} if sha1 else {},
-                               int(file.get("fileLength") or 0), version.get("manual_url", ""), mod.get("name") or ""))
+                               int(file.get("fileLength") or 0), version.get("manual_url", ""), mod.get("name") or "",
+                               world=class_id == CLASS_WORLDS))
     return result
+
+
+CLASS_WORLDS = 17  # Класс CurseForge «Worlds» — карты, которые автор сборки положил в неё
+
+
+def unpack_world(archive: str, saves_dir: str, file_name: str = "") -> List[str]:
+    """
+    Распаковывает карту из .zip в saves. Внутри архива мир лежит либо в своей папке (Карта/level.dat), либо
+    прямо в корне (level.dat) — тогда папкой мира становится имя файла карты (file_name, иначе имя архива).
+    Существующие миры не перезаписываются: в них уже могли играть. Возвращает созданные папки миров.
+    """
+    os.makedirs(saves_dir, exist_ok=True)
+    root = os.path.realpath(saves_dir)
+    created = []
+    with zipfile.ZipFile(archive) as zf:
+        members = [m for m in zf.infolist() if not m.is_dir()]
+        names = [m.filename.replace("\\", "/") for m in members]
+        flat = "level.dat" in names
+        base = safe_name(os.path.splitext(file_name or os.path.basename(archive))[0]) if flat else ""
+        skipped = set()
+        for member, name in zip(members, names):
+            relative = f"{base}/{name}" if flat else name
+            top = relative.split("/", 1)[0]
+            if top in skipped:
+                continue
+            destination = os.path.realpath(os.path.join(saves_dir, *relative.split("/")))
+            if not destination.startswith(root + os.sep) or "/" not in relative:
+                continue  # Пути вида ../ и одиночные файлы рядом с мирами не распаковываем
+            world_dir = os.path.join(saves_dir, top)
+            if top not in created:
+                if os.path.exists(world_dir):
+                    skipped.add(top)
+                    logging.info(tr("Сборка: мир «{0}» уже есть — не перезаписываем.", top))
+                    continue
+                created.append(top)
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            with zf.open(member) as source, open(destination, "wb") as out:
+                out.write(source.read())
+    return [os.path.join(saves_dir, top) for top in created]
 
 
 # --- Куда ставить ---
@@ -131,6 +174,7 @@ class Target:
     minecraft_dir: Optional[str] = None  # Для Minecraft Launcher: его .minecraft (versions, launcher_profiles.json)
     name: str = ""                       # Название установки в Minecraft Launcher
     launcher_id: str = ""                # Заполняется после установки: id новой установки лаунчера
+    fresh: bool = True                   # Папку создали для сборки: при отмене её можно удалить целиком
 
 
 def unique_dir(parent: str, name: str) -> str:
@@ -141,8 +185,20 @@ def unique_dir(parent: str, name: str) -> str:
     return path
 
 
-def folder_target(parent: str, name: str) -> Target:
-    return Target(game_dir=unique_dir(parent, name))
+def folder_target(parent: str, name: str, own_folder: bool = True) -> Target:
+    """own_folder — создать внутри parent папку с названием сборки; иначе ставить прямо в parent."""
+    if own_folder:
+        return Target(game_dir=unique_dir(parent, name))
+    return Target(game_dir=parent, fresh=folder_is_empty(parent))
+
+
+def folder_is_empty(path: str) -> bool:
+    return not os.path.isdir(path) or not os.listdir(path)
+
+
+def folder_has_mods(path: str) -> bool:
+    mods = os.path.join(path, "mods")
+    return os.path.isdir(mods) and any(n.lower().endswith((".jar", ".jar.disabled")) for n in os.listdir(mods))
 
 
 def prism_target(instances_root: str, name: str, source: str = "prism") -> Target:
@@ -367,8 +423,17 @@ def download_missing(plan: PackPlan, game_dir: str, paths: List[str], progress: 
     jobs = [(f, _abs(game_dir, f.path) + ".part") for f in plan.files if f.url and f.path in wanted]
     failed = download_files(jobs, progress, cancelled, session or SESSION, job=job)
     for item, part in jobs:
-        if item.path not in failed:
-            os.replace(part, part[:-len(".part")])
+        if item.path in failed:
+            continue
+        if item.world:  # Карта: распаковываем в saves, архив не нужен
+            try:
+                unpack_world(part, os.path.join(game_dir, "saves"), os.path.basename(item.path))
+            except (OSError, zipfile.BadZipFile) as e:
+                failed[item.path] = str(e)
+            finally:
+                os.remove(part)
+            continue
+        os.replace(part, part[:-len(".part")])
     return [f"{path}: {error}" for path, error in failed.items()]
 
 
@@ -570,6 +635,10 @@ def plan_update(state: Dict, plan: PackPlan, game_dir: str) -> UpdatePlan:
     for item in plan.files:
         if not item.url:
             continue
+        if item.world:  # Карту, поставленную раньше, не трогаем: в ней играют. Новую — добавим
+            if item.path not in old_files:
+                download.append(item)
+            continue
         current = _on_disk(game_dir, item.path)
         if not current or not item.hashes or not _check_hash(_abs(game_dir, current), item.hashes):
             download.append(item)
@@ -612,7 +681,7 @@ def apply_update(update: UpdatePlan, plan: PackPlan, game_dir: str, progress: Pr
     backup = os.path.join(game_dir, STATE_DIR, UPDATES_DIR, stamp)
     os.makedirs(backup)
     journal = {"created": stamp, "from": previous.get("version"), "to": plan.version,
-               "added": [], "backed_up": [], "state": previous}
+               "added": [], "backed_up": [], "worlds": [], "state": previous}
 
     def save_journal():
         with open(os.path.join(backup, "journal.json"), "w", encoding="utf-8") as f:
@@ -643,11 +712,14 @@ def apply_update(update: UpdatePlan, plan: PackPlan, game_dir: str, progress: Pr
         failed = download_files(jobs, progress, cancelled, session, job=job)
         if failed:
             raise ValueError("\n".join(f"{path}: {error}" for path, error in list(failed.items())[:12]))
-        downloaded = [(item.path, part) for item, part in jobs]
         progress(len(update.download), len(update.download), tr("Обновляем файлы сборки…"))
-        for relative, part in downloaded:
-            with open(part, "rb") as f:
-                put(relative, f.read())
+        for item, part in jobs:
+            if item.world:
+                for world in unpack_world(part, os.path.join(game_dir, "saves"), os.path.basename(item.path)):
+                    journal["worlds"].append(os.path.relpath(world, game_dir).replace(os.sep, "/"))
+            else:
+                with open(part, "rb") as f:
+                    put(item.path, f.read())
             os.remove(part)
         for relative in update.remove:
             move_aside(relative)
@@ -673,6 +745,8 @@ def undo_update(backup: str, game_dir: str):
     for relative in journal.get("added", []):
         if os.path.isfile(_abs(game_dir, relative)):
             os.remove(_abs(game_dir, relative))
+    for relative in journal.get("worlds", []):  # Карты, распакованные этим обновлением
+        shutil.rmtree(_abs(game_dir, relative), ignore_errors=True)
     for relative in journal.get("backed_up", []):
         if os.path.exists(_abs(backup, relative)):
             os.makedirs(os.path.dirname(_abs(game_dir, relative)), exist_ok=True)

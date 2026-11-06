@@ -206,3 +206,83 @@ def test_download_resumes_after_connection_drop(tmp_path, monkeypatch):
     assert errors == {} and (tmp_path / "a.part").read_bytes() == data
     assert session.ranges == [0, len(data) // 2]  # Второй запрос — с места обрыва
     assert job.files["mods/a.jar"].state == downloads.DONE
+
+
+def _zip_bytes(entries):
+    import io
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as z:
+        for name, data in entries.items():
+            z.writestr(name, data)
+    return buffer.getvalue()
+
+
+def test_curseforge_pack_downloads_maps(tmp_path, monkeypatch):
+    """Карта, подключённая к сборке CurseForge отдельным проектом (класс Worlds), распаковывается в saves."""
+    import curseforge
+    world = _zip_bytes({"Остров/level.dat": b"lvl", "Остров/region/r.0.0.mca": b"r"})
+    flat = _zip_bytes({"level.dat": b"flat", "region/r.0.0.mca": b"f"})
+    jar = b"jar"
+    cf_files = {
+        1: {"id": 1, "modId": 10, "fileName": "mod.jar", "downloadUrl": "https://edge/mod.jar", "fileLength": 3,
+            "hashes": [{"algo": 1, "value": hashlib.sha1(jar).hexdigest()}]},
+        2: {"id": 2, "modId": 20, "fileName": "island.zip", "downloadUrl": "https://edge/island.zip", "hashes": []},
+        3: {"id": 3, "modId": 30, "fileName": "Плоский мир.zip", "downloadUrl": "https://edge/flat.zip", "hashes": []},
+        4: {"id": 4, "modId": 40, "fileName": "dp.zip", "downloadUrl": "https://edge/dp.zip", "hashes": []},
+    }
+    cf_mods = {10: {"id": 10, "classId": 6, "name": "Мод"}, 20: {"id": 20, "classId": 17, "name": "Остров"},
+               30: {"id": 30, "classId": 17, "name": "Плоский"}, 40: {"id": 40, "classId": 6945, "name": "Датапак"}}
+    monkeypatch.setattr(curseforge, "available", lambda: True)
+    monkeypatch.setattr(curseforge, "get_files_by_ids", lambda ids: {i: cf_files[i] for i in ids})
+    monkeypatch.setattr(curseforge, "get_mods", lambda ids: {i: cf_mods[i] for i in ids})
+    manifest = {"minecraft": {"version": "1.21.1", "modLoaders": [{"id": "fabric-0.16.5", "primary": True}]},
+                "manifestType": "minecraftModpack", "name": "CF", "version": "1", "overrides": "overrides",
+                "files": [{"projectID": p, "fileID": f, "required": True} for p, f in ((10, 1), (20, 2), (30, 3), (40, 4))]}
+    archive = tmp_path / "cf.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("manifest.json", json.dumps(manifest))
+    plan = modpack_install.load_plan(str(archive))
+    assert [(f.path, f.world) for f in plan.files] == [("mods/mod.jar", False), ("saves/island.zip", True),
+                                                       ("saves/Плоский мир.zip", True)]
+    session = FakeSession({"https://edge/mod.jar": jar, "https://edge/island.zip": world, "https://edge/flat.zip": flat})
+    game = tmp_path / "game"
+    assert modpack_install.install(plan, modpack_install.Target(str(game)), session=session) == []
+    assert (game / "mods" / "mod.jar").read_bytes() == jar
+    assert (game / "saves" / "Остров" / "level.dat").read_bytes() == b"lvl"
+    assert (game / "saves" / "Плоский мир" / "region" / "r.0.0.mca").read_bytes() == b"f"
+    assert sorted(os.listdir(game / "saves")) == ["Остров", "Плоский мир"]  # Архивы карт удалены
+
+    # Обновление: уже поставленную карту не трогаем (в ней играют), новую — добавляем
+    modpack_install.save_state(plan, "cf:1", str(game))
+    (game / "saves" / "Остров" / "level.dat").write_bytes(b"played")
+    plan.files.append(modpack_install.PackFile("saves/new.zip", "https://edge/new.zip", world=True))
+    session.contents["https://edge/new.zip"] = _zip_bytes({"Новая/level.dat": b"n"})
+    update = modpack_install.plan_update(modpack_install.load_state(str(game)), plan, str(game))
+    assert [f.path for f in update.download] == ["saves/new.zip"] and update.remove == []
+    backup = modpack_install.apply_update(update, plan, str(game), session=session)
+    assert (game / "saves" / "Новая" / "level.dat").read_bytes() == b"n"
+    assert (game / "saves" / "Остров" / "level.dat").read_bytes() == b"played"
+    modpack_install.undo_update(backup, str(game))
+    assert sorted(os.listdir(game / "saves")) == ["Остров", "Плоский мир"]
+
+
+def test_unpack_world_never_overwrites_or_escapes(tmp_path):
+    saves = tmp_path / "saves"
+    (saves / "Мир").mkdir(parents=True)
+    (saves / "Мир" / "level.dat").write_bytes(b"mine")
+    archive = tmp_path / "w.zip"
+    archive.write_bytes(_zip_bytes({"Мир/level.dat": b"theirs", "../evil.txt": b"x", "Другой/level.dat": b"d"}))
+    created = modpack_install.unpack_world(str(archive), str(saves))
+    assert [os.path.basename(p) for p in created] == ["Другой"]
+    assert (saves / "Мир" / "level.dat").read_bytes() == b"mine" and not (tmp_path / "evil.txt").exists()
+
+
+def test_folder_target_directly_into_chosen_folder(tmp_path):
+    chosen = tmp_path / "MyLauncher" / "game"
+    target = modpack_install.folder_target(str(chosen), "Пак", own_folder=False)
+    assert target.game_dir == str(chosen) and target.fresh  # Папки ещё нет — её можно убрать при отмене
+    (chosen / "mods").mkdir(parents=True)
+    (chosen / "mods" / "old.jar").write_bytes(b"x")
+    target = modpack_install.folder_target(str(chosen), "Пак", own_folder=False)
+    assert not target.fresh and modpack_install.folder_has_mods(str(chosen))
+    assert modpack_install.folder_target(str(tmp_path), "Пак").game_dir == str(tmp_path / "Пак")
