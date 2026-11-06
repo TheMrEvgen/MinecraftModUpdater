@@ -518,6 +518,9 @@ class ModpackRepairDialog(FramelessDialog):
             lines.append(tr("Испорчены (не совпала контрольная сумма): {0}", len(repair.broken)))
         if repair.overrides:
             lines.append(tr("Пропали настройки из сборки: {0}", len(repair.overrides)))
+        if repair.prism_cfg:
+            lines.append(tr("Настройки сборки в Prism неполные — допишем недостающие поля ({0}), заданные не тронем.",
+                            len(repair.prism_cfg)))
         if repair.manual:
             ready = sum(os.path.isfile(os.path.join(modpack_install.downloads_folder(), os.path.basename(f.path)))
                         for f in repair.manual)
@@ -535,7 +538,7 @@ class ModpackRepairDialog(FramelessDialog):
         names += [f"• {r}" for r in repair.overrides] + [f"• {f.path} — " + tr("только с сайта") for f in repair.manual]
         self.details.setPlainText("\n".join(names[:500]))
         self.details.show()
-        self.fix_btn.setEnabled(bool(repair.download or repair.overrides or repair.manual))
+        self.fix_btn.setEnabled(bool(repair.download or repair.overrides or repair.manual or repair.prism_cfg))
 
     def _open_pages(self):
         import webbrowser

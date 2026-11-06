@@ -378,15 +378,34 @@ def _prism_component(uid: str, version: str, session=None, **flags) -> Dict:
     return component
 
 
+def _prism_staging(instances_root: str) -> str:
+    """
+    Временная папка для новой сборки — рядом с instances, на том же диске (переименование мгновенное). Внутри
+    instances нельзя: Prism считает сборкой любую папку там, даже с точкой в имени, и пишет в неё свой instance.cfg.
+    """
+    import uuid
+    name = f".modupdater-new-{uuid.uuid4().hex[:12]}"
+    parent = os.path.dirname(os.path.normpath(instances_root))
+    if parent and parent != os.path.normpath(instances_root):
+        try:
+            probe = os.path.join(parent, name)
+            os.makedirs(probe)
+            os.rmdir(probe)
+            if os.stat(parent).st_dev == os.stat(instances_root if os.path.isdir(instances_root) else parent).st_dev:
+                return os.path.join(parent, name)
+        except OSError:
+            pass
+    return os.path.join(instances_root, name)  # Рядом нельзя (нет прав) — внутри, как раньше
+
+
 def write_prism_instance(target: Target, plan: PackPlan, session=None):
     """
     Новая сборка Prism / MultiMC: instance.cfg и mmc-pack.json (Minecraft, LWJGL, intermediary и загрузчик).
-    Сборка собирается во временной скрытой папке и появляется в instances одним переименованием — уже с
+    Сборка собирается во временной папке рядом с instances и появляется в них одним переименованием — уже с
     настройками. Иначе Prism, который следит за папкой, увидит пустую папку, пропустит её и покажет сборку только
     после перезапуска.
     """
     import shutil
-    import uuid
 
     import launcher_pack
     requires = launcher_pack.fetch_requires(launcher_pack.MINECRAFT, plan.game_version, session)  # Есть ли версия
@@ -408,8 +427,9 @@ def write_prism_instance(target: Target, plan: PackPlan, session=None):
         components.append(_prism_component(launcher_pack.LOADER_UIDS[plan.loader], version, session))
 
     root = os.path.dirname(os.path.normpath(target.instance_dir))
-    staging = os.path.join(root, f".modupdater-{uuid.uuid4().hex[:12]}")  # Prism не смотрит папки с точкой
+    os.makedirs(root, exist_ok=True)
     game_name = os.path.basename(os.path.normpath(target.game_dir))
+    staging = _prism_staging(root)
     os.makedirs(os.path.join(staging, game_name))
     try:
         with open(os.path.join(staging, "instance.cfg"), "w", encoding="utf-8", newline="\n") as f:
@@ -1117,6 +1137,7 @@ class RepairPlan:
     overrides: List[str]              # Пропавшие настройки из сборки
     manual: List[PackFile]            # Пропали файлы, которые автор разрешает качать только с сайта
     checked: int                      # Сколько файлов проверено
+    prism_cfg: List[str] = field(default_factory=list)  # Недостающие поля instance.cfg сборки Prism / MultiMC
 
     @property
     def download(self) -> List[PackFile]:
@@ -1124,7 +1145,7 @@ class RepairPlan:
 
     @property
     def empty(self) -> bool:
-        return not (self.missing or self.broken or self.overrides or self.manual)
+        return not (self.missing or self.broken or self.overrides or self.manual or self.prism_cfg)
 
 
 def plan_repair(plan: PackPlan, game_dir: str, progress: Callable[[int, int, str], None] = lambda d, t, s: None,
@@ -1143,7 +1164,7 @@ def plan_repair(plan: PackPlan, game_dir: str, progress: Callable[[int, int, str
             broken.append(item)
     overrides = [r for r in sorted(_override_members(plan)) if not os.path.isfile(_abs(game_dir, r))]
     progress(len(files), len(files), tr("Проверка закончена"))
-    return RepairPlan(missing, broken, overrides, manual, len(files))
+    return RepairPlan(missing, broken, overrides, manual, len(files), missing_prism_cfg(game_dir))
 
 
 def apply_repair(repair: RepairPlan, plan: PackPlan, game_dir: str,
@@ -1180,12 +1201,69 @@ def apply_repair(repair: RepairPlan, plan: PackPlan, game_dir: str,
                 os.makedirs(os.path.dirname(destination), exist_ok=True)
                 with archive.open(members[relative]) as source, open(destination, "wb") as out:
                     out.write(source.read())
+    if repair.prism_cfg:
+        complete_prism_cfg(game_dir)
     picked = pick_manual_downloads(repair.manual, game_dir)
     repair.manual = [m for m in repair.manual if m not in picked]  # Остались — их всё ещё нужно скачать с сайта
     spread_datapacks(plan, game_dir)
     logging.info(tr("Сборка проверена: перекачано {0}, возвращено настроек {1}, ошибок {2}",
                     len(repair.download) - len(errors), len(repair.overrides), len(errors)))
     return errors
+
+
+def _prism_cfg_path(game_dir: str) -> Optional[str]:
+    """instance.cfg сборки Prism / MultiMC по папке игры (None — это не их сборка)."""
+    from game_runner import instance_dir
+    folder = instance_dir(game_dir)
+    if os.path.isfile(os.path.join(folder, "mmc-pack.json")) and os.path.isfile(os.path.join(folder, "instance.cfg")):
+        return os.path.join(folder, "instance.cfg")
+    return None
+
+
+def _cfg_keys(text: str) -> set:
+    return {line.split("=", 1)[0].strip() for line in text.splitlines() if "=" in line and not line.startswith(";")}
+
+
+def missing_prism_cfg(game_dir: str) -> List[str]:
+    """Каких полей не хватает в instance.cfg (сборки, поставленные старыми версиями программы)."""
+    path = _prism_cfg_path(game_dir)
+    if not path:
+        return []
+    with open(path, encoding="utf-8", errors="replace") as f:
+        have = _cfg_keys(f.read())
+    return [key for key, _ in PRISM_CFG_DEFAULTS if key not in have] + (["uuid"] if "uuid" not in have else [])
+
+
+def complete_prism_cfg(game_dir: str) -> int:
+    """
+    Дописывает в секцию [General] instance.cfg недостающие поля со значениями по умолчанию. Заданные
+    значения не меняются. Перед записью — копия файла. Возвращает, сколько полей добавлено.
+    """
+    import shutil
+    import uuid
+    path = _prism_cfg_path(game_dir)
+    missing = missing_prism_cfg(game_dir)
+    if not path or not missing:
+        return 0
+    defaults = dict(PRISM_CFG_DEFAULTS)
+    defaults["uuid"] = uuid.uuid4().hex
+    with open(path, encoding="utf-8", errors="replace") as f:
+        lines = f.read().splitlines()
+    added = [f"{key}={defaults[key]}" for key in missing]
+    general = next((i for i, line in enumerate(lines) if line.strip().lower() == "[general]"), None)
+    if general is None:
+        lines = ["[General]"] + added + lines
+    else:
+        end = next((i for i in range(general + 1, len(lines)) if lines[i].startswith("[")), len(lines))
+        while end > general + 1 and not lines[end - 1].strip():
+            end -= 1  # Пустые строки перед следующей секцией оставляем после добавленного
+        lines[end:end] = added
+    shutil.copy2(path, path + ".modupdater.bak")
+    with open(path + ".tmp", "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(path + ".tmp", path)
+    logging.info(tr("Сборка Prism: в instance.cfg дописано полей — {0}", len(added)))
+    return len(added)
 
 
 def pick_manual_downloads(items: List[PackFile], game_dir: str, folder: Optional[str] = None) -> List[PackFile]:

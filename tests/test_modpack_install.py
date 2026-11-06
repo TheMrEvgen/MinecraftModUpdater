@@ -327,6 +327,7 @@ def test_prism_instance_appears_complete(tmp_path):
     plan = modpack_install.versions_plan("FTB", "1.21.1", "neoforge", "21.1.262")
     modpack_install.prepare_target(target, plan, session=MetaSession())
     assert sorted(os.listdir(root)) == ["FTB_ Stone_Block"]  # Временной папки не осталось
+    assert sorted(os.listdir(tmp_path)) == ["instances"]   # Ни внутри instances, ни рядом
     cfg = open(os.path.join(target.instance_dir, "instance.cfg"), encoding="utf-8").read()
     assert "name=FTB: Stone/Block\n" in cfg and "InstanceType=OneSix" in cfg and "ManagedPack=false" in cfg
     assert "OverrideJavaLocation=false" in cfg and "uuid=" in cfg and cfg.count("\n") > 40
@@ -432,3 +433,22 @@ def test_manual_files_picked_from_downloads(tmp_path):
     assert picked == [good, pack]
     assert (tmp_path / "game" / "mods" / "good.jar").read_bytes() == b"good"
     assert not (tmp_path / "game" / "mods" / "fake.jar").exists() and (downloads / "good.jar").exists()
+
+
+def test_complete_old_prism_config(tmp_path):
+    """Сборка Prism от старой версии программы: недостающие поля дописываются, заданные остаются."""
+    instance = tmp_path / "FTB"
+    (instance / "minecraft").mkdir(parents=True)
+    (instance / "mmc-pack.json").write_text("{}")
+    (instance / "instance.cfg").write_text("[General]\nConfigVersion=1.3\nInstanceType=OneSix\nname=FTB\n"
+                                           "AutomaticJava=true\nOverrideMemory=true\n\n[UI]\nx=1\n", encoding="utf-8")
+    game = str(instance / "minecraft")
+    missing = modpack_install.missing_prism_cfg(game)
+    assert "ManagedPack" in missing and "uuid" in missing and "OverrideMemory" not in missing
+    assert modpack_install.complete_prism_cfg(game) == len(missing)
+    text = (instance / "instance.cfg").read_text(encoding="utf-8")
+    general, ui = text.split("[UI]")
+    assert "OverrideMemory=true" in general and "OverrideMemory=false" not in text  # Заданное не тронуто
+    assert "ManagedPack=false" in general and "uuid=" in general and ui.strip() == "x=1"
+    assert modpack_install.missing_prism_cfg(game) == [] and (instance / "instance.cfg.modupdater.bak").exists()
+    assert modpack_install.missing_prism_cfg(str(tmp_path / "нет")) == []
