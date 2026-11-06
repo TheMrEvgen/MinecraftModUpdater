@@ -263,8 +263,6 @@ class CatalogMixin:
         self._queue_modpack(job, worker)
 
     def _on_modpack_installed(self, plan, target, errors: list, job):
-        import webbrowser
-
         import downloads
         job.finish(downloads.FAILED if errors else downloads.DONE,
                    tr("Не скачалось файлов: {0}", len(errors)) if errors else tr("Установлена"))
@@ -310,10 +308,7 @@ class CatalogMixin:
                                 "datapacks кнопкой «Пакеты данных» при создании мира.", len(plan.datapacks)),
                              "info", tr("Открыть папку"),
                              lambda: self._open_path(os.path.join(target.game_dir, "datapacks")), timeout=20000)
-        if plan.manual:
-            self.toasts.show(tr("Скачайте с сайта CurseForge (автор запретил программам): {0}",
-                                ", ".join(f.name for f in plan.manual[:5])), "warning", tr("Открыть страницы"),
-                             lambda: [webbrowser.open(f.manual_url) for f in plan.manual if f.manual_url], timeout=30000)
+        self._offer_manual_files(name, plan.manual, target.game_dir, plan.substitutes)
         if errors:  # Без окна поверх: загрузка шла в фоне — предлагаем докачать
             job.retry_callback = lambda: self._retry_modpack_files(plan, target.game_dir, name, job)
             self.toasts.show(tr("«{0}»: не скачалось файлов — {1}.", name, len(errors)), "warning", tr("Повторить"),
@@ -359,6 +354,26 @@ class CatalogMixin:
         title = state.get("title") or self.current_profile_name
         self._run_modpack_update(game_dir, title, plan, dialog.update, old)
 
+    def _offer_manual_files(self, title: str, items: list, game_dir: str, substitutes: Optional[dict] = None):
+        """Уведомление о файлах «только с сайта», которых нет в сборке, с окном, которое поможет их докачать."""
+        import manual_files
+        left = manual_files.still_missing(items or [], game_dir)
+        if not left:
+            return
+        similar = sum(1 for f in left if (substitutes or {}).get(f.path))
+        text = tr("«{0}»: автор разрешает скачивать {1} файлов только с сайта CurseForge: {2}.", title, len(left),
+                  ", ".join(f.name or os.path.basename(f.path) for f in left[:6]) + ("…" if len(left) > 6 else ""))
+        if similar:
+            text += " " + tr("Для {0} есть похожие на Modrinth.", similar)
+        self.toasts.show(text, "warning", tr("Скачать…"),
+                         lambda: self._show_manual_files(title, left, game_dir, substitutes), timeout=0)
+
+    def _show_manual_files(self, title: str, items: list, game_dir: str, substitutes: Optional[dict] = None):
+        from ui.modpack_dialog import ManualFilesDialog
+        ManualFilesDialog(self, title, items, game_dir, substitutes).exec()
+        if self._profile().get("mods_path") == game_dir:
+            self._forget_profile_lists()
+
     def _repair_modpack(self, name: Optional[str] = None):
         """«Проверить и докачать»: сверить сборку из каталога с её выпуском и докачать недостающее и испорченное."""
         import modpack_install
@@ -382,8 +397,6 @@ class CatalogMixin:
 
     def _run_modpack_repair(self, game_dir: str, title: str, plan, repair, job=None):
         """Докачка сборки в фоне. job — «Повторить» для того, что не скачалось."""
-        import webbrowser
-
         import downloads
         from ui.modpack_dialog import _Worker
         if self._busy:
@@ -423,11 +436,7 @@ class CatalogMixin:
                 self.toasts.show(tr("Сборка «{0}» в порядке: восстановлено файлов — {1}.", title, fixed), "success",
                                  timeout=10000)
                 self._notify_download(tr("Сборка проверена"), tr("«{0}» в порядке.", title))
-            if repair.manual:
-                self.toasts.show(tr("Скачайте с сайта CurseForge (автор запретил программам): {0}",
-                                    ", ".join(f.name for f in repair.manual[:5])), "warning", tr("Открыть страницы"),
-                                 lambda: [webbrowser.open(f.manual_url) for f in repair.manual if f.manual_url],
-                                 timeout=30000)
+            self._offer_manual_files(title, repair.manual, game_dir, plan.substitutes)
 
         worker.installed.connect(done)
         worker.failed.connect(failed)
@@ -480,12 +489,7 @@ class CatalogMixin:
             self.toasts.show(tr("Сборка «{0}» обновлена до {1}.", title, plan.version), "success", tr("Отменить"),
                              lambda: self._undo_modpack_update(game_dir, backup, launcher, launcher_backup, old),
                              timeout=20000)
-            if plan.manual:
-                import webbrowser
-                self.toasts.show(tr("Скачайте с сайта CurseForge (автор запретил программам): {0}",
-                                    ", ".join(f.name for f in plan.manual[:5])), "warning", tr("Открыть страницы"),
-                                 lambda: [webbrowser.open(f.manual_url) for f in plan.manual if f.manual_url],
-                                 timeout=30000)
+            self._offer_manual_files(title, plan.manual, game_dir, plan.substitutes)
 
         launcher = self._launcher_target()
         if not launcher or (plan.game_version, plan.loader_version) == old or not plan.game_version:

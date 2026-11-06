@@ -61,6 +61,8 @@ class PackPlan:
     overrides: List[str]              # Папки внутри архива, которые распаковываются в папку игры
     kind: str = "mrpack"              # mrpack — Modrinth, curseforge — .zip с manifest.json
     source_file: Optional[Dict] = None  # Выпуск из каталога: pack_file() — {"url", "filename", "version", "id"}
+    substitutes: Dict = field(default_factory=dict)  # Похожие файлы на Modrinth для «только с сайта» (выбор за нами)
+    from_modrinth: int = 0            # Сколько файлов «только с сайта» нашлось на Modrinth теми же самыми
 
     @property
     def manual(self) -> List[PackFile]:
@@ -980,6 +982,9 @@ def plan_update(state: Dict, plan: PackPlan, game_dir: str) -> UpdatePlan:
         if not current or not item.hashes or not _check_hash(_abs(game_dir, current), item.hashes):
             download.append(item)
     remove = sorted(filter(None, (_on_disk(game_dir, p) for p in old_files - new_paths)))
+    substitutes = state.get("substitutes") or {}  # Похожие файлы с Modrinth вместо ушедших из сборки — тоже убрать
+    remove += sorted(filter(None, (_on_disk(game_dir, substitutes[p]) for p in old_files - new_paths
+                                   if p in substitutes)))
     known = state.get("overrides") or {}
     write, kept = [], []
     members = _override_members(plan)
@@ -1151,13 +1156,17 @@ class RepairPlan:
 def plan_repair(plan: PackPlan, game_dir: str, progress: Callable[[int, int, str], None] = lambda d, t, s: None,
                 cancelled: Callable[[], bool] = lambda: False) -> RepairPlan:
     """Что не так со сборкой: каких файлов нет и какие испорчены (сверка по контрольным суммам)."""
+    import manual_files
     files = [f for f in plan.files if not f.world]
+    substitutes = manual_files.substitutes_of(game_dir)  # Заменённые похожим файлом с Modrinth — на месте
     missing, broken, manual = [], [], []
     for i, item in enumerate(files):
         if cancelled():
             raise InstallCancelled()
         progress(i, len(files), tr("Проверяем {0}", item.name or os.path.basename(item.path)))
         current = _on_disk(game_dir, item.path)
+        if not current and substitutes.get(item.path) and _on_disk(game_dir, substitutes[item.path]):
+            continue
         if not current:
             (missing if item.url else manual).append(item)
         elif item.url and item.hashes and not _check_hash(_abs(game_dir, current), item.hashes):
@@ -1266,22 +1275,19 @@ def complete_prism_cfg(game_dir: str) -> int:
     return len(added)
 
 
-def pick_manual_downloads(items: List[PackFile], game_dir: str, folder: Optional[str] = None) -> List[PackFile]:
+def pick_manual_downloads(items: List[PackFile], game_dir: str, folder: Optional[str] = None,
+                          since: float = 0.0) -> List[PackFile]:
     """
-    Файлы «только с сайта», которые пользователь скачал браузером: ищем их в папке «Загрузки» по имени, сверяем
-    контрольную сумму и кладём в сборку (копией — файл в «Загрузках» остаётся). Возвращает разложенные.
+    Файлы «только с сайта», которые пользователь скачал браузером: ищем их в папке «Загрузки» (по имени или по
+    размеру и контрольной сумме) и кладём в сборку копией. Возвращает разложенные.
     """
-    import shutil
-    folder = folder or downloads_folder()
+    import manual_files
+    found = manual_files.match_downloads(items, folder or downloads_folder(), since)
     picked = []
     for item in items:
-        candidate = os.path.join(folder, os.path.basename(item.path))
-        if not os.path.isfile(candidate) or not _check_hash(candidate, item.hashes):
-            continue
-        destination = _abs(game_dir, item.path)
-        os.makedirs(os.path.dirname(destination), exist_ok=True)
-        shutil.copy2(candidate, destination)
-        picked.append(item)
+        if item.path in found:
+            manual_files.place(item, found[item.path], game_dir)
+            picked.append(item)
     if picked:
         logging.info(tr("Сборка: из папки «Загрузки» взято файлов — {0}", len(picked)))
     return picked

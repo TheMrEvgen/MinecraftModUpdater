@@ -3,11 +3,13 @@ import logging
 import os
 from typing import Dict, Optional
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QButtonGroup, QCheckBox, QFileDialog, QHBoxLayout, QLineEdit, QProgressBar, QRadioButton, QTextBrowser,
+    QButtonGroup, QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLineEdit, QProgressBar, QPushButton,
+    QRadioButton, QScrollArea, QTextBrowser, QWidget,
 )
 
+import manual_files
 import modpack_install
 from i18n import tr
 from ui.dialogs import FramelessDialog
@@ -45,6 +47,7 @@ class _Worker(SafeThread):
                 info = modpack_install.latest_pack_file(self.project_id)
                 plan = modpack_install.load_plan(modpack_install.download_pack(info, self.folder))
                 plan.source_file = info  # Какой именно выпуск поставлен — для проверки обновлений и докачки
+                manual_files.resolve_manual(plan)  # «Только с сайта», лежащие на Modrinth, — скачаем оттуда
                 self.prepared.emit(plan)
             elif self.job == "install":
                 errors = modpack_install.install(self.plan, self.target, self.progress.emit, lambda: self._cancelled,
@@ -63,6 +66,7 @@ class _Worker(SafeThread):
                 info = modpack_install.latest_pack_file(self.project_id)
                 plan = modpack_install.load_plan(modpack_install.download_pack(info, self.folder))
                 plan.source_file = info
+                manual_files.resolve_manual(plan)
                 state = modpack_install.load_state(self.game_dir) or {}
                 changelog = modpack_install.pack_changelog(self.project_id, state.get("version") or "", plan.version,
                                                            plan.game_version or "")
@@ -71,6 +75,7 @@ class _Worker(SafeThread):
                 state = modpack_install.load_state(self.game_dir) or {}
                 plan = modpack_install.installed_plan(state, self.folder)
                 modpack_install.remember_source(self.game_dir, plan)
+                manual_files.resolve_manual(plan)
                 self.prepared.emit((plan, modpack_install.plan_repair(plan, self.game_dir, self.progress.emit,
                                                                       lambda: self._cancelled)))
             elif self.job == "repair":
@@ -85,6 +90,22 @@ class _Worker(SafeThread):
             self.failed.emit("")
         except Exception as e:
             self.failed.emit(str(e))
+
+
+def manual_summary(plan) -> str:
+    """Что будет с файлами «только с сайта»: сколько возьмём с Modrinth сами и сколько придётся скачать вручную."""
+    parts = []
+    if plan.from_modrinth:
+        parts.append(tr("Файлов, которые автор разрешает скачивать только с сайта CurseForge, но точно такие же лежат на "
+                        "Modrinth: {0} — скачаем их оттуда сами.", plan.from_modrinth))
+    if plan.manual:
+        similar = sum(1 for f in plan.manual if f.path in plan.substitutes)
+        text = tr("Скачать вручную с сайта CurseForge придётся {0}: {1}.", len(plan.manual),
+                  ", ".join(f.name for f in plan.manual[:4]) + ("…" if len(plan.manual) > 4 else ""))
+        if similar:
+            text += " " + tr("Для {0} из них есть похожие на Modrinth — можно будет скачать их.", similar)
+        parts.append(text + " " + tr("После установки поможем: откроем страницы и сами заберём файлы из «Загрузок»."))
+    return "".join("\n" + p for p in parts)
 
 
 class ModpackInstallDialog(FramelessDialog):
@@ -224,9 +245,7 @@ class ModpackInstallDialog(FramelessDialog):
         size = plan.size()
         if size:
             text += " · " + tr("займёт около {0}", format_size(size))
-        if plan.manual:
-            text += "\n" + tr("{0} — автор разрешает скачивать только с сайта; ссылки покажем после установки.",
-                              ", ".join(f.name for f in plan.manual[:4]))
+        text += manual_summary(plan)
         self.info.setText(text)
         self.loader_text = f"{loader} {plan.loader_version or ''}".strip()
         self.loader_here.setEnabled(bool(plan.loader and plan.loader_version))
@@ -375,9 +394,8 @@ class ModpackUpdateDialog(FramelessDialog):
         if update.kept:
             lines.append(tr("Настройки, которые вы меняли, не трогаем ({0}): {1}", len(update.kept),
                             ", ".join(update.kept[:4]) + ("…" if len(update.kept) > 4 else "")))
-        if plan.manual:
-            lines.append(tr("{0} — автор разрешает скачивать только с сайта; ссылки покажем после обновления.",
-                            ", ".join(f.name for f in plan.manual[:4])))
+        if plan.manual or plan.from_modrinth:
+            lines.append(manual_summary(plan).strip())
         lines.append(tr("Всё заменённое уходит в бэкап — обновление можно отменить."))
         self.info.setText("\n".join(lines))
         self.update_btn.setEnabled(True)
@@ -470,6 +488,9 @@ class ModpackRepairDialog(FramelessDialog):
         super().__init__(parent, tr("Проверка сборки"), 560)
         self.plan = None
         self.repair = None
+        self.game_dir = game_dir
+        self.title_text = state.get("title") or ""
+        self.tokens = getattr(parent, "tokens", {})  # Для окна ручных файлов поверх этого
         self.worker: Optional[_Worker] = None
         self.body.addWidget(label(state.get("title") or "", "SectionTitle"))
         self.info = label(tr("Сверяем файлы сборки с её версией {0}…", state.get("version") or "?"), "Muted", wrap=True)
@@ -510,6 +531,8 @@ class ModpackRepairDialog(FramelessDialog):
             self.info.setText(tr("Всё в порядке: файлов проверено — {0}, все на месте и целые.", repair.checked))
             self.progress_text.setText("")
             self.cancel_btn.setText(tr("Закрыть"))
+            for widget in (self.details, self.pages_btn, self.fix_btn):
+                widget.hide()
             return
         lines = [tr("Проверено файлов: {0}.", repair.checked)]
         if repair.missing:
@@ -521,15 +544,20 @@ class ModpackRepairDialog(FramelessDialog):
         if repair.prism_cfg:
             lines.append(tr("Настройки сборки в Prism неполные — допишем недостающие поля ({0}), заданные не тронем.",
                             len(repair.prism_cfg)))
+        if self.plan.from_modrinth:
+            lines.append(tr("Файлов «только с сайта», которые точно такими же лежат на Modrinth: {0} — скачаем "
+                            "их оттуда.", self.plan.from_modrinth))
         if repair.manual:
-            ready = sum(os.path.isfile(os.path.join(modpack_install.downloads_folder(), os.path.basename(f.path)))
-                        for f in repair.manual)
+            ready = len(manual_files.match_downloads(repair.manual, modpack_install.downloads_folder()))
+            similar = sum(1 for f in repair.manual if f.path in self.plan.substitutes)
             lines.append(tr("Нет файлов, которые автор разрешает скачивать только с сайта: {0}. Скачайте их по "
                             "ссылкам в папку «Загрузки» — программа сама найдёт их и разложит по местам.",
                             len(repair.manual)))
+            if similar:
+                lines.append(tr("Для {0} из них есть похожие на Modrinth — можно скачать их.", similar))
             if ready:
                 lines.append(tr("Уже лежат в «Загрузках»: {0}", ready))
-            self.pages_btn.setText(tr("Открыть страницы ({0})", len(repair.manual)))
+            self.pages_btn.setText(tr("Скачать вручную ({0})…", len(repair.manual)))
             self.pages_btn.show()
         self.info.setText("\n".join(lines))
         self.progress_text.setText(tr("Ваши моды и изменённые вами настройки не трогаем; выключенные моды останутся "
@@ -541,10 +569,12 @@ class ModpackRepairDialog(FramelessDialog):
         self.fix_btn.setEnabled(bool(repair.download or repair.overrides or repair.manual or repair.prism_cfg))
 
     def _open_pages(self):
-        import webbrowser
-        for item in self.repair.manual if self.repair else []:
-            if item.manual_url:
-                webbrowser.open(item.manual_url)
+        """Окно ручных файлов: страницы, слежение за «Загрузками», похожие файлы с Modrinth."""
+        if not self.repair:
+            return
+        ManualFilesDialog(self, self.title_text, self.repair.manual, self.game_dir, self.plan.substitutes).exec()
+        self.repair.manual = manual_files.still_missing(self.repair.manual, self.game_dir)
+        self._on_checked((self.plan, self.repair))
 
     def _on_failed(self, error: str):
         if not error:
@@ -563,3 +593,137 @@ class ModpackRepairDialog(FramelessDialog):
     def reject(self):
         self._cancel()
 
+
+
+class ManualFilesDialog(FramelessDialog):
+    """
+    Файлы «только с сайта», которых нет в сборке. Пока окно открыто, программа следит за папкой «Загрузки»:
+    скачанный браузером файл (даже переименованный) сверяется и сам ложится в сборку. Если на Modrinth есть
+    похожий файл, можно скачать его оттуда — с честной пометкой, что он не тот же самый.
+    """
+    SCAN_MS = 2000
+
+    def __init__(self, parent, title: str, items: list, game_dir: str, substitutes: Optional[Dict] = None):
+        super().__init__(parent, tr("Файлы, которые нужно скачать вручную"), 640)
+        self.game_dir = game_dir
+        self.items = list(items)
+        self.substitutes = substitutes or {}
+        self.since = manual_files.downloads_since()
+        self.workers = []
+        self.tokens = getattr(parent, "tokens", {}) or {}
+        self.ready = set()  # Пути файлов, которые уже в сборке
+        self.body.addWidget(label(title, "SectionTitle"))
+        self.body.addWidget(label(tr("Автор разрешает скачивать эти файлы только с сайта CurseForge. Откройте страницы "
+                                     "и скачайте файлы браузером в папку «Загрузки» — программа сама заметит их и "
+                                     "положит в сборку. Окно можно не закрывать."), "Muted", wrap=True))
+        self.summary = label("", "Faint", wrap=True)
+        self.body.addWidget(self.summary)
+        rows = QWidget()
+        self.grid = QGridLayout(rows)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(10)
+        self.grid.setVerticalSpacing(8)
+        self.status: Dict[str, object] = {}
+        self.similar_btns: Dict[str, QPushButton] = {}
+        for row, item in enumerate(self.items):
+            name = label(item.name or os.path.basename(item.path), None, wrap=True)
+            name.setToolTip(item.path)
+            self.grid.addWidget(name, row, 0)
+            status = label(tr("ждём в «Загрузках»"), "Faint")
+            self.grid.addWidget(status, row, 1)
+            self.status[item.path] = status
+            page = QPushButton(tr("Страница"))
+            page.setEnabled(bool(item.manual_url))
+            page.clicked.connect(lambda _=False, url=item.manual_url: self._open(url))
+            self.grid.addWidget(page, row, 2)
+            sub = self.substitutes.get(item.path)
+            if sub:
+                similar = QPushButton(tr("С Modrinth…"))
+                similar.setToolTip(tr("На Modrinth есть похожий файл: {0} {1}. Это не тот же самый файл, что в сборке "
+                                      "(другая сборка мода) — обычно подходит, но может отличаться.",
+                                      sub.title, sub.version))
+                similar.clicked.connect(lambda _=False, it=item: self._from_modrinth(it))
+                self.grid.addWidget(similar, row, 3)
+                self.similar_btns[item.path] = similar
+        self.grid.setColumnStretch(0, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(rows)
+        scroll.setMinimumHeight(min(360, 44 * max(1, len(self.items)) + 8))
+        self.body.addWidget(scroll, 1)
+        self.add_button(tr("Открыть все страницы"), False, self._open_all)
+        self.add_button(tr("Открыть «Загрузки»"), False,
+                        lambda: self._open_folder(modpack_install.downloads_folder()))
+        self.close_btn = self.add_button(tr("Готово"), True, self.accept)
+        self.finish_layout()
+        self.timer = QTimer(self, interval=self.SCAN_MS)
+        self.timer.timeout.connect(self._scan)
+        self.timer.start()
+        self._scan()
+
+    @staticmethod
+    def _open(url: str):
+        import webbrowser
+        if url:
+            webbrowser.open(url)
+
+    def _open_all(self):
+        for item in manual_files.still_missing(self.items, self.game_dir):
+            self._open(item.manual_url)
+
+    @staticmethod
+    def _open_folder(path: str):
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def _mark(self, path: str, text: str):
+        self.ready.add(path)
+        self.status[path].setText(text)
+        self.status[path].setStyleSheet(f"color: {self.tokens.get('success', '#3ecf8e')}; font-weight: 600;")
+        if path in self.similar_btns:
+            self.similar_btns[path].setEnabled(False)
+
+    def _scan(self):
+        """Раз в пару секунд: что из нужного появилось в «Загрузках» — кладём в сборку."""
+        missing = manual_files.still_missing(self.items, self.game_dir)
+        for item in self.items:
+            if item not in missing and item.path not in self.ready:
+                self._mark(item.path, tr("✓ на месте"))
+        if missing:
+            try:
+                for item in modpack_install.pick_manual_downloads(missing, self.game_dir, since=self.since):
+                    self._mark(item.path, tr("✓ взят из «Загрузок»"))
+            except OSError as e:
+                logging.warning(tr("Сборка: не удалось взять файл из «Загрузок»: {0}", e))
+        left = len(manual_files.still_missing(self.items, self.game_dir))
+        if left:
+            self.summary.setText(tr("Осталось скачать: {0} из {1}.", left, len(self.items)))
+        else:
+            self.summary.setText(tr("Все файлы на месте — сборка готова."))
+            self.timer.stop()
+
+    def _from_modrinth(self, item):
+        from workers import TaskWorker
+        sub = self.substitutes[item.path]
+        if not confirm(self, tr("Похожий файл с Modrinth"),
+                       tr("Скачать «{0}» {1} с Modrinth вместо файла из сборки?\n\nЭто не тот же самый файл: автор "
+                          "сборки выбрал другую его сборку. Обычно такой файл подходит, но если игра поведёт себя "
+                          "странно — скачайте оригинал с CurseForge.", sub.title, sub.version),
+                       tr("Скачать с Modrinth"), tr("Отмена")):
+            return
+        self.similar_btns[item.path].setEnabled(False)
+        self.status[item.path].setText(tr("качаем с Modrinth…"))
+        worker = TaskWorker(manual_files.download_similar, item, sub, self.game_dir)
+        self.workers.append(worker)
+        worker.succeeded.connect(lambda _: (self._mark(item.path, tr("✓ с Modrinth (похожий)")), self._scan()))
+        worker.failed.connect(lambda error: (self.status[item.path].setText(tr("не скачался: {0}", error)),
+                                             self.similar_btns[item.path].setEnabled(True)))
+        worker.start()
+
+    def done(self, result):
+        self.timer.stop()
+        for worker in self.workers:
+            worker.wait(5000)
+        super().done(result)

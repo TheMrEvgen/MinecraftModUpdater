@@ -452,3 +452,92 @@ def test_complete_old_prism_config(tmp_path):
     assert "ManagedPack=false" in general and "uuid=" in general and ui.strip() == "x=1"
     assert modpack_install.missing_prism_cfg(game) == [] and (instance / "instance.cfg.modupdater.bak").exists()
     assert modpack_install.missing_prism_cfg(str(tmp_path / "нет")) == []
+
+
+class ModrinthSession:
+    """Modrinth: точное совпадение по SHA-1 для одного файла, похожий проект по названию — для другого."""
+
+    def __init__(self, files):
+        self.files, self.searches = files, []
+
+    def _response(self, data):
+        class Response:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return data
+        return Response()
+
+    def post(self, url, json=None, timeout=None):
+        assert url.endswith("/version_files") and json["algorithm"] == "sha1"
+        exact = hashlib.sha1(b"exact").hexdigest()
+        if exact in json["hashes"]:
+            return self._response({exact: {"project_id": "P1", "name": "Exact", "version_number": "1.0", "files": [
+                {"url": "https://cdn.modrinth.com/exact.jar", "filename": "exact-mr.jar", "size": 5,
+                 "hashes": {"sha1": exact, "sha512": hashlib.sha512(b"exact").hexdigest()}}]}})
+        return self._response({})
+
+    def get(self, url, params=None, timeout=None, stream=False, headers=None):
+        if url.endswith("/search"):
+            self.searches.append(params["query"])
+            hits = [{"title": "Create: Shimmer", "project_id": "P2", "slug": "shimmer"}] \
+                if params["query"] == "Create: Shimmer" else [{"title": "Совсем другое", "project_id": "P9"}]
+            return self._response({"hits": hits})
+        if url.endswith("/project/P2/version"):
+            assert json.loads(params["loaders"]) == ["neoforge"]
+            return self._response([{"version_number": "1.3.2", "files": [
+                {"primary": True, "url": "https://cdn.modrinth.com/shimmer.jar", "filename": "shimmer-1.3.2.jar",
+                 "size": 7, "hashes": {"sha1": hashlib.sha1(b"similar").hexdigest()}}]}])
+        session = self
+
+        class Download:
+            status_code = 200
+            headers = {}
+            content = session.files[url]
+
+            def raise_for_status(self):
+                pass
+        return Download()
+
+
+def test_manual_files_from_modrinth(tmp_path):
+    """«Только с сайта»: тот же файл с Modrinth качается сам, похожий — по выбору, точное имя проекта обязательно."""
+    import manual_files
+    exact = modpack_install.PackFile("mods/exact.jar", None, {"sha1": hashlib.sha1(b"exact").hexdigest()}, 5,
+                                     "https://curseforge/exact", "Exact")
+    similar = modpack_install.PackFile("mods/create-shimmer-1.3.1.jar", None, {"sha1": "0" * 40}, 9,
+                                       "https://curseforge/shimmer", "Create: Shimmer")
+    unknown = modpack_install.PackFile("resourcepacks/x.zip", None, {"sha1": "1" * 40}, 3, "https://curseforge/x",
+                                       "Pipes")
+    plan = modpack_install.versions_plan("Пак", "1.21.1", "neoforge", "21.1.262")
+    plan.files = [exact, similar, unknown]
+    session = ModrinthSession({"https://cdn.modrinth.com/shimmer.jar": b"similar"})
+    assert manual_files.resolve_manual(plan, session) == 1
+    assert exact.url == "https://cdn.modrinth.com/exact.jar" and "sha512" in exact.hashes
+    assert [f.path for f in plan.manual] == ["mods/create-shimmer-1.3.1.jar", "resourcepacks/x.zip"]
+    assert list(plan.substitutes) == ["mods/create-shimmer-1.3.1.jar"]  # «Pipes» ≠ «Совсем другое» — не похож
+    assert not plan.substitutes[similar.path].exact and plan.substitutes[similar.path].version == "1.3.2"
+
+    # Похожий файл с Modrinth: ставится рядом, запоминается, и проверка сборки считает оригинал на месте
+    game = tmp_path / "game"
+    os.makedirs(game / modpack_install.STATE_DIR)
+    with open(modpack_install.state_path(str(game)), "w", encoding="utf-8") as f:
+        json.dump({"project_id": "cf:1", "version": "1"}, f)
+    relative = manual_files.download_similar(similar, plan.substitutes[similar.path], str(game), session)
+    assert relative == "mods/shimmer-1.3.2.jar" and (game / "mods" / "shimmer-1.3.2.jar").read_bytes() == b"similar"
+    assert manual_files.still_missing([similar, unknown], str(game)) == [unknown]
+
+
+def test_downloads_watch_finds_renamed_file(tmp_path):
+    """Браузер переименовал файл («mod (1).jar») — узнаём по размеру и контрольной сумме; недокачанный — пропускаем."""
+    import manual_files
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    item = modpack_install.PackFile("mods/mod.jar", None, {"sha1": hashlib.sha1(b"mod!").hexdigest()}, 4)
+    (downloads / "mod (1).jar").write_bytes(b"mod!")
+    (downloads / "other.jar.crdownload").write_bytes(b"mod!")
+    assert manual_files.match_downloads([item], str(downloads)) == {"mods/mod.jar": str(downloads / "mod (1).jar")}
+    assert manual_files.match_downloads([item], str(downloads), since=4e9) == {}  # Старые файлы по размеру не берём
+    picked = modpack_install.pick_manual_downloads([item], str(tmp_path / "game"), str(downloads))
+    assert picked == [item] and (tmp_path / "game" / "mods" / "mod.jar").read_bytes() == b"mod!"
